@@ -1,0 +1,823 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Enterprise AI Operating System</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #090b10;
+      --panel: #111722;
+      --panel-2: #151d2a;
+      --line: #283244;
+      --text: #f2f6fb;
+      --muted: #9eacbd;
+      --teal: #46d5c8;
+      --blue: #6aa9ff;
+      --amber: #f3b44e;
+      --green: #77d77b;
+      --red: #ff6f75;
+      --soft: rgba(255,255,255,.06);
+      --shadow: 0 18px 60px rgba(0,0,0,.32);
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px),
+        linear-gradient(0deg, rgba(255,255,255,.025) 1px, transparent 1px),
+        radial-gradient(circle at 8% 12%, rgba(70,213,200,.14), transparent 28%),
+        radial-gradient(circle at 90% 10%, rgba(243,180,78,.1), transparent 26%),
+        var(--bg);
+      background-size: 44px 44px, 44px 44px, auto, auto, auto;
+      color: var(--text);
+      font: 14px/1.5 Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
+    }
+
+    a { color: inherit; }
+    button, input, textarea, select { font: inherit; }
+    button { cursor: pointer; }
+
+    .shell {
+      display: grid;
+      grid-template-columns: 260px 1fr;
+      min-height: 100vh;
+    }
+
+    .sidebar {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      padding: 22px;
+      background: rgba(11, 15, 23, .82);
+      border-right: 1px solid var(--line);
+      backdrop-filter: blur(16px);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 28px;
+    }
+
+    .logo {
+      width: 42px;
+      height: 42px;
+      display: grid;
+      place-items: center;
+      color: #071014;
+      background: conic-gradient(from 130deg, var(--teal), var(--blue), var(--amber), var(--teal));
+      border-radius: 12px;
+      font-weight: 800;
+    }
+
+    .brand strong { display: block; font-size: 15px; }
+    .brand span, .muted { color: var(--muted); font-size: 12px; }
+
+    .nav {
+      display: grid;
+      gap: 7px;
+    }
+
+    .nav button {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border: 1px solid transparent;
+      border-radius: 10px;
+      padding: 10px 12px;
+      color: var(--muted);
+      background: transparent;
+      text-align: left;
+    }
+
+    .nav button[aria-current="true"] {
+      color: var(--text);
+      background: var(--soft);
+      border-color: var(--line);
+    }
+
+    .nav i {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: currentColor;
+      opacity: .8;
+    }
+
+    .side-card {
+      margin-top: 28px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(255,255,255,.045);
+    }
+
+    .main {
+      padding: 24px;
+      overflow: hidden;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+
+    .title h1 {
+      margin: 0;
+      font-size: clamp(24px, 4vw, 42px);
+      letter-spacing: 0;
+      line-height: 1.05;
+    }
+
+    .title p {
+      max-width: 780px;
+      margin: 8px 0 0;
+      color: var(--muted);
+    }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      white-space: nowrap;
+      border: 1px solid rgba(70,213,200,.38);
+      border-radius: 999px;
+      padding: 9px 12px;
+      color: var(--teal);
+      background: rgba(70,213,200,.08);
+    }
+
+    .pulse {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--teal);
+      box-shadow: 0 0 0 0 rgba(70,213,200,.55);
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      70% { box-shadow: 0 0 0 10px rgba(70,213,200,0); }
+      100% { box-shadow: 0 0 0 0 rgba(70,213,200,0); }
+    }
+
+    .grid {
+      display: grid;
+      gap: 16px;
+    }
+
+    .metrics {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      margin-bottom: 16px;
+    }
+
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: linear-gradient(180deg, rgba(255,255,255,.07), rgba(255,255,255,.035));
+      box-shadow: var(--shadow);
+    }
+
+    .metric {
+      padding: 16px;
+      min-height: 112px;
+    }
+
+    .metric span { color: var(--muted); font-size: 12px; }
+    .metric strong { display: block; margin-top: 8px; font-size: 30px; line-height: 1; }
+    .metric small { display: block; margin-top: 10px; color: var(--muted); }
+
+    .workspace {
+      grid-template-columns: minmax(0, 1.1fr) minmax(320px, .9fr);
+      align-items: start;
+    }
+
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 16px 16px 0;
+    }
+
+    .panel-head h2, .section h2 {
+      margin: 0;
+      font-size: 18px;
+      letter-spacing: 0;
+    }
+
+    .command {
+      padding: 16px;
+    }
+
+    .query-box {
+      display: grid;
+      gap: 10px;
+      margin-top: 14px;
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 96px;
+      resize: vertical;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 13px;
+      color: var(--text);
+      background: rgba(0,0,0,.22);
+      outline: none;
+    }
+
+    textarea:focus, select:focus { border-color: var(--teal); box-shadow: 0 0 0 3px rgba(70,213,200,.12); }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .btn {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px 13px;
+      color: var(--text);
+      background: var(--soft);
+    }
+
+    .btn.primary {
+      color: #061112;
+      border-color: transparent;
+      background: var(--teal);
+      font-weight: 700;
+    }
+
+    .btn.warn { color: #120c02; background: var(--amber); border-color: transparent; }
+
+    .agent-flow {
+      display: grid;
+      gap: 10px;
+      padding: 0 16px 16px;
+    }
+
+    .step {
+      display: grid;
+      grid-template-columns: 34px 1fr auto;
+      gap: 12px;
+      align-items: center;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(255,255,255,.035);
+    }
+
+    .step b {
+      display: grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      border-radius: 10px;
+      color: #061112;
+      background: var(--blue);
+    }
+
+    .step.is-active { border-color: rgba(70,213,200,.55); background: rgba(70,213,200,.08); }
+    .step.is-done b { background: var(--green); }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      padding: 5px 9px;
+      color: var(--muted);
+      background: rgba(255,255,255,.06);
+      font-size: 12px;
+    }
+
+    .brain {
+      padding: 16px;
+    }
+
+    .brain svg {
+      display: block;
+      width: 100%;
+      min-height: 360px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background:
+        linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px),
+        linear-gradient(0deg, rgba(255,255,255,.025) 1px, transparent 1px),
+        rgba(0,0,0,.18);
+      background-size: 28px 28px;
+    }
+
+    .node { cursor: pointer; }
+    .node circle { stroke: rgba(255,255,255,.32); stroke-width: 1.4; }
+    .node text { fill: var(--text); font-size: 12px; pointer-events: none; }
+    .edge { stroke: rgba(158,172,189,.38); stroke-width: 1.4; }
+    .edge.active { stroke: var(--teal); stroke-width: 2.4; }
+
+    .detail {
+      margin-top: 12px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(255,255,255,.04);
+    }
+
+    .section {
+      margin-top: 16px;
+      padding: 16px;
+    }
+
+    .two-col { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .three-col { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+    .connector, .approval, .roadmap, .store-card {
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(255,255,255,.04);
+    }
+
+    .connector {
+      display: grid;
+      grid-template-columns: 38px 1fr auto;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .icon {
+      display: grid;
+      place-items: center;
+      width: 38px;
+      height: 38px;
+      border-radius: 11px;
+      color: #061112;
+      background: var(--blue);
+      font-weight: 800;
+    }
+
+    .connector:nth-child(2n) .icon { background: var(--teal); }
+    .connector:nth-child(3n) .icon { background: var(--amber); }
+
+    .switch {
+      position: relative;
+      width: 42px;
+      height: 24px;
+    }
+
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .track {
+      position: absolute;
+      inset: 0;
+      border-radius: 999px;
+      background: #374154;
+      transition: .2s;
+    }
+    .track:before {
+      content: "";
+      position: absolute;
+      width: 18px;
+      height: 18px;
+      left: 3px;
+      top: 3px;
+      border-radius: 50%;
+      background: #fff;
+      transition: .2s;
+    }
+    .switch input:checked + .track { background: var(--teal); }
+    .switch input:checked + .track:before { transform: translateX(18px); }
+
+    .approval {
+      display: grid;
+      gap: 10px;
+    }
+
+    .approval header {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .approval p { margin: 0; color: var(--muted); }
+    .approval.approved { border-color: rgba(119,215,123,.5); }
+    .approval.rejected { border-color: rgba(255,111,117,.5); opacity: .72; }
+
+    .tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 14px 0;
+    }
+
+    .tabs button[aria-selected="true"] {
+      color: #061112;
+      border-color: transparent;
+      background: var(--teal);
+    }
+
+    .roadmap {
+      display: grid;
+      grid-template-columns: 92px 1fr;
+      gap: 12px;
+      align-items: start;
+    }
+
+    .roadmap strong { color: var(--teal); }
+    .roadmap ul { margin: 6px 0 0; padding-left: 18px; color: var(--muted); }
+
+    .hidden { display: none !important; }
+
+    .toast {
+      position: fixed;
+      right: 20px;
+      bottom: 20px;
+      width: min(360px, calc(100vw - 40px));
+      border: 1px solid rgba(70,213,200,.45);
+      border-radius: 14px;
+      padding: 14px;
+      color: var(--text);
+      background: rgba(13, 18, 28, .94);
+      box-shadow: var(--shadow);
+      transform: translateY(18px);
+      opacity: 0;
+      pointer-events: none;
+      transition: .2s ease;
+    }
+
+    .toast.show { transform: translateY(0); opacity: 1; }
+
+    @media (max-width: 980px) {
+      .shell { grid-template-columns: 1fr; }
+      .sidebar {
+        position: static;
+        height: auto;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+      .nav { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .workspace, .two-col, .three-col, .metrics { grid-template-columns: 1fr; }
+      .topbar { align-items: flex-start; flex-direction: column; }
+    }
+
+    @media (max-width: 560px) {
+      .main, .sidebar { padding: 16px; }
+      .nav { grid-template-columns: 1fr 1fr; }
+      .step { grid-template-columns: 34px 1fr; }
+      .step .badge { grid-column: 2; width: fit-content; }
+      .connector { grid-template-columns: 38px 1fr; }
+      .connector .switch { grid-column: 2; }
+      .roadmap { grid-template-columns: 1fr; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *:before, *:after { animation: none !important; transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="logo">OS</div>
+        <div>
+          <strong>Enterprise AI OS</strong>
+          <span>Context graph + tool execution</span>
+        </div>
+      </div>
+
+      <nav class="nav" aria-label="Workspace sections">
+        <button type="button" data-section="command" aria-current="true">Command Center <i></i></button>
+        <button type="button" data-section="brain">Org Brain <i></i></button>
+        <button type="button" data-section="integrations">Integrations <i></i></button>
+        <button type="button" data-section="approvals">Approvals <i></i></button>
+        <button type="button" data-section="roadmap">MVP Roadmap <i></i></button>
+      </nav>
+
+      <div class="side-card">
+        <span class="muted">Core objective</span>
+        <p>Active intelligence across Slack, Jira, Gmail, Salesforce, Notion, and internal systems.</p>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="topbar">
+        <div class="title">
+          <h1>Enterprise AI Operating System</h1>
+          <p>An active workplace intelligence layer that routes requests, understands organizational context, retrieves graph-backed evidence, executes tools, and asks for approval before high-impact actions.</p>
+        </div>
+        <div class="status-pill"><span class="pulse"></span> Demo workspace live</div>
+      </div>
+
+      <section id="command" class="view">
+        <div class="grid metrics">
+          <div class="card metric"><span>Connected apps</span><strong id="metricApps">5</strong><small>Slack, Jira, Gmail, Salesforce, Notion</small></div>
+          <div class="card metric"><span>Context nodes</span><strong>12.8k</strong><small>People, projects, issues, clients, docs</small></div>
+          <div class="card metric"><span>Human approvals</span><strong id="metricApprovals">3</strong><small>Required for external or destructive actions</small></div>
+          <div class="card metric"><span>Execution queue</span><strong>18</strong><small>BullMQ style background jobs</small></div>
+        </div>
+
+        <div class="grid workspace">
+          <article class="card command">
+            <div class="panel-head" style="padding:0">
+              <h2>Agent request router</h2>
+              <span class="badge" id="routeBadge">Read query</span>
+            </div>
+            <div class="query-box">
+              <label for="query" class="muted">Ask the operating system</label>
+              <textarea id="query">Why is Project Atlas delayed, and draft a Slack update for the launch channel?</textarea>
+              <div class="actions">
+                <button class="btn primary" type="button" id="runAgent">Run agent loop</button>
+                <button class="btn" type="button" data-sample="status">Status query</button>
+                <button class="btn" type="button" data-sample="action">Action query</button>
+                <button class="btn" type="button" data-sample="risk">Risk query</button>
+              </div>
+            </div>
+          </article>
+
+          <article class="card">
+            <div class="panel-head">
+              <h2>Execution loop</h2>
+              <span class="badge" id="loopState">Ready</span>
+            </div>
+            <div class="agent-flow" id="agentFlow"></div>
+          </article>
+        </div>
+
+        <section class="card section">
+          <h2>Hybrid context stores</h2>
+          <div class="grid three-col" style="margin-top:14px">
+            <div class="store-card"><strong>Vector DB</strong><p class="muted">Semantic retrieval across emails, Slack threads, docs, and notes using embeddings.</p></div>
+            <div class="store-card"><strong>Knowledge Graph</strong><p class="muted">Maps Person -> Ticket -> Project -> Client relationships for causal answers.</p></div>
+            <div class="store-card"><strong>PostgreSQL</strong><p class="muted">Stores RBAC, audit logs, workspace settings, jobs, approvals, and metadata.</p></div>
+          </div>
+        </section>
+      </section>
+
+      <section id="brain" class="view hidden">
+        <article class="card brain">
+          <div class="panel-head" style="padding:0 0 14px">
+            <h2>Organizational brain graph</h2>
+            <span class="badge">Click a node</span>
+          </div>
+          <svg viewBox="0 0 880 420" role="img" aria-label="Knowledge graph showing people, projects, issues, clients, and documents">
+            <line class="edge active" x1="445" y1="205" x2="222" y2="116"></line>
+            <line class="edge active" x1="445" y1="205" x2="234" y2="302"></line>
+            <line class="edge" x1="445" y1="205" x2="664" y2="112"></line>
+            <line class="edge" x1="445" y1="205" x2="650" y2="302"></line>
+            <line class="edge active" x1="222" y1="116" x2="104" y2="214"></line>
+            <line class="edge" x1="234" y1="302" x2="104" y2="214"></line>
+            <line class="edge" x1="664" y1="112" x2="780" y2="214"></line>
+            <line class="edge" x1="650" y1="302" x2="780" y2="214"></line>
+            <g class="node" data-node="Project Atlas" data-detail="Launch is delayed because Jira issue API-184 is blocked by Salesforce field mapping, while Slack shows product awaiting legal copy approval.">
+              <circle cx="445" cy="205" r="58" fill="rgba(70,213,200,.26)"></circle><text x="445" y="201" text-anchor="middle">Project</text><text x="445" y="219" text-anchor="middle">Atlas</text>
+            </g>
+            <g class="node" data-node="Maya Singh" data-detail="Product owner. Assigned to API-184 and mentioned in the latest launch channel thread.">
+              <circle cx="222" cy="116" r="46" fill="rgba(106,169,255,.26)"></circle><text x="222" y="113" text-anchor="middle">Maya</text><text x="222" y="131" text-anchor="middle">Singh</text>
+            </g>
+            <g class="node" data-node="API-184" data-detail="Jira ticket. Status: blocked. Dependency: Salesforce mapping review. Priority: high.">
+              <circle cx="234" cy="302" r="44" fill="rgba(243,180,78,.28)"></circle><text x="234" y="299" text-anchor="middle">Jira</text><text x="234" y="317" text-anchor="middle">API-184</text>
+            </g>
+            <g class="node" data-node="Client Apex" data-detail="Client account impacted by the Atlas launch timeline. External update requires approval.">
+              <circle cx="664" cy="112" r="46" fill="rgba(119,215,123,.24)"></circle><text x="664" y="109" text-anchor="middle">Client</text><text x="664" y="127" text-anchor="middle">Apex</text>
+            </g>
+            <g class="node" data-node="Launch Brief" data-detail="Notion document containing the current launch checklist, blockers, and owner notes.">
+              <circle cx="650" cy="302" r="44" fill="rgba(255,255,255,.16)"></circle><text x="650" y="299" text-anchor="middle">Launch</text><text x="650" y="317" text-anchor="middle">Brief</text>
+            </g>
+            <g class="node" data-node="Slack Thread" data-detail="Thread in #launch: product, legal, and sales discussed launch copy and customer comms.">
+              <circle cx="104" cy="214" r="43" fill="rgba(70,213,200,.18)"></circle><text x="104" y="211" text-anchor="middle">Slack</text><text x="104" y="229" text-anchor="middle">Thread</text>
+            </g>
+            <g class="node" data-node="Salesforce Opportunity" data-detail="Opportunity record tied to Client Apex. Affected by the launch date and integration readiness.">
+              <circle cx="780" cy="214" r="48" fill="rgba(106,169,255,.18)"></circle><text x="780" y="211" text-anchor="middle">Salesforce</text><text x="780" y="229" text-anchor="middle">Opp</text>
+            </g>
+          </svg>
+          <div class="detail" id="nodeDetail"><strong>Project Atlas</strong><p class="muted">Launch is delayed because Jira issue API-184 is blocked by Salesforce field mapping, while Slack shows product awaiting legal copy approval.</p></div>
+        </article>
+      </section>
+
+      <section id="integrations" class="view hidden">
+        <article class="card section">
+          <div class="panel-head" style="padding:0 0 14px">
+            <h2>Integration framework</h2>
+            <span class="badge">OAuth + RBAC</span>
+          </div>
+          <div class="grid two-col" id="connectors"></div>
+        </article>
+      </section>
+
+      <section id="approvals" class="view hidden">
+        <article class="card section">
+          <div class="panel-head" style="padding:0 0 14px">
+            <h2>Human-in-the-loop approvals</h2>
+            <span class="badge">High consequence actions pause here</span>
+          </div>
+          <div class="grid" id="approvalList"></div>
+        </article>
+      </section>
+
+      <section id="roadmap" class="view hidden">
+        <article class="card section">
+          <h2>Phased MVP implementation roadmap</h2>
+          <div class="tabs" role="tablist" aria-label="Roadmap phases">
+            <button class="btn" type="button" role="tab" aria-selected="true" data-phase="0">Sprint 1-2</button>
+            <button class="btn" type="button" role="tab" aria-selected="false" data-phase="1">Sprint 3-4</button>
+            <button class="btn" type="button" role="tab" aria-selected="false" data-phase="2">Sprint 5-6</button>
+          </div>
+          <div id="roadmapContent"></div>
+        </article>
+      </section>
+    </main>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    const steps = [
+      ["01", "Intent classifier", "Classifies read vs action request and estimates consequence level."],
+      ["02", "Hybrid retrieval", "Combines vector snippets with graph traversal across people, projects, clients, docs, and tickets."],
+      ["03", "LLM planner", "Builds a tool plan with evidence, constraints, and required approvals."],
+      ["04", "Tool execution", "Calls Slack, Jira, Gmail, Salesforce, or Notion through typed functions."],
+      ["05", "Audit and approval", "Logs every step and pauses external or destructive actions for review."]
+    ];
+
+    const connectors = [
+      ["Slack", "SL", "Real-time messages, channels, mentions, and webhook events.", true],
+      ["Jira", "JR", "Issues, epics, sprint status, blockers, ownership, and updates.", true],
+      ["Gmail", "GM", "Email threads, drafts, customer updates, and summaries.", false],
+      ["Salesforce", "SF", "Accounts, opportunities, contacts, fields, and timeline events.", true],
+      ["Notion", "NT", "Docs, launch plans, meeting notes, policies, and knowledge base.", true],
+      ["Google Drive", "GD", "Batch document backfill, permissions, and file metadata.", false]
+    ];
+
+    const approvals = [
+      ["External email draft", "Send Client Apex a launch delay summary through Gmail.", "High"],
+      ["Create Jira task", "Open follow-up issue for Salesforce mapping owner.", "Medium"],
+      ["Post Slack update", "Share Atlas blocker summary in #launch.", "Medium"]
+    ];
+
+    const roadmap = [
+      {
+        label: "Data layer and basic integrations",
+        items: ["Set up workspace auth and OAuth token storage.", "Connect Slack and Jira webhooks.", "Build PostgreSQL metadata and vector ingestion pipeline."]
+      },
+      {
+        label: "Contextual search and hybrid RAG",
+        items: ["Connect LLM query endpoint.", "Extract entities: project, user, ticket, status, client.", "Answer basic status questions with citations."]
+      },
+      {
+        label: "Action execution and approvals",
+        items: ["Build function-calling router for Jira, Slack, Gmail.", "Add approval prompts for risky actions.", "Deploy Slack bot alongside the web command center."]
+      }
+    ];
+
+    const samples = {
+      status: "What is the latest update on Client Apex and Project Atlas?",
+      action: "Draft a summary email to Client Apex and open a Jira task for the blocker.",
+      risk: "Which active projects are at risk because a customer-facing deadline is blocked?"
+    };
+
+    const flow = document.getElementById("agentFlow");
+    const query = document.getElementById("query");
+    const routeBadge = document.getElementById("routeBadge");
+    const loopState = document.getElementById("loopState");
+    const toast = document.getElementById("toast");
+
+    function renderFlow(active = -1, done = -1) {
+      flow.innerHTML = steps.map((step, index) => {
+        const state = index === active ? "is-active" : index <= done ? "is-done" : "";
+        return `<div class="step ${state}"><b>${step[0]}</b><div><strong>${step[1]}</strong><div class="muted">${step[2]}</div></div><span class="badge">${index <= done ? "Done" : index === active ? "Running" : "Queued"}</span></div>`;
+      }).join("");
+    }
+
+    function classify() {
+      const text = query.value.toLowerCase();
+      const actionWords = ["draft", "send", "create", "open", "post", "delete", "update"];
+      const isAction = actionWords.some(word => text.includes(word));
+      routeBadge.textContent = isAction ? "Action query" : "Read query";
+      routeBadge.style.color = isAction ? "var(--amber)" : "var(--teal)";
+      return isAction;
+    }
+
+    function showToast(message) {
+      toast.textContent = message;
+      toast.classList.add("show");
+      clearTimeout(showToast.timer);
+      showToast.timer = setTimeout(() => toast.classList.remove("show"), 2600);
+    }
+
+    async function runAgent() {
+      const isAction = classify();
+      loopState.textContent = "Running";
+      for (let i = 0; i < steps.length; i++) {
+        renderFlow(i, i - 1);
+        await new Promise(resolve => setTimeout(resolve, 420));
+      }
+      renderFlow(-1, steps.length - 1);
+      loopState.textContent = isAction ? "Approval required" : "Answer ready";
+      showToast(isAction ? "Plan generated. External action paused for human approval." : "Answer generated from vector search and graph evidence.");
+    }
+
+    function renderConnectors() {
+      document.getElementById("connectors").innerHTML = connectors.map(([name, icon, desc, on], index) => `
+        <div class="connector">
+          <div class="icon">${icon}</div>
+          <div><strong>${name}</strong><div class="muted">${desc}</div></div>
+          <label class="switch" aria-label="Toggle ${name}">
+            <input type="checkbox" ${on ? "checked" : ""} data-connector="${index}">
+            <span class="track"></span>
+          </label>
+        </div>
+      `).join("");
+      document.querySelectorAll("[data-connector]").forEach(input => {
+        input.addEventListener("change", () => {
+          document.getElementById("metricApps").textContent = document.querySelectorAll("[data-connector]:checked").length;
+          showToast(`${connectors[input.dataset.connector][0]} ${input.checked ? "connected" : "paused"}.`);
+        });
+      });
+    }
+
+    function renderApprovals() {
+      document.getElementById("approvalList").innerHTML = approvals.map((item, index) => `
+        <div class="approval" data-approval="${index}">
+          <header><strong>${item[0]}</strong><span class="badge">${item[2]} consequence</span></header>
+          <p>${item[1]}</p>
+          <div class="actions">
+            <button class="btn primary" type="button" data-approve="${index}">Approve</button>
+            <button class="btn" type="button" data-reject="${index}">Reject</button>
+          </div>
+        </div>
+      `).join("");
+      document.querySelectorAll("[data-approve]").forEach(btn => btn.addEventListener("click", () => decide(btn.dataset.approve, true)));
+      document.querySelectorAll("[data-reject]").forEach(btn => btn.addEventListener("click", () => decide(btn.dataset.reject, false)));
+    }
+
+    function decide(index, approved) {
+      const item = document.querySelector(`[data-approval="${index}"]`);
+      item.classList.toggle("approved", approved);
+      item.classList.toggle("rejected", !approved);
+      item.querySelector(".actions").innerHTML = `<span class="badge">${approved ? "Approved and queued" : "Rejected and logged"}</span>`;
+      const remaining = document.querySelectorAll(".approval:not(.approved):not(.rejected)").length;
+      document.getElementById("metricApprovals").textContent = remaining;
+      showToast(approved ? "Approval recorded in audit log." : "Action rejected and audit log updated.");
+    }
+
+    function renderRoadmap(index = 0) {
+      const phase = roadmap[index];
+      document.getElementById("roadmapContent").innerHTML = `
+        <div class="roadmap">
+          <strong>${document.querySelector(`[data-phase="${index}"]`).textContent}</strong>
+          <div><h3 style="margin:0">${phase.label}</h3><ul>${phase.items.map(item => `<li>${item}</li>`).join("")}</ul></div>
+        </div>
+      `;
+    }
+
+    document.querySelectorAll(".nav button").forEach(button => {
+      button.addEventListener("click", () => {
+        document.querySelectorAll(".nav button").forEach(btn => btn.setAttribute("aria-current", "false"));
+        button.setAttribute("aria-current", "true");
+        document.querySelectorAll(".view").forEach(view => view.classList.add("hidden"));
+        document.getElementById(button.dataset.section).classList.remove("hidden");
+      });
+    });
+
+    document.querySelectorAll("[data-sample]").forEach(button => {
+      button.addEventListener("click", () => {
+        query.value = samples[button.dataset.sample];
+        classify();
+      });
+    });
+
+    document.querySelectorAll(".node").forEach(node => {
+      node.addEventListener("click", () => {
+        document.getElementById("nodeDetail").innerHTML = `<strong>${node.dataset.node}</strong><p class="muted">${node.dataset.detail}</p>`;
+      });
+    });
+
+    document.querySelectorAll("[data-phase]").forEach(button => {
+      button.addEventListener("click", () => {
+        document.querySelectorAll("[data-phase]").forEach(btn => btn.setAttribute("aria-selected", "false"));
+        button.setAttribute("aria-selected", "true");
+        renderRoadmap(Number(button.dataset.phase));
+      });
+    });
+
+    document.getElementById("runAgent").addEventListener("click", runAgent);
+    query.addEventListener("input", classify);
+
+    renderFlow();
+    renderConnectors();
+    renderApprovals();
+    renderRoadmap();
+    classify();
+  </script>
+</body>
+</html>
