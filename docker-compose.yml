@@ -1,0 +1,33 @@
+version: "3.9"
+
+# Local dev infrastructure. `apps/api` and `apps/web` still run directly
+# via `npm run dev:all` (fast reload); this just gives them a real
+# Postgres (with pgvector) to talk to instead of the in-memory stores.
+#
+# Usage:
+#   docker compose up -d       # start Postgres in the background
+#   npm run db:migrate         # apply db/schema.sql (creates tables + vector extension)
+#   npm run dev:all            # start api + web against it
+#   docker compose down        # stop (add -v to also wipe the volume/data)
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: enterprise-ai-os-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: enterprise_ai_os
+    ports:
+      - "5432:5432"
+    volumes:
+      - enterprise_ai_os_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  enterprise_ai_os_pgdata:

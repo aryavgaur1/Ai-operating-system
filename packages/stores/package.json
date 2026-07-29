@@ -1,0 +1,17 @@
+{
+  "name": "@enterprise-ai-os/stores",
+  "version": "0.1.0",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@enterprise-ai-os/shared": "*",
+    "pg": "^8.11.5"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.11.6",
+    "typescript": "^5.4.5"
+  }
+}

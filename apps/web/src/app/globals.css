@@ -1,0 +1,99 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  text-rendering: optimizeLegibility;
+  font-variant-ligatures: contextual;
+}
+
+html,
+body {
+  min-height: 100%;
+  background: radial-gradient(circle at top, rgba(77, 159, 255, 0.14), transparent 25%),
+    radial-gradient(circle at right, rgba(123, 232, 207, 0.08), transparent 18%),
+    #07080a;
+  color: #f3f5f8;
+}
+
+body {
+  font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body::-webkit-scrollbar {
+  width: 12px;
+}
+
+body::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+}
+
+body::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image:
+    radial-gradient(circle at 20% 20%, rgba(77, 159, 255, 0.1), transparent 22%),
+    radial-gradient(circle at 80% 15%, rgba(123, 232, 207, 0.08), transparent 18%),
+    radial-gradient(circle at 50% 90%, rgba(164, 87, 255, 0.06), transparent 20%);
+  opacity: 0.9;
+  pointer-events: none;
+  z-index: -1;
+}
+
+.card {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 24px;
+}
+
+.glow-panel {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 24px 80px rgba(38, 103, 255, 0.12);
+  backdrop-filter: blur(24px);
+}
+
+.neon-text {
+  color: #d4e8ff;
+  text-shadow: 0 0 8px rgba(77, 159, 255, 0.5), 0 0 18px rgba(77, 159, 255, 0.15);
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.75rem;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #9aa3af;
+}
+
+.badge-pill {
+  padding: 8px 14px;
+}
+
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+}
+
+.shadow-glow {
+  box-shadow: 0 32px 120px rgba(51, 90, 143, 0.14);
+}
+
+.code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+}
