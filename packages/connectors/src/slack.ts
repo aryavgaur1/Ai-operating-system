@@ -228,7 +228,20 @@ class SlackConnector implements ToolConnector {
 
   async execute(action: string, input: Record<string, unknown>): Promise<ToolCallResult> {
     if (isLiveMode('slack')) {
-      slackService.initializeClient();
+      try {
+        slackService.initializeClient();
+      } catch (err) {
+        return {
+          tool: 'slack',
+          action,
+          ok: false,
+          error:
+            err instanceof Error
+              ? err.message
+              : 'Slack is not connected for this user. Connect Slack in Integrations.',
+          mocked: false,
+        };
+      }
       try {
         switch (action) {
           case 'postMessage': {
@@ -344,6 +357,15 @@ class SlackConnector implements ToolConnector {
               name: String(input.name ?? input.channel ?? ''),
               isPrivate: Boolean(input.isPrivate),
             });
+            if (!result.id) {
+              return {
+                tool: 'slack',
+                action,
+                ok: false,
+                error: 'Slack createChannel returned no channel id',
+                mocked: false,
+              };
+            }
             return { tool: 'slack', action, ok: true, output: result, mocked: false };
           }
 
@@ -370,17 +392,16 @@ class SlackConnector implements ToolConnector {
     }
 
     await simulateLatency();
-    if (action === 'postMessage' || action === 'postMessageExternalChannel') {
-      console.log(`[MOCK slack.${action}]`, input);
-      return {
-        tool: 'slack',
-        action,
-        ok: true,
-        output: { channel: input.channel, ts: `${Date.now() / 1000}`, text: input.text },
-        mocked: true,
-      };
-    }
-    return { tool: 'slack', action, ok: false, error: `Unknown action: ${action}`, mocked: true };
+    // NEVER fake createChannel / invite / history as success in mock mode
+    console.warn(`[MOCK slack.${action}] blocked from reporting fake success — SLACK_MODE is not live`);
+    return {
+      tool: 'slack',
+      action,
+      ok: false,
+      error:
+        'Slack is in MOCK mode. Set SLACK_MODE=live and SLACK_BOT_TOKEN in .env — refusing to fake a successful create/post.',
+      mocked: true,
+    };
   }
 }
 

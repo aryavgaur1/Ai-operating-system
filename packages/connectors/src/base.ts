@@ -6,12 +6,17 @@ import type { ToolCallResult, ToolName } from '@enterprise-ai-os/shared';
 // execution engine never need to know which specific API they're
 // talking to.
 //
-// Every connector in this package is currently a MOCK: it
+// Every connector in this package starts as a MOCK: it
 // generates plausible fixture data and simulates async latency
-// instead of calling a real API. Each file below marks exactly
-// where a real SDK call replaces the mock — swapping CONNECTORS_MODE
-// to 'live' and filling in the marked sections is the whole
-// integration surface.
+// instead of calling a real API. Each file marks exactly
+// where a real SDK call replaces the mock.
+//
+// isLiveMode(tool) checks a per-tool override first (e.g.
+// NOTION_MODE=live) so you can flip individual connectors to
+// live one at a time, without forcing every other connector
+// (Slack, Jira, Gmail, Salesforce) into live mode as well.
+// Falls back to the global CONNECTORS_MODE if no per-tool
+// override is set.
 // ============================================================
 
 export interface NormalizedDoc {
@@ -46,6 +51,24 @@ export function simulateLatency(minMs = 150, maxMs = 500): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export function isLiveMode(): boolean {
+/**
+ * Checks whether a connector should run live.
+ * Per-tool override (e.g. NOTION_MODE=live) wins if set;
+ * otherwise falls back to the global CONNECTORS_MODE.
+ * Investor demo: if a real token exists, never silently fall back to mock success.
+ */
+export function isLiveMode(tool?: ToolName): boolean {
+  if (tool === 'slack' && process.env.SLACK_BOT_TOKEN?.trim()) {
+    const override = process.env.SLACK_MODE;
+    if (!override || override === 'live') return true;
+  }
+  if (tool === 'notion' && process.env.NOTION_API_KEY?.trim()) {
+    const override = process.env.NOTION_MODE;
+    if (!override || override === 'live') return true;
+  }
+  if (tool) {
+    const override = process.env[`${tool.toUpperCase()}_MODE`];
+    if (override) return override === 'live';
+  }
   return (process.env.CONNECTORS_MODE ?? 'mock') === 'live';
 }

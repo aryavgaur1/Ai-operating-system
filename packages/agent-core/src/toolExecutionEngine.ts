@@ -36,8 +36,18 @@ export async function executePlan(
       continue;
     }
     const connector = getConnector(call.tool);
-    const result = await connector.execute(call.action, call.input);
-    executedCalls.push(result);
+    try {
+      const result = await connector.execute(call.action, call.input);
+      executedCalls.push(result);
+    } catch (err) {
+      executedCalls.push({
+        tool: call.tool,
+        action: call.action,
+        ok: false,
+        error: err instanceof Error ? err.message : 'Tool execution failed',
+        mocked: false,
+      });
+    }
   }
 
   return { executedCalls, pendingApprovalIds };

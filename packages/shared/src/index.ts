@@ -22,7 +22,10 @@ export interface ActingUser {
   id: string;
   organizationId: string;
   email: string;
-  role: 'owner' | 'admin' | 'member';
+  role: 'super_admin' | 'owner' | 'admin' | 'member' | 'viewer';
+  displayName?: string;
+  isVerified?: boolean;
+  isSuspended?: boolean;
   permissions: ToolPermission[];
 }
 
@@ -128,7 +131,7 @@ export const HIGH_CONSEQUENCE_ACTIONS: Record<ToolName, string[]> = {
   slack: ['postMessageExternalChannel', 'deleteMessage'],
   jira: ['deleteIssue', 'transitionIssue'],
   salesforce: ['deleteRecord', 'updateRecord', 'createOpportunity'],
-  notion: ['deletePage', 'publishPage'],
+  notion: [],
 };
 
 export function isHighConsequence(tool: ToolName, action: string): boolean {

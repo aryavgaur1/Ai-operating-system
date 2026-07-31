@@ -29,18 +29,33 @@ let _cachedAuth: {
 export function getSlackBotToken(): string {
   const token = process.env.SLACK_BOT_TOKEN?.trim();
   if (!token) {
-    throw new SlackServiceError('SLACK_BOT_TOKEN is not set in .env', 'invalid_token', 401);
+    throw new SlackServiceError(
+      'Slack is not connected. Connect Slack in Integrations, or set SLACK_BOT_TOKEN in .env for demo/platform use.',
+      'invalid_token',
+      401
+    );
   }
   return token;
 }
 
 /** Initialize (or return) the singleton Slack WebClient. */
 export function initializeClient(token?: string): WebClient {
-  if (_client && !token) return _client;
-  const auth = token ?? getSlackBotToken();
+  if (token) {
+    _client = new WebClient(token);
+    _cachedAuth = null;
+    return _client;
+  }
+  if (_client) return _client;
+  const auth = getSlackBotToken();
   _client = new WebClient(auth);
   _cachedAuth = null;
   return _client;
+}
+
+/** Drop any cached client so the next request cannot reuse another user's OAuth token. */
+export function clearClient(): void {
+  _client = null;
+  _cachedAuth = null;
 }
 
 export function getClient(): WebClient {
@@ -515,20 +530,36 @@ export async function createChannel(input: { name: string; isPrivate?: boolean }
     .replace(/^#/, '')
     .replace(/[^a-z0-9-_]/g, '-')
     .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '')
     .slice(0, 80);
   if (!name) throw new SlackServiceError('channel name is required', 'name_required', 400);
+  // Slack rejects names that are only numbers in some workspaces — prefix if needed
+  const safeName = /^[0-9]+$/.test(name) ? `ch-${name}` : name;
 
+  console.log(`[slack.createChannel] calling conversations.create name=${safeName}`);
   const res = await callSlack(() =>
     client.conversations.create({
-      name,
+      name: safeName,
       is_private: Boolean(input.isPrivate),
     })
   );
+  const id = res.channel?.id;
+  const createdName = res.channel?.name ?? safeName;
+  if (!id) {
+    throw new SlackServiceError(
+      'Slack returned success without a channel id — refusing to report fake success',
+      'missing_channel_id',
+      502
+    );
+  }
+  console.log(`[slack.createChannel] REAL ok id=${id} name=${createdName}`);
   return {
     ok: true,
-    id: res.channel?.id,
-    name: res.channel?.name,
+    id,
+    name: createdName,
     isPrivate: res.channel?.is_private,
+    url: `https://slack.com/app_redirect?channel=${id}`,
+    workspaceHint: 'Open your Slack workspace that installed the Nexora bot (auth.test team) to see this channel.',
   };
 }
 
@@ -551,6 +582,7 @@ export async function inviteUsers(input: { channel: string; users: string | stri
 
 export const slackService = {
   initializeClient,
+  clearClient,
   getClient,
   verifySlackSignature,
   authTest,

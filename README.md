@@ -48,7 +48,7 @@ npm run dev:api                  # starts the API on :4000, seeds demo data + de
 npm run dev:web                  # starts the Next.js app on :3000
 ```
 
-Open `http://localhost:3000/dashboard`. Try asking the agent (on the Chat page):
+Open `http://localhost:3000/` for the marketing site, then sign in and open `http://localhost:3000/app/dashboard`. Try asking the agent (on the Chat page):
 
 - *"Why is Project Phoenix delayed?"* — a read query; answered from the seeded Slack/Jira/Notion context and
   the knowledge graph (Person → ASSIGNED_TO → Project → PERTAINS_TO → Client).

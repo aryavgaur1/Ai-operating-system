@@ -24,6 +24,8 @@ interface ToolRule {
   action: string | ((query: string) => string);
   keywords: string[];
   buildInput: (query: string) => Record<string, unknown>;
+  /** Extra matcher for demo-friendly NL (e.g. create channel without saying "slack") */
+  match?: (query: string) => boolean;
 }
 
 const TOOL_RULES: ToolRule[] = [
@@ -69,6 +71,10 @@ const TOOL_RULES: ToolRule[] = [
       'search slack',
       'slack history',
       'channel history',
+      'show history',
+      'get history',
+      'read history',
+      'message history',
       'summarize channel',
       'summarise channel',
       'upload to slack',
@@ -76,9 +82,26 @@ const TOOL_RULES: ToolRule[] = [
       'react on slack',
       'add reaction',
       'create channel',
+      'create a channel',
+      'create new channel',
+      'new channel',
+      'make a channel',
+      'make channel',
+      'chaanel',
+      'chanel',
       'invite to',
     ],
     buildInput: (query) => parseSlackActionQuery(query),
+    // Investor demo: "create new channel demo" must hit Slack even without saying "slack"
+    match: (query: string) => {
+      const lower = query.toLowerCase();
+      if (/\b(teams|discord|whatsapp)\b/.test(lower) && !/\bslack\b/.test(lower)) return false;
+      if (/\b(create|make|new)\b/.test(lower) && /\b(channel|chaanel|chanel|chnnel)\b/.test(lower)) return true;
+      if (/\b(post|send|notify|message)\b/.test(lower) && /(#\w+|@\w+|\bgeneral\b)/.test(lower)) return true;
+      if (/\b(list)\b/.test(lower) && /\b(channels?|users?|members?)\b/.test(lower) && !/\b(jira|notion|gmail)\b/.test(lower))
+        return true;
+      return false;
+    },
   },
   {
     tool: 'salesforce',
@@ -151,11 +174,20 @@ function parseSlackActionQuery(query: string): Record<string, unknown> {
     const ts = query.match(/\b(\d{10}\.\d+)\b/)?.[1];
     return { action: 'addReaction', channel, name: emoji, timestamp: ts };
   }
-  if (/\b(create)\b/.test(lower) && /\b(channel)\b/.test(lower)) {
+  // Accept common typos: chaanel / chanel — investor demos often have typos
+  if (
+    /\b(create|make|new)\b/.test(lower) &&
+    /\b(channel|chaanel|chanel|chnnel)\b/.test(lower)
+  ) {
     const name =
       quoted ??
-      query.match(/channel\s+(?:called|named)?\s*[#\"']?([a-z0-9_-]+)/i)?.[1] ??
-      channel;
+      query.match(/(?:channel|chaanel|chanel|chnnel)\s+(?:called|named)?\s*[#\"']?([a-z0-9_-]+)/i)?.[1] ??
+      query.match(/(?:called|named)\s+[#\"']?([a-z0-9_-]+)/i)?.[1] ??
+      query.match(
+        /\b(?:create|make)\s+(?:a\s+)?(?:new\s+)?(?:channel|chaanel|chanel|chnnel)\s+(?:called|named\s+)?([a-z0-9_-]+)/i
+      )?.[1] ??
+      (channel !== 'general' ? String(channel).replace(/^#/, '') : undefined) ??
+      'new-channel';
     return { action: 'createChannel', name };
   }
   if (/\b(invite)\b/.test(lower)) {
@@ -233,21 +265,23 @@ function proposeToolCalls(query: string): ToolCall[] {
   const calls: ToolCall[] = [];
 
   for (const rule of TOOL_RULES) {
-    if (rule.keywords.some((k) => lower.includes(k))) {
-      const input = rule.buildInput(query);
-      const action = typeof rule.action === 'function' ? rule.action(query) : (input.action as string | undefined) ?? rule.action;
-      const requiresApproval = isHighConsequence(rule.tool, action);
-      const sanitizedInput = { ...input };
-      delete (sanitizedInput as any).action;
+    const hitKeyword = rule.keywords.some((k) => lower.includes(k));
+    const hitMatch = rule.match?.(query) === true;
+    if (!hitKeyword && !hitMatch) continue;
 
-      calls.push({
-        tool: rule.tool,
-        action,
-        input: sanitizedInput,
-        riskLevel: requiresApproval ? 'high' : 'low',
-        requiresApproval,
-      });
-    }
+    const input = rule.buildInput(query);
+    const action = typeof rule.action === 'function' ? rule.action(query) : (input.action as string | undefined) ?? rule.action;
+    const requiresApproval = isHighConsequence(rule.tool, action);
+    const sanitizedInput = { ...input };
+    delete (sanitizedInput as any).action;
+
+    calls.push({
+      tool: rule.tool,
+      action,
+      input: sanitizedInput,
+      riskLevel: requiresApproval ? 'high' : 'low',
+      requiresApproval,
+    });
   }
   return calls;
 }
