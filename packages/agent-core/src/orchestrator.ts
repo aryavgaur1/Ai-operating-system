@@ -37,8 +37,41 @@ export async function runAgentTurn(
       ? `\n\nNote: ${pendingApprovalIds.length} action(s) require your approval before they run — check the Approvals inbox.`
       : '';
 
+  let reply: string;
+  if (executedCalls.length > 0 && pendingApprovalIds.length === 0) {
+    reply = executedCalls
+      .map((call, idx) => {
+        if (call.ok) {
+          const output = call.output as Record<string, unknown> | undefined;
+          const planned = plan.toolCalls[idx];
+          if (call.tool === 'slack' && (call.action === 'postMessage' || call.action === 'postMessageExternalChannel')) {
+            const channelName = String(output?.channelName ?? planned?.input?.channel ?? output?.channel ?? 'channel');
+            const display = channelName.startsWith('@') ? channelName : `#${channelName.replace(/^#/, '')}`;
+            return `Successfully posted to ${display}.`;
+          }
+          if (call.tool === 'slack' && call.action === 'summarizeChannel') {
+            return String(output?.summary ?? 'Channel summary ready.');
+          }
+          if (call.tool === 'slack' && call.action === 'listChannels') {
+            const channels = (output?.channels as Array<{ name?: string }>) ?? [];
+            const names = channels
+              .slice(0, 15)
+              .map((c) => `#${c.name ?? '?'}`)
+              .join(', ');
+            return `Found ${channels.length} Slack channel(s): ${names}${channels.length > 15 ? '…' : ''}`;
+          }
+          const url = output?.url ? ` ${output.url}` : '';
+          return `✅ ${call.tool}.${call.action} completed successfully.${url}`;
+        }
+        return `⚠️ ${call.tool}.${call.action} failed: ${call.error ?? 'Unknown error'}`;
+      })
+      .join('\n');
+  } else {
+    reply = plan.responseDraft + approvalNote;
+  }
+
   return {
-    reply: plan.responseDraft + approvalNote,
+    reply,
     plan,
     executedCalls,
     pendingApprovalIds,

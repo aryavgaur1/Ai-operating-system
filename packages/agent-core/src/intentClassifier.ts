@@ -15,6 +15,7 @@ const ACTION_VERBS = [
   'draft', 'send', 'email', 'create', 'open', 'file', 'schedule',
   'post', 'message', 'update', 'delete', 'remove', 'close',
   'assign', 'transition', 'publish', 'notify', 'reply',
+  'list', 'search', 'upload', 'invite', 'react', 'summarize', 'summarise',
 ];
 
 export function classifyIntent(query: string): ClassifiedIntent {

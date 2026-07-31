@@ -21,7 +21,7 @@ import type { LLMClient } from './llmClient';
 
 interface ToolRule {
   tool: ToolName;
-  action: string;
+  action: string | ((query: string) => string);
   keywords: string[];
   buildInput: (query: string) => Record<string, unknown>;
 }
@@ -50,8 +50,35 @@ const TOOL_RULES: ToolRule[] = [
   {
     tool: 'slack',
     action: 'postMessage',
-    keywords: ['slack', 'post a message', 'notify the team'],
-    buildInput: (query) => ({ channel: 'project-phoenix', text: query }),
+    keywords: [
+      'slack',
+      'post a message',
+      'post message',
+      'notify the team',
+      'send a message',
+      'send message',
+      'post "',
+      "post '",
+      'to @',
+      '#general',
+      'to #',
+      'list channels',
+      'list slack',
+      'slack channels',
+      'slack users',
+      'search slack',
+      'slack history',
+      'channel history',
+      'summarize channel',
+      'summarise channel',
+      'upload to slack',
+      'upload file',
+      'react on slack',
+      'add reaction',
+      'create channel',
+      'invite to',
+    ],
+    buildInput: (query) => parseSlackActionQuery(query),
   },
   {
     tool: 'salesforce',
@@ -62,10 +89,144 @@ const TOOL_RULES: ToolRule[] = [
   {
     tool: 'notion',
     action: 'createPage',
-    keywords: ['notion', 'wiki page', 'doc page'],
-    buildInput: (query) => ({ title: query.slice(0, 60), content: query }),
+    keywords: ['notion', 'wiki page', 'doc page', 'notion page', 'notion doc', 'meeting note', 'meeting notes', 'task', 'todo', 'task list', 'checklist', 'database', 'db', 'table', 'board', 'kanban', 'form', 'survey', 'delete', 'remove', 'archive', 'summary', 'summarize'],
+    buildInput: (query) => parseNotionActionQuery(query),
   },
 ];
+
+function parseSlackActionQuery(query: string): Record<string, unknown> {
+  const lower = query.toLowerCase();
+
+  const quoted =
+    query.match(/["“]([^"”]+)["”]/)?.[1] ??
+    query.match(/'([^']+)'/)?.[1];
+
+  const userMention = query.match(/@([a-z0-9._-]+)/i)?.[1];
+  const channelMatch =
+    query.match(/#([a-z0-9_-]+)/i)?.[1] ??
+    query.match(/\bchannel\s+[\"']?([a-z0-9_-]+)/i)?.[1] ??
+    query.match(/(?:to|in|into)\s+#([a-z0-9_-]+)\b/i)?.[1];
+
+  const reserved = new Set(['slack', 'channel', 'channels', 'message', 'messages', 'team', 'the', 'a', 'an', 'on', 'to', 'in']);
+  let channel = userMention ? `@${userMention}` : channelMatch ?? 'general';
+  if (!userMention && reserved.has(String(channel).toLowerCase())) {
+    channel = 'general';
+  }
+
+  if (/\b(list)\b/.test(lower) && /\b(channels?)\b/.test(lower)) {
+    return { action: 'listChannels', limit: 200 };
+  }
+  if (/\b(list)\b/.test(lower) && /\b(users?|members?)\b/.test(lower)) {
+    return { action: 'listUsers', limit: 200 };
+  }
+  if (/\b(search)\b/.test(lower) || (/\b(find|look up)\b/.test(lower) && /\b(slack|history|message)/.test(lower))) {
+    const stripped = query
+      .replace(/search( in)? slack( history)?( for)?/i, '')
+      .replace(/slack/i, '')
+      .trim();
+    const q = quoted ?? (stripped || query);
+    return { action: 'searchHistory', query: q };
+  }
+  if (/\b(summarize|summarise|recap)\b/.test(lower) && /\b(channel|slack|#)/.test(lower)) {
+    return { action: 'summarizeChannel', channel, limit: 30 };
+  }
+  if (/\b(history|messages|thread)\b/.test(lower) && /\b(channel|slack|#|get|read|show|fetch)\b/.test(lower)) {
+    if (/\bthread\b/.test(lower)) {
+      const ts = query.match(/\b(\d{10}\.\d+)\b/)?.[1];
+      return { action: 'getThread', channel, threadTs: ts, limit: 50 };
+    }
+    return { action: 'getChannelHistory', channel, limit: 50 };
+  }
+  if (/\b(upload)\b/.test(lower)) {
+    return {
+      action: 'uploadFile',
+      channel,
+      content: quoted ?? query,
+      filename: 'upload.txt',
+      title: 'Chat upload',
+    };
+  }
+  if (/\b(react|reaction)\b/.test(lower)) {
+    const emoji = query.match(/:([a-z0-9_+-]+):/i)?.[1] ?? 'thumbsup';
+    const ts = query.match(/\b(\d{10}\.\d+)\b/)?.[1];
+    return { action: 'addReaction', channel, name: emoji, timestamp: ts };
+  }
+  if (/\b(create)\b/.test(lower) && /\b(channel)\b/.test(lower)) {
+    const name =
+      quoted ??
+      query.match(/channel\s+(?:called|named)?\s*[#\"']?([a-z0-9_-]+)/i)?.[1] ??
+      channel;
+    return { action: 'createChannel', name };
+  }
+  if (/\b(invite)\b/.test(lower)) {
+    const users = query.match(/\b(U[A-Z0-9]+)\b/g) ?? [];
+    return { action: 'inviteUsers', channel, users };
+  }
+
+  // Default: post a message. Prefer quoted text; otherwise strip the routing preamble.
+  let text = quoted;
+  if (!text) {
+    text = query
+      .replace(/^(please\s+)?(post|send|notify|message)\s+/i, '')
+      .replace(/\s+(to|in|on)\s+#?@[a-z0-9._-]+\s*$/i, '')
+      .replace(/\s+(to|in|on)\s+#?[a-z0-9_-]+\s*$/i, '')
+      .replace(/\s+on\s+slack\s*$/i, '')
+      .replace(/^["“]|["”]$/g, '')
+      .trim();
+  }
+  if (!text) text = query.trim();
+
+  const external = /\b(external|customer|client)\b/.test(lower);
+  return {
+    action: external ? 'postMessageExternalChannel' : 'postMessage',
+    channel,
+    text,
+  };
+}
+
+function parseNotionActionQuery(query: string) {
+  const lower = query.toLowerCase();
+  const isDelete = /\b(delete|remove|archive|destroy|discard)\b/i.test(query) && /\b(page|doc|document|note|task|todo)\b/i.test(query);
+  const isPublish = /\b(publish|share|post|submit)\b/i.test(query) && !isDelete;
+  const isTask = /\b(?:todo|to-?do|task|tasks|checklist)\b/i.test(query);
+  const isMeeting = /\b(?:meeting note|meeting notes|meeting|standup|sync)\b/i.test(query);
+  const isSummary = /\b(?:summary|summarize|recap|overview)\b/i.test(query);
+  const explicitDatabase = /\b(database|db|table|board|kanban)\b/i.test(query);
+  const isFormCreation = /\b(?:create|make|new)\b\s+(?:form|survey|database|db|table|board|kanban)\b/i.test(query);
+
+  const titleMatch =
+    query.match(/(?:page|doc|document|note|task|todo|form|survey)\s+(?:called|named|titled)?\s*["“]([^"”]+)["”]/i) ||
+    query.match(/(?:page|doc|document|note|task|todo|form|survey)\s+(?:called|named|titled)?\s*([^"\n]+?)(?:\s+with|\s+for|\s+in|\s+about|$)/i);
+  const bodyMatch =
+    query.match(/(?:body|content|notes|description)\s*(?:is|:)?\s*["“]([^"”]+)["”]/i) ||
+    query.match(/(?:body|content|notes|description)\s*(?:is|:)?\s*([^\n]+)$/i) ||
+    query.match(/(?:with|using|that has)\s*["“]([^"”]+)["”]/i);
+
+  const rawTitle = titleMatch?.[1]?.trim() ?? titleMatch?.[2]?.trim();
+  const title = rawTitle ?? query.slice(0, 60).trim();
+  let body = bodyMatch?.[1]?.trim() ?? '';
+
+  if (!body) {
+    if (isTask) {
+      body = `- [ ] ${query.trim()}`;
+    } else if (isMeeting) {
+      body = `Meeting notes:\n- Attendees:\n- Agenda:\n- Notes:\n- Action items:`;
+    } else if (isSummary) {
+      body = `Summary page for: ${query.trim()}`;
+    } else {
+      body = query.trim();
+    }
+  }
+
+  const action = isDelete ? 'deletePage' : isPublish ? 'publishPage' : isFormCreation ? 'createDatabase' : 'createPage';
+  return {
+    title,
+    body,
+    action,
+    useDatabase: explicitDatabase && !isFormCreation,
+    template: action === 'createDatabase' ? 'database' : isTask ? 'task' : isMeeting ? 'meeting' : isSummary ? 'summary' : 'doc',
+  };
+}
 
 function proposeToolCalls(query: string): ToolCall[] {
   const lower = query.toLowerCase();
@@ -73,11 +234,16 @@ function proposeToolCalls(query: string): ToolCall[] {
 
   for (const rule of TOOL_RULES) {
     if (rule.keywords.some((k) => lower.includes(k))) {
-      const requiresApproval = isHighConsequence(rule.tool, rule.action);
+      const input = rule.buildInput(query);
+      const action = typeof rule.action === 'function' ? rule.action(query) : (input.action as string | undefined) ?? rule.action;
+      const requiresApproval = isHighConsequence(rule.tool, action);
+      const sanitizedInput = { ...input };
+      delete (sanitizedInput as any).action;
+
       calls.push({
         tool: rule.tool,
-        action: rule.action,
-        input: rule.buildInput(query),
+        action,
+        input: sanitizedInput,
         riskLevel: requiresApproval ? 'high' : 'low',
         requiresApproval,
       });

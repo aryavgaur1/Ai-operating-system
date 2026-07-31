@@ -7,7 +7,9 @@
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@enterprise-ai-os/shared": "*"
+    "@enterprise-ai-os/shared": "*",
+    "@notionhq/client": "^5.23.3",
+    "@slack/web-api": "^8.0.0"
   },
   "devDependencies": {
     "typescript": "^5.4.5"

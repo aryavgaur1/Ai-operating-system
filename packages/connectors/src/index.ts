@@ -12,6 +12,8 @@ export { jiraConnector } from './jira';
 export { gmailConnector } from './gmail';
 export { salesforceConnector } from './salesforce';
 export { notionConnector } from './notion';
+export { slackService, SlackServiceError, verifySlackSignature } from './slackService';
+export { default as slack_service } from './slackService';
 
 export const connectorRegistry: Record<ToolName, ToolConnector> = {
   slack: slackConnector,

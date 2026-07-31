@@ -97,7 +97,11 @@ export function listConnections(organizationId: string): { tool: ToolName; statu
 export function seedDemoConnections(organizationId: string): void {
   const tools: ToolName[] = ['slack', 'jira', 'gmail', 'salesforce', 'notion'];
   for (const tool of tools) {
-    storeConnection(organizationId, tool, `demo-access-token-${tool}`, {
+    const liveSlackToken =
+      tool === 'slack' && process.env.SLACK_MODE === 'live' && process.env.SLACK_BOT_TOKEN
+        ? process.env.SLACK_BOT_TOKEN.trim()
+        : undefined;
+    storeConnection(organizationId, tool, liveSlackToken ?? `demo-access-token-${tool}`, {
       refreshToken: `demo-refresh-token-${tool}`,
       expiresAt: new Date(Date.now() + 1000 * 60 * 60).toISOString(),
     });

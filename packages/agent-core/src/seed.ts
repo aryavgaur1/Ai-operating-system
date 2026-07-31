@@ -42,7 +42,13 @@ export async function seedDemoData(
   // ---- Vector store + per-document graph nodes ----
   for (const tool of allTools()) {
     const connector = getConnector(tool);
-    const page = await connector.fetchRecent();
+    let page;
+    try {
+      page = await connector.fetchRecent();
+    } catch (err) {
+      console.warn(`[seed] fetchRecent failed for ${tool}:`, err instanceof Error ? err.message : err);
+      continue;
+    }
 
     for (const doc of page.items) {
       await vectorStore.upsert([
