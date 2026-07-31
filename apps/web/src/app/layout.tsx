@@ -1,23 +1,33 @@
 import type { Metadata } from 'next';
-import { Nav } from '@/components/Nav';
+import { AppShell } from '@/components/AppShell';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Nexora OS',
-  description: 'Nexora OS is an active intelligence layer across Slack, Jira, Gmail, Salesforce and Notion.',
+  title: 'Nexora OS — The AI Operating System for Modern Teams',
+  description:
+    'Nexora is an AI Operating System that connects your tools, reasons over context, and executes real work across Slack, Notion, and more.',
+  icons: {
+    icon: [{ url: '/favicon.png', type: 'image/png' }],
+    apple: [{ url: '/favicon.png' }],
+    shortcut: ['/favicon.png'],
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body className="font-body min-h-screen bg-bg text-white overflow-x-hidden">
-        <div className="pointer-events-none absolute inset-0 -z-10 overflow-hidden">
-          <div className="absolute left-[10%] top-[-10%] h-[420px] w-[420px] rounded-full bg-accent/10 blur-3xl" />
-          <div className="absolute right-[5%] top-[20%] h-[520px] w-[520px] rounded-full bg-accent2/10 blur-3xl" />
-          <div className="absolute left-1/2 top-[40%] h-[620px] w-[620px] -translate-x-1/2 rounded-full bg-[#6f7bf0]/5 blur-3xl" />
-        </div>
-        <Nav />
-        <main className="mx-auto max-w-7xl px-6 py-10">{children}</main>
+      <head>
+        <link rel="icon" href="/favicon.png" type="image/png" />
+        <link rel="apple-touch-icon" href="/favicon.png" />
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        <link
+          href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap"
+          rel="stylesheet"
+        />
+      </head>
+      <body className="font-body min-h-screen bg-bg text-white antialiased">
+        <AppShell>{children}</AppShell>
       </body>
     </html>
   );
