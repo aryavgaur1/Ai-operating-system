@@ -189,8 +189,16 @@ export function AnalysisDashboard() {
         setPulseId(nextId);
         return [...jittered, { id: nextId, stack: randStack() }];
       });
-      setFeedIdx((i) => (i + 1) % FEED.length);
     }, 260);
+    return () => window.clearInterval(id);
+  }, [mounted, reduce]);
+
+  // Live feed advances slowly — not locked to chart tick rate
+  useEffect(() => {
+    if (!mounted || reduce) return;
+    const id = window.setInterval(() => {
+      setFeedIdx((i) => (i + 1) % FEED.length);
+    }, 3200);
     return () => window.clearInterval(id);
   }, [mounted, reduce]);
 
@@ -493,8 +501,9 @@ export function AnalysisDashboard() {
                     return (
                       <motion.div
                         key={`${feedIdx}-${i}`}
-                        initial={reduce ? false : { opacity: 0, x: 10 }}
-                        animate={{ opacity: 1 - i * 0.12, x: 0 }}
+                        initial={reduce ? false : { opacity: 0, y: 8 }}
+                        animate={{ opacity: 1 - i * 0.12, y: 0 }}
+                        transition={{ duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
                         className={cn(
                           'rounded-xl border px-3 py-2 text-[11px] leading-4',
                           i === 0
