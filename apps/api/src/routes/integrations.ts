@@ -1,8 +1,7 @@
 import { Router } from 'express';
 import { allTools, getConnector, isLiveMode } from '@enterprise-ai-os/connectors';
-import { listConnections, revokeConnection } from '@enterprise-ai-os/stores';
+import { getConnectionDetails, revokeConnection, storeConnection } from '@enterprise-ai-os/stores';
 import { asyncHandler, ok, AppError } from '../lib/errors';
-import { webAppUrl } from '../lib/authTokens';
 
 export const integrationsRouter = Router();
 
@@ -10,16 +9,24 @@ integrationsRouter.get(
   '/',
   asyncHandler(async (req, res) => {
     const demoMode = (process.env.SAAS_MODE ?? 'true') !== 'true';
-    const connections = await listConnections(req.user!.organizationId, req.user!.id);
+    const details = await getConnectionDetails(req.user!.organizationId, req.user!.id);
     const apiBase = process.env.NEXT_PUBLIC_API_URL ?? `http://localhost:${process.env.PORT ?? 4000}`;
     const token = (req.header('authorization') || '').replace(/^Bearer\s+/i, '');
 
     const tools = allTools().map((tool) => {
       const connector = getConnector(tool);
-      const connection = connections.find((c) => c.tool === tool && c.status === 'active');
-      const envLive =
-        (tool === 'slack' && Boolean(process.env.SLACK_BOT_TOKEN?.trim())) ||
-        (tool === 'notion' && Boolean(process.env.NOTION_API_KEY?.trim()));
+      const detail = details.find((c) => c.tool === tool && c.status === 'active');
+      const meta = detail?.metadata ?? {};
+      const workspaceName =
+        (typeof meta.teamName === 'string' && meta.teamName) ||
+        (typeof meta.workspaceName === 'string' && meta.workspaceName) ||
+        undefined;
+      const workspaceId =
+        (typeof meta.teamId === 'string' && meta.teamId) ||
+        (typeof meta.workspaceId === 'string' && meta.workspaceId) ||
+        undefined;
+      const workspaceIcon = typeof meta.workspaceIcon === 'string' ? meta.workspaceIcon : undefined;
+
       const connectUrl =
         tool === 'slack'
           ? `${apiBase}/oauth/slack/start?token=${encodeURIComponent(token)}`
@@ -27,10 +34,9 @@ integrationsRouter.get(
             ? `${apiBase}/oauth/notion/start?token=${encodeURIComponent(token)}`
             : null;
 
-      // Demo mode: all 5 look connected (old investor-demo shell)
-      const status = demoMode
-        ? 'active'
-        : connection?.status ?? (envLive ? 'active' : 'not_connected');
+      // Demo/admin: all look connected; no Connect buttons (preserve admin UX)
+      // SaaS: active ONLY if this user has a DB connection — never treat .env as theirs
+      const status = demoMode ? 'active' : detail?.status === 'active' ? 'active' : 'not_connected';
 
       return {
         tool,
@@ -39,9 +45,89 @@ integrationsRouter.get(
         availableActions: connector.listActions(),
         connectUrl: demoMode ? null : connectUrl,
         canConnect: !demoMode && (tool === 'slack' || tool === 'notion'),
+        workspaceName: demoMode
+          ? tool === 'slack'
+            ? 'Platform (admin .env)'
+            : tool === 'notion'
+              ? 'Platform (admin .env)'
+              : undefined
+          : workspaceName,
+        workspaceId: demoMode ? undefined : workspaceId,
+        workspaceIcon: demoMode ? undefined : workspaceIcon,
+        connectedAt: demoMode ? undefined : detail?.connectedAt,
+        lastUsedAt: demoMode ? undefined : detail?.lastUsedAt,
+        lastSync: demoMode ? undefined : detail?.lastUsedAt || detail?.updatedAt,
+        ...(tool === 'slack'
+          ? {
+              botToken: demoMode
+                ? Boolean(process.env.SLACK_BOT_TOKEN?.trim())
+                : Boolean(detail?.hasAccessToken),
+              userToken: demoMode
+                ? Boolean(process.env.SLACK_USER_TOKEN?.trim())
+                : Boolean(detail?.hasUserToken),
+            }
+          : {}),
       };
     });
     res.json({ tools });
+  })
+);
+
+/**
+ * Bypass Notion's Allow/timeout OAuth UI for local SaaS testing.
+ * Paste an Internal Integration secret after sharing pages with it.
+ */
+integrationsRouter.post(
+  '/notion/connect-token',
+  asyncHandler(async (req, res) => {
+    if ((process.env.ALLOW_NOTION_TOKEN_PASTE ?? '').toLowerCase() !== 'true') {
+      throw new AppError('Notion token paste is disabled. Use Connect Notion (OAuth).', 403);
+    }
+    if ((process.env.SAAS_MODE ?? 'true') !== 'true') {
+      throw new AppError('Token connect is only available when SAAS_MODE=true', 400);
+    }
+    const accessToken = String(req.body?.accessToken ?? req.body?.token ?? '').trim();
+    if (!accessToken) {
+      throw new AppError('Paste your Notion Internal Integration secret', 400);
+    }
+
+    const meRes = await fetch('https://api.notion.com/v1/users/me', {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Notion-Version': '2022-06-28',
+      },
+    });
+    if (!meRes.ok) {
+      const body = await meRes.text();
+      console.error('[integrations/notion] token validate failed', meRes.status, body);
+      throw new AppError(
+        'Invalid Notion token. Create an Internal Integration → copy the secret → share pages with it.',
+        400
+      );
+    }
+
+    const me = (await meRes.json()) as {
+      id?: string;
+      name?: string | null;
+      bot?: { workspace_name?: string; workspace_id?: string; owner?: Record<string, unknown> };
+    };
+
+    await storeConnection(req.user!.organizationId, 'notion', accessToken, {
+      userId: req.user!.id,
+      metadata: {
+        workspaceName: me.bot?.workspace_name ?? me.name ?? 'Notion',
+        workspaceId: me.bot?.workspace_id,
+        botUserId: me.id,
+        owner: me.bot?.owner ?? null,
+        connectedAt: new Date().toISOString(),
+        method: 'internal_token',
+      },
+    });
+
+    ok(res, {
+      connected: true,
+      workspaceName: me.bot?.workspace_name ?? me.name ?? 'Notion',
+    });
   })
 );
 
@@ -52,6 +138,7 @@ integrationsRouter.post(
     if (!['slack', 'notion', 'jira', 'gmail', 'salesforce'].includes(tool)) {
       throw new AppError('Unknown tool', 404);
     }
+    // User-scoped only — never touches other users or admin .env
     await revokeConnection(req.user!.organizationId, tool, req.user!.id);
     ok(res, null, `${tool} disconnected`);
   })

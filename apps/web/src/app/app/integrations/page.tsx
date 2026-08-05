@@ -290,6 +290,20 @@ export default function IntegrationsPage() {
                     <span className="text-[10px] uppercase tracking-wide text-neutral-600">{mode}</span>
                   </div>
                   <p className="mt-0.5 line-clamp-2 text-sm text-neutral-400">{item.description}</p>
+                  {meta[item.tool]?.workspaceName && (
+                    <p className="mt-1 text-[11px] text-neutral-500">
+                      Workspace: {meta[item.tool].workspaceName}
+                      {meta[item.tool].connectedAt
+                        ? ` · since ${new Date(meta[item.tool].connectedAt!).toLocaleDateString()}`
+                        : ''}
+                      {meta[item.tool].lastSync
+                        ? ` · last sync ${new Date(meta[item.tool].lastSync!).toLocaleString()}`
+                        : ''}
+                    </p>
+                  )}
+                  {!active && meta[item.tool]?.canConnect && (
+                    <p className="mt-1 text-[11px] text-amber-300/90">Not connected — toggle on to Connect</p>
+                  )}
                 </div>
                 <SmoothToggle
                   checked={active}

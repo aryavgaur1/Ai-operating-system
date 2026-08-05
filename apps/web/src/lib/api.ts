@@ -100,6 +100,14 @@ export interface IntegrationStatus {
   availableActions: string[];
   connectUrl?: string | null;
   canConnect?: boolean;
+  workspaceName?: string;
+  workspaceId?: string;
+  workspaceIcon?: string;
+  connectedAt?: string;
+  lastUsedAt?: string;
+  lastSync?: string;
+  botToken?: boolean;
+  userToken?: boolean;
 }
 
 export interface HealthCheck {
@@ -171,6 +179,11 @@ export const api = {
   listIntegrations: () => request<{ tools: IntegrationStatus[] }>('/integrations'),
   disconnectIntegration: (tool: string) =>
     request<null>(`/integrations/${tool}/disconnect`, { method: 'POST' }),
+  connectNotionToken: (accessToken: string) =>
+    request<{ connected: boolean; workspaceName?: string }>('/integrations/notion/connect-token', {
+      method: 'POST',
+      body: JSON.stringify({ accessToken }),
+    }),
   getDashboard: () => request<any>('/dashboard'),
   getHealth: () => request<HealthCheck>('/health'),
 
@@ -188,6 +201,10 @@ export const api = {
     request<null>(`/admin/users/${id}/reset-password`, { method: 'POST' }),
   adminIntegrations: () => request<{ connections: any[] }>('/admin/integrations'),
   adminAudit: () => request<{ events: any[] }>('/admin/audit'),
+  adminChatbotDocs: () => request<{ docs: any[]; ready: boolean }>('/admin/chatbot/docs'),
+  adminChatbotReindex: () =>
+    request<{ docs: number; chunks: number }>('/admin/chatbot/reindex', { method: 'POST' }),
+  adminChatbotAnalytics: () => request<any>('/admin/chatbot/analytics'),
 };
 
 export function googleLoginUrl() {

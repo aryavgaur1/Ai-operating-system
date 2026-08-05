@@ -18,7 +18,7 @@ interface JwtPayload {
   typ?: string;
 }
 
-function getJwtSecret(): string {
+export function getJwtSecret(): string {
   const secret = process.env.JWT_SECRET;
   if (!secret || secret === 'replace-with-a-long-random-string') {
     // Dev fallback — production MUST set a strong JWT_SECRET.

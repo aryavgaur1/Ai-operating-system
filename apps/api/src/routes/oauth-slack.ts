@@ -1,20 +1,25 @@
 import { Router } from 'express';
 import jwt from 'jsonwebtoken';
-import { storeConnection, revokeConnection } from '@enterprise-ai-os/stores';
+import { storeConnection, revokeConnection, upsertSlackInstallation, query } from '@enterprise-ai-os/stores';
 import { mailer } from '../lib/mailer';
-import { query } from '@enterprise-ai-os/stores';
 import { webAppUrl } from '../lib/authTokens';
+import { SLACK_BOT_SCOPES, SLACK_USER_SCOPES } from '../lib/slackScopes';
+import { getJwtSecret } from '../middleware/auth';
 
 export const oauthSlackRouter = Router();
 
+function isDemoMode(): boolean {
+  return (process.env.SAAS_MODE ?? 'true') !== 'true';
+}
+
 function signState(userId: string, organizationId: string): string {
-  return jwt.sign({ sub: userId, org: organizationId }, process.env.JWT_SECRET || 'nexora-dev-jwt-secret-change-me', {
+  return jwt.sign({ sub: userId, org: organizationId }, getJwtSecret(), {
     expiresIn: '10m',
   });
 }
 
 function verifyState(state: string): { sub: string; org: string } {
-  return jwt.verify(state, process.env.JWT_SECRET || 'nexora-dev-jwt-secret-change-me') as { sub: string; org: string };
+  return jwt.verify(state, getJwtSecret()) as { sub: string; org: string };
 }
 
 oauthSlackRouter.get('/start', (req, res) => {
@@ -26,7 +31,7 @@ oauthSlackRouter.get('/start', (req, res) => {
   }
   let payload: { sub: string; org: string };
   try {
-    payload = jwt.verify(token, process.env.JWT_SECRET || 'nexora-dev-jwt-secret-change-me') as { sub: string; org: string };
+    payload = jwt.verify(token, getJwtSecret()) as { sub: string; org: string };
   } catch {
     res.status(401).json({ error: 'Invalid or expired session' });
     return;
@@ -40,27 +45,10 @@ oauthSlackRouter.get('/start', (req, res) => {
   }
 
   const state = signState(payload.sub, payload.org);
-  const scopes = [
-    'channels:history',
-    'channels:read',
-    'channels:join',
-    'channels:manage',
-    'chat:write',
-    'chat:write.public',
-    'users:read',
-    'groups:read',
-    'groups:history',
-    'im:read',
-    'im:write',
-    'im:history',
-    'files:write',
-    'reactions:write',
-    'app_mentions:read',
-  ].join(',');
-
   const url = new URL('https://slack.com/oauth/v2/authorize');
   url.searchParams.set('client_id', clientId);
-  url.searchParams.set('scope', scopes);
+  url.searchParams.set('scope', SLACK_BOT_SCOPES.join(','));
+  url.searchParams.set('user_scope', SLACK_USER_SCOPES.join(','));
   url.searchParams.set('redirect_uri', redirectUri);
   url.searchParams.set('state', state);
   res.redirect(url.toString());
@@ -105,9 +93,17 @@ oauthSlackRouter.get('/callback', async (req, res) => {
       error?: string;
       access_token?: string;
       scope?: string;
+      token_type?: string;
       team?: { id?: string; name?: string };
       bot_user_id?: string;
       app_id?: string;
+      authed_user?: {
+        id?: string;
+        scope?: string;
+        access_token?: string;
+        token_type?: string;
+      };
+      incoming_webhook?: { url?: string; channel?: string; channel_id?: string };
     };
 
     if (!tokenData.ok || !tokenData.access_token) {
@@ -115,10 +111,51 @@ oauthSlackRouter.get('/callback', async (req, res) => {
       return;
     }
 
+    const userToken = tokenData.authed_user?.access_token;
+    const metadata = {
+      teamId: tokenData.team?.id,
+      teamName: tokenData.team?.name,
+      botUserId: tokenData.bot_user_id,
+      appId: tokenData.app_id,
+      authedUserId: tokenData.authed_user?.id,
+      userTokenPresent: Boolean(userToken),
+      incomingWebhook: tokenData.incoming_webhook
+        ? {
+            channel: tokenData.incoming_webhook.channel,
+            channelId: tokenData.incoming_webhook.channel_id,
+          }
+        : null,
+      connectedAt: new Date().toISOString(),
+    };
+
     await storeConnection(payload.org, 'slack', tokenData.access_token, {
       userId: payload.sub,
-      scope: tokenData.scope,
+      scope: [
+        tokenData.scope,
+        tokenData.authed_user?.scope ? `user:${tokenData.authed_user.scope}` : '',
+      ]
+        .filter(Boolean)
+        .join(' '),
+      userAccessToken: userToken,
+      metadata,
     });
+
+    await upsertSlackInstallation({
+      organizationId: payload.org,
+      teamId: tokenData.team?.id,
+      teamName: tokenData.team?.name,
+      botUserId: tokenData.bot_user_id,
+      appId: tokenData.app_id,
+      scopes: tokenData.scope,
+      status: 'active',
+      metadata: { userId: payload.sub, ...metadata },
+    });
+
+    // Admin/demo only: mirror into process env. Never mutate env in SaaS customer mode.
+    if (isDemoMode()) {
+      process.env.SLACK_BOT_TOKEN = tokenData.access_token;
+      if (userToken) process.env.SLACK_USER_TOKEN = userToken;
+    }
 
     const email = await query<{ email: string }>(`select email from users where id = $1`, [payload.sub]);
     if (email.rows[0]) await mailer.sendIntegrationConnected(email.rows[0].email, 'Slack');
@@ -138,7 +175,7 @@ oauthSlackRouter.post('/disconnect', async (req, res) => {
     return;
   }
   try {
-    const payload = jwt.verify(token, process.env.JWT_SECRET || 'nexora-dev-jwt-secret-change-me') as {
+    const payload = jwt.verify(token, getJwtSecret()) as {
       sub: string;
       org: string;
     };

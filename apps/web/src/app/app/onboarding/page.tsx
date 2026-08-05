@@ -16,6 +16,7 @@ export default function OnboardingPage() {
   const [notionUrl, setNotionUrl] = useState<string | null>(null);
   const [slackConnected, setSlackConnected] = useState(false);
   const [notionConnected, setNotionConnected] = useState(false);
+  const [notionToken, setNotionToken] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -131,20 +132,59 @@ export default function OnboardingPage() {
           {step === 2 && (
             <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
               <div className="text-sm font-medium text-white">Connect Notion</div>
-              <p className="mt-1 text-xs text-neutral-400">Optional — uses your Notion workspace only.</p>
+              <p className="mt-1 text-xs text-neutral-400">Optional — one-click OAuth into your Notion workspace only.</p>
               {notionConnected ? (
                 <div className="mt-3 text-sm text-emerald-300">Notion connected</div>
               ) : (
-                <button
-                  type="button"
-                  className="mt-4 rounded-full bg-white/10 px-4 py-2 text-sm text-white"
-                  onClick={() => {
-                    if (notionUrl) window.location.href = notionUrl;
-                    else setError('Notion OAuth is not configured on the server yet');
-                  }}
-                >
-                  Connect Notion
-                </button>
+                <>
+                  <button
+                    type="button"
+                    className="mt-4 rounded-full bg-accent/25 px-4 py-2 text-sm text-white"
+                    onClick={() => {
+                      if (notionUrl) window.location.href = notionUrl;
+                      else setError('Notion OAuth is not configured on the server yet');
+                    }}
+                  >
+                    Connect Notion
+                  </button>
+                  <details className="mt-4 text-xs text-neutral-500">
+                    <summary className="cursor-pointer text-neutral-400">Having trouble with Allow? (dev only)</summary>
+                    <p className="mt-2 text-neutral-500">
+                      Requires server flag <code className="text-neutral-300">ALLOW_NOTION_TOKEN_PASTE=true</code>. Customers
+                      should use Connect Notion only.
+                    </p>
+                    <label className="mt-3 block">
+                      Paste Internal Integration secret (dev fallback)
+                      <input
+                        className="mt-1 w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-white"
+                        value={notionToken}
+                        onChange={(e) => setNotionToken(e.target.value)}
+                        placeholder="secret_… or ntn_…"
+                        autoComplete="off"
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      className="mt-3 rounded-full bg-white/10 px-4 py-2 text-sm text-white disabled:opacity-40"
+                      disabled={!notionToken.trim() || loading}
+                      onClick={async () => {
+                        setLoading(true);
+                        setError(null);
+                        try {
+                          await api.connectNotionToken(notionToken.trim());
+                          setNotionConnected(true);
+                          setNotionToken('');
+                        } catch (err: any) {
+                          setError(err.message || 'Could not connect Notion token');
+                        } finally {
+                          setLoading(false);
+                        }
+                      }}
+                    >
+                      Save Notion token
+                    </button>
+                  </details>
+                </>
               )}
             </div>
           )}
