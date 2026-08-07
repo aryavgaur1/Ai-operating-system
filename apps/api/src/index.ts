@@ -18,10 +18,8 @@ import { oauthNotionRouter } from './routes/oauth-notion';
 import { oauthSlackRouter } from './routes/oauth-slack';
 import { conversationsRouter } from './routes/conversations';
 import { dashboardRouter } from './routes/dashboard';
-import { marketingChatbotRouter, adminChatbotRouter } from './routes/marketing-chatbot';
 import { errorMiddleware } from './lib/errors';
 import { isLiveMode } from '@enterprise-ai-os/connectors';
-import { reindexKnowledgeBase } from './chatbot/indexer';
 
 function loadEnvFromWorkspaceRoot(): void {
   const candidates = [process.cwd(), __dirname];
@@ -67,6 +65,7 @@ app.use(
       const normalized = origin.replace(/\/$/, '');
       if (allowed.has(normalized)) return cb(null, true);
       if (/^https:\/\/[a-z0-9-]+\.vercel\.app$/i.test(normalized)) return cb(null, true);
+      if (/^https:\/\/[a-z0-9-]+\.netlify\.app$/i.test(normalized)) return cb(null, true);
       return cb(null, false);
     },
     credentials: true,
@@ -90,13 +89,6 @@ const authLimiter = rateLimit({
   skip: (req) => (req.originalUrl || req.url || '').includes('/auth/google/'),
 });
 
-const chatbotLimiter = rateLimit({
-  windowMs: 60_000,
-  max: 40,
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
 // Public webhooks / events
 app.use('/webhooks', webhooksRouter);
 app.use('/integrations/slack/events', slackEventsRouter);
@@ -108,9 +100,6 @@ app.use('/oauth/slack', oauthSlackRouter);
 
 app.get('/health', (_req, res) => res.json({ ok: true, service: 'enterprise-ai-os-api', saas: SAAS_MODE }));
 
-// Public marketing AI assistant (RAG)
-app.use('/marketing-chatbot', chatbotLimiter, marketingChatbotRouter);
-
 // Authenticated app routes
 app.use(authenticate);
 app.use('/chat', chatRouter);
@@ -119,7 +108,6 @@ app.use('/integrations/slack', slackRouter);
 app.use('/integrations', integrationsRouter);
 app.use('/conversations', conversationsRouter);
 app.use('/dashboard', dashboardRouter);
-app.use('/admin/chatbot', adminChatbotRouter);
 app.use('/admin', adminRouter);
 
 app.use(errorMiddleware);
@@ -127,13 +115,6 @@ app.use(errorMiddleware);
 const PORT = Number(process.env.PORT ?? 4000);
 
 async function start() {
-  try {
-    const indexed = await reindexKnowledgeBase();
-    console.log(`📚 Marketing chatbot indexed ${indexed.docs} docs / ${indexed.chunks} chunks`);
-  } catch (err) {
-    console.warn('Marketing chatbot index deferred:', err);
-  }
-
   if (!SAAS_MODE) {
     const { seedDemoConnections } = await import('./auth/oauth');
     const { bootstrapDemoData, startBatchPolling } = await import('./ingestion/pipeline');
