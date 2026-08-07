@@ -4,7 +4,8 @@
 
 [build]
 builder = "NIXPACKS"
-buildCommand = "npm ci && npm run build -w packages/shared && npm run build -w packages/stores && npm run build -w packages/connectors && npm run build -w packages/agent-core && npm run build -w apps/api"
+# Nixpacks already runs `npm ci` in install — do not run it again (EBUSY on cache mounts).
+buildCommand = "npm run build -w packages/shared && npm run build -w packages/stores && npm run build -w packages/connectors && npm run build -w packages/agent-core && npm run build -w apps/api"
 
 [deploy]
 startCommand = "npm run start -w apps/api"
