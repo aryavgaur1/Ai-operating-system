@@ -10,7 +10,14 @@ integrationsRouter.get(
   asyncHandler(async (req, res) => {
     const demoMode = (process.env.SAAS_MODE ?? 'true') !== 'true';
     const details = await getConnectionDetails(req.user!.organizationId, req.user!.id);
-    const apiBase = process.env.NEXT_PUBLIC_API_URL ?? `http://localhost:${process.env.PORT ?? 4000}`;
+    const apiBase = (
+      process.env.API_PUBLIC_URL ||
+      process.env.NEXT_PUBLIC_API_URL ||
+      (process.env.RAILWAY_PUBLIC_DOMAIN
+        ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
+        : null) ||
+      `http://localhost:${process.env.PORT ?? 4000}`
+    ).replace(/\/$/, '');
     const token = (req.header('authorization') || '').replace(/^Bearer\s+/i, '');
 
     const tools = allTools().map((tool) => {
