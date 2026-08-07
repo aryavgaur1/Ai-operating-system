@@ -1,0 +1,14 @@
+# Railway — Nexora API (monorepo)
+# Create a Railway project → New Service → GitHub repo → set Root Directory empty (repo root).
+# Add a Postgres plugin and link DATABASE_URL automatically.
+
+[build]
+builder = "NIXPACKS"
+buildCommand = "npm ci && npm run build -w packages/shared && npm run build -w packages/stores && npm run build -w packages/connectors && npm run build -w packages/agent-core && npm run build -w apps/api"
+
+[deploy]
+startCommand = "npm run start -w apps/api"
+healthcheckPath = "/health"
+healthcheckTimeout = 30
+restartPolicyType = "ON_FAILURE"
+releaseCommand = "node db/migrate.js"
