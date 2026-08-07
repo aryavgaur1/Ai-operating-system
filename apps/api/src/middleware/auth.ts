@@ -2,6 +2,7 @@ import type { NextFunction, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import type { ActingUser } from '@enterprise-ai-os/shared';
 import { query } from '@enterprise-ai-os/stores';
+import { isPlatformAdminEmail } from '../lib/platformAdmin';
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -167,7 +168,8 @@ export function requireAdmin(req: Request, res: Response, next: NextFunction): v
     res.status(401).json({ success: false, message: 'Unauthorized', data: null, error: 'unauthorized' });
     return;
   }
-  if (req.user.role !== 'super_admin' && req.user.role !== 'admin' && req.user.role !== 'owner') {
+  // Platform admin is email-gated (founder only), not just any org admin role.
+  if (!isPlatformAdminEmail(req.user.email)) {
     res.status(403).json({ success: false, message: 'Admin access required', data: null, error: 'forbidden' });
     return;
   }

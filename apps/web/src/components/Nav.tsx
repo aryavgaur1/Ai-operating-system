@@ -19,6 +19,7 @@ import { useEffect, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { api, setAccessToken } from '@/lib/api';
 import { APP_HOME, APP_ROUTES, LOGIN } from '@/lib/routes';
+import { isPlatformAdminEmail } from '@/lib/platformAdmin';
 
 const NOTIFICATIONS = [
   { id: 1, text: 'Approvals and integrations update live from your workspace', time: 'now' },
@@ -38,6 +39,7 @@ export function Nav() {
   const [notifOpen, setNotifOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [displayName, setDisplayName] = useState('User');
+  const [email, setEmail] = useState('');
   const [role, setRole] = useState('member');
   const [isVerified, setIsVerified] = useState(true);
   const notifRef = useRef<HTMLDivElement | null>(null);
@@ -48,6 +50,7 @@ export function Nav() {
       .me()
       .then((res) => {
         setDisplayName(res.user.displayName || res.user.email);
+        setEmail(res.user.email || '');
         setRole(res.user.role);
         setIsVerified(Boolean(res.user.isVerified));
       })
@@ -80,7 +83,7 @@ export function Nav() {
     .join('')
     .slice(0, 2)
     .toUpperCase();
-  const isAdmin = role === 'super_admin' || role === 'admin' || role === 'owner';
+  const isAdmin = isPlatformAdminEmail(email);
 
   return (
     <div className="sticky top-4 z-50 px-4 sm:px-6">

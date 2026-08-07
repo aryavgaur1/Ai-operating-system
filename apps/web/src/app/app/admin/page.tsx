@@ -1,16 +1,36 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
+import { isPlatformAdminEmail } from '@/lib/platformAdmin';
+import { APP_ROUTES } from '@/lib/routes';
 
 export default function AdminPage() {
+  const router = useRouter();
   const [metrics, setMetrics] = useState<any>(null);
   const [users, setUsers] = useState<any[]>([]);
   const [connections, setConnections] = useState<any[]>([]);
   const [events, setEvents] = useState<any[]>([]);
   const [search, setSearch] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
   const [tab, setTab] = useState<'overview' | 'users' | 'integrations' | 'audit'>('overview');
+  const [allowed, setAllowed] = useState(false);
+
+  useEffect(() => {
+    api
+      .me()
+      .then((me) => {
+        if (!isPlatformAdminEmail(me.user.email)) {
+          router.replace(APP_ROUTES.dashboard);
+          return;
+        }
+        setAllowed(true);
+      })
+      .catch(() => router.replace(APP_ROUTES.dashboard));
+  }, [router]);
 
   async function load() {
     try {
@@ -26,13 +46,38 @@ export default function AdminPage() {
       setEvents(a.events || []);
       setError(null);
     } catch (e: any) {
-      setError(e.message);
+      setError(e?.message || 'Failed to load admin data');
     }
   }
 
   useEffect(() => {
+    if (!allowed) return;
     load();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allowed, search]);
+
+  if (!allowed) {
+    return (
+      <div className="flex min-h-[40vh] items-center justify-center text-sm text-neutral-400">
+        Checking admin access…
+      </div>
+    );
+  }
+
+  async function runUserAction(userId: string, action: () => Promise<unknown>, successMessage?: string) {
+    setBusyId(userId);
+    setError(null);
+    setInfo(null);
+    try {
+      await action();
+      if (successMessage) setInfo(successMessage);
+      await load();
+    } catch (e: any) {
+      setError(e?.message || 'Admin action failed');
+    } finally {
+      setBusyId(null);
+    }
+  }
 
   return (
     <div className="space-y-6 pb-10">
@@ -50,10 +95,17 @@ export default function AdminPage() {
               {t}
             </button>
           ))}
+          <a
+            href="/app/admin/chatbot"
+            className="rounded-full border border-accent/30 bg-accent/10 px-3 py-1.5 text-xs text-accent"
+          >
+            Chatbot KB
+          </a>
         </div>
       </div>
 
       {error && <div className="rounded-2xl border border-red-500/25 bg-red-500/10 p-4 text-sm text-red-300">{error}</div>}
+      {info && <div className="rounded-2xl border border-emerald-500/25 bg-emerald-500/10 p-4 text-sm text-emerald-300">{info}</div>}
 
       {tab === 'overview' && metrics && (
         <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
@@ -99,34 +151,50 @@ export default function AdminPage() {
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  <button className="rounded-full border border-white/10 px-3 py-1 text-xs" onClick={() => api.adminVerify(u.id).then(load)}>
+                  <button
+                    disabled={busyId === u.id}
+                    className="rounded-full border border-white/10 px-3 py-1 text-xs disabled:opacity-50"
+                    onClick={() => runUserAction(u.id, () => api.adminVerify(u.id))}
+                  >
                     Verify
                   </button>
                   <button
-                    className="rounded-full border border-white/10 px-3 py-1 text-xs"
+                    disabled={busyId === u.id}
+                    className="rounded-full border border-white/10 px-3 py-1 text-xs disabled:opacity-50"
                     onClick={() =>
-                      api
-                        .adminResetPassword(u.id)
-                        .then(() => setError('Reset email sent (check API console if EMAIL_* unset)'))
-                        .then(load)
-                        .catch((e) => setError(e.message))
+                      runUserAction(
+                        u.id,
+                        () => api.adminResetPassword(u.id),
+                        'Reset email sent (check API console if EMAIL_* unset)'
+                      )
                     }
                   >
                     Reset PW
                   </button>
                   <button
-                    className="rounded-full border border-white/10 px-3 py-1 text-xs"
-                    onClick={() => api.adminSetRole(u.id, u.role === 'admin' ? 'member' : 'admin').then(load)}
+                    disabled={busyId === u.id}
+                    className="rounded-full border border-white/10 px-3 py-1 text-xs disabled:opacity-50"
+                    onClick={() =>
+                      runUserAction(u.id, () => api.adminSetRole(u.id, u.role === 'admin' ? 'member' : 'admin'))
+                    }
                   >
                     {u.role === 'admin' ? 'Make member' : 'Make admin'}
                   </button>
                   <button
-                    className="rounded-full border border-white/10 px-3 py-1 text-xs"
-                    onClick={() => api.adminSuspend(u.id, !u.is_suspended).then(load)}
+                    disabled={busyId === u.id}
+                    className="rounded-full border border-white/10 px-3 py-1 text-xs disabled:opacity-50"
+                    onClick={() => runUserAction(u.id, () => api.adminSuspend(u.id, !u.is_suspended))}
                   >
                     {u.is_suspended ? 'Unsuspend' : 'Suspend'}
                   </button>
-                  <button className="rounded-full border border-rose-400/30 px-3 py-1 text-xs text-rose-300" onClick={() => api.adminDeleteUser(u.id).then(load)}>
+                  <button
+                    disabled={busyId === u.id}
+                    className="rounded-full border border-rose-400/30 px-3 py-1 text-xs text-rose-300 disabled:opacity-50"
+                    onClick={() => {
+                      if (!window.confirm(`Delete user ${u.email}? This cannot be undone.`)) return;
+                      void runUserAction(u.id, () => api.adminDeleteUser(u.id));
+                    }}
+                  >
                     Delete
                   </button>
                 </div>
@@ -138,11 +206,14 @@ export default function AdminPage() {
 
       {tab === 'integrations' && (
         <div className="glass rounded-[28px] p-6 space-y-2">
-          {connections.map((c) => (
-            <div key={c.id} className="rounded-xl border border-white/8 bg-black/20 px-3 py-3 text-sm">
+          {connections.map((c, idx) => (
+            <div key={c.id || `${c.organizationId}-${c.tool}-${c.email}-${idx}`} className="rounded-xl border border-white/8 bg-black/20 px-3 py-3 text-sm">
               <div className="text-white">{c.tool} · {c.status}</div>
               <div className="text-xs text-neutral-500">
-                {c.email || '—'} · {c.workspace_name || '—'} · updated {c.updated_at ? new Date(c.updated_at).toLocaleString() : '—'}
+                {c.email || '—'} · {c.workspace_name || '—'}
+                {c.workspaceId ? ` (${c.workspaceId})` : ''} · updated{' '}
+                {c.updated_at ? new Date(c.updated_at).toLocaleString() : '—'}
+                {c.last_used_at ? ` · last used ${new Date(c.last_used_at).toLocaleString()}` : ''}
               </div>
             </div>
           ))}

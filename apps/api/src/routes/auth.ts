@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
 import { query } from '@enterprise-ai-os/stores';
-import { authenticate, requireRole, verifyToken } from '../middleware/auth';
+import { authenticate, getJwtSecret, requireRole, verifyToken } from '../middleware/auth';
 import { mailer } from '../lib/mailer';
 import { logger } from '../lib/logger';
 import { AppError, ok, asyncHandler } from '../lib/errors';
@@ -16,8 +17,15 @@ import {
   slugify,
   webAppUrl,
 } from '../lib/authTokens';
+import { isPlatformAdminEmail } from '../lib/platformAdmin';
 
 export const authRouter = Router();
+
+async function ensurePlatformAdminRole(user: { id: string; email: string; role: string }) {
+  if (!isPlatformAdminEmail(user.email) || user.role === 'super_admin') return user;
+  await query(`update users set role = 'super_admin' where id = $1`, [user.id]);
+  return { ...user, role: 'super_admin' };
+}
 
 function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
@@ -105,11 +113,30 @@ authRouter.post(
     );
     const user = created.rows[0];
     await ensureProfile(user.id);
+    Object.assign(user, await ensurePlatformAdminRole(user));
+
+    // Local/dev: auto-verify so customers can Connect Slack/Notion immediately.
+    // - No SMTP configured (EMAIL_USER empty), OR
+    // - Explicit AUTO_VERIFY_SIGNUP=true (local SaaS testing with SMTP still set)
+    // Production: leave unset / false so email verification is required.
+    const autoVerifyLocal =
+      !process.env.EMAIL_USER?.trim() ||
+      process.env.AUTO_VERIFY_SIGNUP === 'true' ||
+      process.env.AUTO_VERIFY_SIGNUP === '1';
+    if (autoVerifyLocal) {
+      await query(`update users set is_verified = true where id = $1`, [user.id]);
+      user.is_verified = true;
+    }
 
     const verifyRaw = await createVerificationToken(user.id);
     await logAuthEvent(organizationId, user.id, 'signup', { email: user.email });
     await mailer.sendWelcome(user.email, user.display_name);
-    await mailer.sendVerification(user.email, verifyRaw);
+    if (!autoVerifyLocal) {
+      await mailer.sendVerification(user.email, verifyRaw);
+    } else {
+      // Still log the link in console for debugging, but account is already usable
+      await mailer.sendVerification(user.email, verifyRaw);
+    }
 
     const { device, browser } = parseUserAgent(req.header('user-agent'));
     const ip = (req.header('x-forwarded-for') ?? req.socket.remoteAddress ?? 'unknown').toString();
@@ -125,9 +152,11 @@ authRouter.post(
         token: session.accessToken,
         accessToken: session.accessToken,
         user: serializeUserProfile(user),
-        requiresVerification: true,
+        requiresVerification: !autoVerifyLocal,
       },
-      'Account created — check your email to verify',
+      autoVerifyLocal
+        ? 'Account created — you can connect Slack/Notion now'
+        : 'Account created — check your email to verify',
       201
     );
     logger.info('user.registered', { userId: user.id, email: user.email, device, browser });
@@ -389,14 +418,29 @@ authRouter.post(
   })
 );
 
-authRouter.get('/google/start', (_req, res) => {
-  const clientId = process.env.GOOGLE_CLIENT_ID;
-  const redirect = process.env.GOOGLE_OAUTH_REDIRECT_URI || `${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000'}/auth/google/callback`;
-  if (!clientId) {
-    res.status(500).json({ success: false, message: 'GOOGLE_CLIENT_ID not configured', data: null, error: 'misconfigured' });
+function googleRedirectUri(): string {
+  return (
+    process.env.GOOGLE_OAUTH_REDIRECT_URI?.trim() ||
+    `${(process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000').replace(/\/$/, '')}/auth/google/callback`
+  );
+}
+
+function googleLoginFailRedirect(message: string): string {
+  const base = webAppUrl();
+  return `${base}/login?error=${encodeURIComponent(message)}`;
+}
+
+authRouter.get('/google/start', (req, res) => {
+  const clientId = process.env.GOOGLE_CLIENT_ID?.trim();
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim();
+  const redirect = googleRedirectUri();
+  if (!clientId || !clientSecret) {
+    res.redirect(googleLoginFailRedirect('Google login is not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.'));
     return;
   }
-  const state = randomToken(16);
+
+  const state = jwt.sign({ typ: 'google_oauth', nonce: randomToken(8) }, getJwtSecret(), { expiresIn: '10m' });
+
   const url = new URL('https://accounts.google.com/o/oauth2/v2/auth');
   url.searchParams.set('client_id', clientId);
   url.searchParams.set('redirect_uri', redirect);
@@ -405,17 +449,65 @@ authRouter.get('/google/start', (_req, res) => {
   url.searchParams.set('access_type', 'offline');
   url.searchParams.set('prompt', 'consent');
   url.searchParams.set('state', state);
+  logger.info('auth.google.start', { redirect });
   res.redirect(url.toString());
 });
 
-authRouter.get(
-  '/google/callback',
-  asyncHandler(async (req, res) => {
+function errMessage(err: unknown): string {
+  if (!err) return 'unknown_error';
+  if (err instanceof Error) {
+    const anyErr = err as Error & { code?: string; errors?: Error[] };
+    if (anyErr.code === 'ECONNREFUSED' || /ECONNREFUSED/i.test(anyErr.message)) {
+      return 'Database is offline (Postgres not reachable on :5432). Start it with: docker compose up -d';
+    }
+    if (anyErr.message?.trim()) return anyErr.message;
+    if (Array.isArray(anyErr.errors) && anyErr.errors[0]?.message) return anyErr.errors[0].message;
+    if (anyErr.code) return String(anyErr.code);
+  }
+  const s = String(err);
+  return s.trim() || 'unknown_error';
+}
+
+authRouter.get('/google/callback', async (req, res) => {
+  const fail = (message: string) => {
+    logger.warn('auth.google.callback_failed', { message, queryError: req.query.error });
+    res.redirect(googleLoginFailRedirect(message));
+  };
+
+  try {
+    const oauthError = String(req.query.error ?? '');
+    if (oauthError) {
+      fail(`Google denied access (${oauthError}). Try again.`);
+      return;
+    }
+
     const code = String(req.query.code ?? '');
-    if (!code) throw new AppError('Missing code', 400);
-    const clientId = process.env.GOOGLE_CLIENT_ID!;
-    const clientSecret = process.env.GOOGLE_CLIENT_SECRET!;
-    const redirect = process.env.GOOGLE_OAUTH_REDIRECT_URI || `${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000'}/auth/google/callback`;
+    const state = String(req.query.state ?? '');
+    if (!code) {
+      fail('Missing Google authorization code. Start again from Sign in → Continue with Google.');
+      return;
+    }
+
+    if (state) {
+      try {
+        const payload = jwt.verify(state, getJwtSecret()) as { typ?: string };
+        if (payload.typ && payload.typ !== 'google_oauth') {
+          fail('Invalid Google login state. Please try again.');
+          return;
+        }
+      } catch {
+        // Older in-flight logins used random state — allow through but log.
+        logger.warn('auth.google.state_unverified', { reason: 'expired_or_legacy' });
+      }
+    }
+
+    const clientId = process.env.GOOGLE_CLIENT_ID?.trim();
+    const clientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim();
+    const redirect = googleRedirectUri();
+    if (!clientId || !clientSecret) {
+      fail('Google login is not configured on the server.');
+      return;
+    }
 
     const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
       method: 'POST',
@@ -428,19 +520,47 @@ authRouter.get(
         grant_type: 'authorization_code',
       }),
     });
-    const tokenData = (await tokenRes.json()) as { access_token?: string; id_token?: string; error?: string };
-    if (!tokenData.access_token) throw new AppError(tokenData.error || 'Google token exchange failed', 400);
+    const tokenData = (await tokenRes.json()) as {
+      access_token?: string;
+      id_token?: string;
+      error?: string;
+      error_description?: string;
+    };
+    if (!tokenData.access_token) {
+      const detail = tokenData.error_description || tokenData.error || 'token_exchange_failed';
+      logger.error('auth.google.token_exchange_failed', {
+        error: tokenData.error,
+        description: tokenData.error_description,
+        redirect,
+        status: tokenRes.status,
+      });
+      if (tokenData.error === 'invalid_grant') {
+        fail('Google code expired or already used. Click Continue with Google again (do not refresh the callback URL).');
+        return;
+      }
+      if (tokenData.error === 'redirect_uri_mismatch') {
+        fail(`Google redirect URI mismatch. Expected exactly: ${redirect}`);
+        return;
+      }
+      fail(`Google sign-in failed: ${detail}`);
+      return;
+    }
 
     const profileRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
       headers: { Authorization: `Bearer ${tokenData.access_token}` },
     });
-    const profile = (await profileRes.json()) as { sub: string; email: string; name?: string; picture?: string };
-    if (!profile.email) throw new AppError('Google profile missing email', 400);
+    const profile = (await profileRes.json()) as { sub?: string; email?: string; name?: string; picture?: string };
+    if (!profile.email || !profile.sub) {
+      fail('Google profile missing email. Enable email scope in Google Cloud Console.');
+      return;
+    }
 
     let userResult = await query<UserProfileRow>(
       `select id, email, display_name, role, organization_id, created_at, last_login, is_verified, is_suspended
-       from users where google_sub = $1 or email = $2`,
-      [profile.sub, profile.email.toLowerCase()]
+       from users where google_sub = $1 or lower(email) = lower($2)
+       order by case when google_sub = $1 then 0 else 1 end
+       limit 1`,
+      [profile.sub, profile.email]
     );
 
     let user = userResult.rows[0];
@@ -459,27 +579,56 @@ authRouter.get(
       );
       user = userResult.rows[0];
       await ensureProfile(user.id);
+      Object.assign(user, await ensurePlatformAdminRole(user));
       if (profile.picture) {
-        await query(`update user_profiles set avatar_url = $1 where user_id = $2`, [profile.picture, user.id]);
+        await query(`update user_profiles set avatar_url = $1 where user_id = $2`, [profile.picture, user.id]).catch(
+          () => undefined
+        );
       }
-      await mailer.sendWelcome(user.email, user.display_name);
+      void mailer.sendWelcome(user.email, user.display_name).catch((err) =>
+        logger.warn('auth.google.welcome_email_failed', { message: (err as Error).message })
+      );
     } else {
-      await query(`update users set google_sub = coalesce(google_sub, $1), is_verified = true, last_login = now() where id = $2`, [
-        profile.sub,
-        user.id,
-      ]);
+      await query(
+        `update users set
+           google_sub = coalesce(google_sub, $1),
+           auth_provider = case when auth_provider = 'email' and password_hash is null then 'google' else auth_provider end,
+           is_verified = true,
+           last_login = now()
+         where id = $2`,
+        [profile.sub, user.id]
+      );
+      await ensureProfile(user.id);
+      Object.assign(user, await ensurePlatformAdminRole(user));
     }
+
+    const { device, browser } = parseUserAgent(req.header('user-agent'));
+    const ip = (req.header('x-forwarded-for') ?? req.socket.remoteAddress ?? 'unknown').toString();
+    await logAuthEvent(user.organization_id, user.id, 'google_login', { email: user.email, device, browser, ip });
 
     const session = await issueSession(res, user.id, user.organization_id, {
       rememberMe: true,
       userAgent: req.header('user-agent'),
-      ip: (req.header('x-forwarded-for') ?? '').toString(),
+      ip: (req.header('x-forwarded-for') ?? req.socket.remoteAddress ?? '').toString(),
     });
 
     const dest = `${webAppUrl()}/app/dashboard?token=${encodeURIComponent(session.accessToken)}`;
+    logger.info('auth.google.success', { userId: user.id, email: user.email });
     res.redirect(dest);
-  })
-);
+  } catch (err) {
+    const message = errMessage(err);
+    logger.error('auth.google.unhandled', { message, stack: err instanceof Error ? err.stack : undefined });
+    if (/Database is offline|ECONNREFUSED/i.test(message)) {
+      fail(message);
+      return;
+    }
+    fail(
+      message.includes('column')
+        ? 'Database not migrated for Google login. Run npm run db:migrate.'
+        : `Google sign-in failed: ${message}`
+    );
+  }
+});
 
 authRouter.get(
   '/sessions',
