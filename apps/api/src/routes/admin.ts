@@ -1,4 +1,4 @@
-import { Router } from 'express';
+﻿import { Router } from 'express';
 import { query } from '@enterprise-ai-os/stores';
 import { getApprovalStore } from '@enterprise-ai-os/agent-core';
 import { requireAdmin } from '../middleware/auth';
@@ -179,8 +179,8 @@ adminRouter.get(
   '/approvals',
   asyncHandler(async (req, res) => {
     const status = req.query.status as any;
-    const store = getApprovalStore();
-    const approvals = 'listAll' in store ? await store.listAll(status) : await store.list('', status);
+    const store = getApprovalStore() as { listAll?: (status?: string) => Promise<unknown>; list: (org: string, status?: string) => Promise<unknown> };
+    const approvals = store.listAll ? await store.listAll(status) : await store.list('', status);
     ok(res, { approvals });
   })
 );
