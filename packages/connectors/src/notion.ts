@@ -46,6 +46,11 @@ export function initializeNotionClient(token?: string): Client {
   return _client;
 }
 
+export function clearNotionClient(): void {
+  _client = null;
+  _clientAuth = null;
+}
+
 function getClient(): Client {
   return initializeNotionClient();
 }
