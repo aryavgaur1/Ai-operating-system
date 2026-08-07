@@ -8,8 +8,7 @@ builder = "NIXPACKS"
 buildCommand = "npm run build -w packages/shared && npm run build -w packages/stores && npm run build -w packages/connectors && npm run build -w packages/agent-core && npm run build -w apps/api"
 
 [deploy]
-startCommand = "npm run start -w apps/api"
+startCommand = "node db/migrate.js && npm run start -w apps/api"
 healthcheckPath = "/health"
 healthcheckTimeout = 30
 restartPolicyType = "ON_FAILURE"
-releaseCommand = "node db/migrate.js"
