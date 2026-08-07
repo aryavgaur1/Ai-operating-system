@@ -7,3 +7,4 @@ export * from './approvals';
 export * from './planner';
 export * from './toolExecutionEngine';
 export * from './orchestrator';
+export * from './os';

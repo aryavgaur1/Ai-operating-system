@@ -1,13 +1,13 @@
 import { Client } from '@notionhq/client';
 import type { ToolCallResult } from '@enterprise-ai-os/shared';
 import { simulateLatency, isLiveMode, type ToolConnector, type FetchPage, type NormalizedDoc } from './base';
+import { getConnectorContext } from './context';
 
 // ============================================================
 // Notion Connector
 // Live wiring: @notionhq/client, authorized via a Notion
-// Internal Integration token (NOTION_API_KEY).
-// Ingestion: Notion has no push webhooks for page edits, so this
-// connector is driven entirely by batch polling (search API).
+// Internal Integration token (NOTION_API_KEY) or per-request
+// OAuth token from ConnectorContext (SaaS).
 // ============================================================
 
 const MOCK_PAGES: NormalizedDoc[] = [
@@ -32,14 +32,26 @@ const MOCK_PAGES: NormalizedDoc[] = [
 let _client: Client | null = null;
 let _clientAuth: string | null = null;
 
-/** Initialize Notion client with per-user OAuth token when provided; otherwise .env NOTION_API_KEY. */
-export function initializeNotionClient(token?: string): Client {
-  const auth = token?.trim() || process.env.NOTION_API_KEY?.trim();
-  if (!auth) {
+function resolveNotionAuth(explicit?: string): string {
+  const ctx = getConnectorContext();
+  const fromCtx = ctx.notionToken?.trim();
+  if (explicit?.trim()) return explicit.trim();
+  if (fromCtx) return fromCtx;
+  if (ctx.saasStrict) {
+    throw new Error('Notion is not connected for this workspace. Connect Notion under Integrations to continue.');
+  }
+  const env = process.env.NOTION_API_KEY?.trim();
+  if (!env) {
     throw new Error(
       'Notion is not connected. Connect Notion in Integrations, or set NOTION_API_KEY in .env for demo/platform use.'
     );
   }
+  return env;
+}
+
+/** Initialize Notion client with per-user OAuth token when provided; otherwise ALS / .env. */
+export function initializeNotionClient(token?: string): Client {
+  const auth = resolveNotionAuth(token);
   if (_client && _clientAuth === auth) return _client;
   _client = new Client({ auth });
   _clientAuth = auth;
@@ -218,7 +230,19 @@ class NotionConnector implements ToolConnector {
   }
 
   listActions(): string[] {
-    return ['createPage', 'createDatabase', 'publishPage', 'deletePage'];
+    return [
+      'createPage',
+      'createDatabase',
+      'publishPage',
+      'deletePage',
+      'searchPages',
+      'searchDatabases',
+      'createProject',
+      'createMeetingNotes',
+      'createPRD',
+      'createWiki',
+      'createRoadmap',
+    ];
   }
 
   async execute(action: string, input: Record<string, unknown>): Promise<ToolCallResult> {
@@ -306,6 +330,88 @@ class NotionConnector implements ToolConnector {
             }
             const page = await client.pages.update({ page_id: pageId as string, archived: true });
             return { tool: 'notion', action, ok: true, output: { id: page.id, applied: true }, mocked: false };
+          }
+
+          case 'searchPages': {
+            const q = String(input.query ?? input.title ?? '');
+            const response = await client.search({
+              query: q,
+              filter: { property: 'object', value: 'page' },
+              page_size: Number(input.limit ?? 20),
+            });
+            const results = (response.results as any[]).map((p) => ({
+              id: p.id,
+              title: extractTitle(p),
+              url: p.url,
+            }));
+            return { tool: 'notion', action, ok: true, output: { results, count: results.length }, mocked: false };
+          }
+
+          case 'searchDatabases': {
+            const q = String(input.query ?? input.title ?? '');
+            const response = await client.search({
+              query: q,
+              page_size: Number(input.limit ?? 20),
+            } as any);
+            const results = (response.results as any[])
+              .filter((p) => p.object === 'database')
+              .map((p) => ({
+                id: p.id,
+                title: extractTitle(p),
+                url: p.url,
+              }));
+            return { tool: 'notion', action, ok: true, output: { results, count: results.length }, mocked: false };
+          }
+
+          case 'createProject':
+          case 'createMeetingNotes':
+          case 'createPRD':
+          case 'createWiki':
+          case 'createRoadmap': {
+            const parentId = (input.parentPageId as string) ?? process.env.NOTION_DATABASE_ID;
+            if (!parentId) throw new Error('No parentPageId provided and NOTION_DATABASE_ID is not set');
+            const templates: Record<string, string> = {
+              createProject: 'Project',
+              createMeetingNotes: 'Meeting Notes',
+              createPRD: 'PRD',
+              createWiki: 'Wiki',
+              createRoadmap: 'Roadmap',
+            };
+            const title = String(input.title ?? `${templates[action]} ${new Date().toISOString().slice(0, 10)}`);
+            const defaultBodies: Record<string, string> = {
+              createProject: `## Mission\n\n## Owners\n\n## Milestones\n- [ ]\n\n## Risks\n`,
+              createMeetingNotes: `## Attendees\n\n## Agenda\n\n## Notes\n\n## Action items\n- [ ]\n`,
+              createPRD: `## Problem\n\n## Goals\n\n## Requirements\n\n## Non-goals\n\n## Success metrics\n`,
+              createWiki: `## Overview\n\n## How it works\n\n## FAQ\n`,
+              createRoadmap: `## Now\n\n## Next\n\n## Later\n`,
+            };
+            const body = String(input.body ?? defaultBodies[action] ?? '');
+            const propsResult = await buildCreateProperties(client, parentId, title);
+            const children = buildChildrenBlocks({ body, template: action.replace('create', '').toLowerCase() });
+            let page: any;
+            try {
+              page = await (client.pages.create as any)({
+                parent: propsResult.isDatabase ? { database_id: parentId } : { page_id: parentId },
+                properties: propsResult.properties,
+                children,
+              });
+            } catch (err: any) {
+              const message = String(err?.message ?? '');
+              if (message.includes('not a database') || message.includes('database_id')) {
+                page = await (client.pages.create as any)({
+                  parent: { page_id: parentId },
+                  properties: { title: { title: [{ text: { content: title } }] } },
+                  children,
+                });
+              } else {
+                throw err;
+              }
+            }
+            if (!page?.id) {
+              return { tool: 'notion', action, ok: false, error: 'Notion returned no page id', mocked: false };
+            }
+            console.log(`[notion.${action}] REAL ok id=${page.id}`);
+            return { tool: 'notion', action, ok: true, output: { id: page.id, url: (page as any).url, title }, mocked: false };
           }
 
           default:

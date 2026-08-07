@@ -191,7 +191,32 @@ export function detectOsIntent(query: string): OsIntent {
     };
   }
 
-  // Hard priority: explicit Slack write/CRUD destination
+  // Multi-step workflows beat "on slack" CRUD short-circuit so war rooms /
+  // incidents / standups still run even when the user says "on slack".
+  const workflowKinds = new Set([
+    'launch_workflow',
+    'incident_workflow',
+    'standup_workflow',
+    'reminder_workflow',
+    'workspace_intelligence',
+    'notion_project',
+  ]);
+  for (const rule of RULES) {
+    if (!workflowKinds.has(rule.kind)) continue;
+    if (rule.test(q)) {
+      const legacyIntent: QueryIntent =
+        rule.kind === 'workspace_intelligence' ? 'read' : 'action';
+      return {
+        kind: rule.kind,
+        confidence: rule.confidence,
+        rationale: rule.rationale,
+        legacyIntent,
+        entities: rule.entities?.(query) ?? {},
+      };
+    }
+  }
+
+  // Explicit Slack write/CRUD destination (create channel, post, invite, …)
   if (isExplicitSlackCommand(query)) {
     return {
       kind: 'simple_action',

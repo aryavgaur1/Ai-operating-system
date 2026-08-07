@@ -59,8 +59,11 @@ create table if not exists oauth_connections (
   -- from the secrets manager. Never store plaintext tokens.
   encrypted_access_token  text not null,
   encrypted_refresh_token text,
+  encrypted_user_token    text,           -- Slack user OAuth (xoxp-); separate from refresh
   expires_at              timestamptz,
   status                  text not null default 'active', -- 'active' | 'revoked' | 'error'
+  metadata                jsonb not null default '{}'::jsonb,
+  last_used_at            timestamptz,
   created_at              timestamptz not null default now(),
   updated_at              timestamptz not null default now(),
   unique (organization_id, user_id, tool)

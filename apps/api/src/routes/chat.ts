@@ -1,7 +1,12 @@
 import { Router } from 'express';
 import { runAgentTurn } from '@enterprise-ai-os/agent-core';
-import { getAccessToken } from '@enterprise-ai-os/stores';
-import { runWithConnectorContext, slackService, initializeNotionClient } from '@enterprise-ai-os/connectors';
+import { getAccessToken, getSlackUserToken, touchConnectionLastUsed } from '@enterprise-ai-os/stores';
+import {
+  runWithConnectorContext,
+  slackService,
+  initializeNotionClient,
+  clearNotionClient,
+} from '@enterprise-ai-os/connectors';
 import { getStores } from '../ingestion/pipeline';
 import { persistChatTurn } from './conversations';
 import { requireVerified } from '../middleware/auth';
@@ -22,51 +27,70 @@ chatRouter.post(
     const user = req.user!;
     const { vectorStore, graphStore } = getStores();
 
-    // Demo mode: always use shared .env Slack/Notion (investor demo / pre-SaaS behavior)
+    let slackBotToken: string | undefined;
+    let slackUserToken: string | undefined;
+    let notionToken: string | undefined;
+
+    // Demo/admin: always use shared .env Slack/Notion (investor demo / pre-SaaS)
     if (demoMode) {
       try {
         slackService.clearClient();
-        if (process.env.SLACK_BOT_TOKEN?.trim()) slackService.initializeClient();
+        if (process.env.SLACK_BOT_TOKEN?.trim()) {
+          slackBotToken = process.env.SLACK_BOT_TOKEN.trim();
+          slackService.initializeClient(slackBotToken);
+        }
+        if (process.env.SLACK_USER_TOKEN?.trim()) {
+          slackUserToken = process.env.SLACK_USER_TOKEN.trim();
+          slackService.initializeUserClient(slackUserToken);
+        }
       } catch {
         // ignore
       }
       try {
-        if (process.env.NOTION_API_KEY?.trim()) initializeNotionClient();
+        clearNotionClient();
+        if (process.env.NOTION_API_KEY?.trim()) {
+          notionToken = process.env.NOTION_API_KEY.trim();
+          initializeNotionClient(notionToken);
+        }
       } catch {
         // ignore
       }
     } else {
+      // SaaS customer: ONLY this user's DB OAuth tokens — never fall back to platform .env
+      slackService.clearClient();
+      clearNotionClient();
       try {
-        const slackToken = await getAccessToken(user.organizationId, 'slack', user.id);
-        if (slackToken) slackService.initializeClient(slackToken);
-        else {
-          slackService.clearClient();
-          if (process.env.SLACK_BOT_TOKEN?.trim()) slackService.initializeClient();
+        slackBotToken = await getAccessToken(user.organizationId, 'slack', user.id);
+        slackUserToken = await getSlackUserToken(user.organizationId, user.id);
+        if (slackBotToken) {
+          slackService.initializeClient(slackBotToken);
+          void touchConnectionLastUsed(user.organizationId, 'slack', user.id);
         }
+        if (slackUserToken) slackService.initializeUserClient(slackUserToken);
       } catch {
-        try {
-          slackService.clearClient();
-          if (process.env.SLACK_BOT_TOKEN?.trim()) slackService.initializeClient();
-        } catch {
-          // leave disconnected
-        }
+        // leave disconnected
       }
 
       try {
-        const notionToken = await getAccessToken(user.organizationId, 'notion', user.id);
-        if (notionToken) initializeNotionClient(notionToken);
-        else if (process.env.NOTION_API_KEY?.trim()) initializeNotionClient();
-      } catch {
-        try {
-          if (process.env.NOTION_API_KEY?.trim()) initializeNotionClient();
-        } catch {
-          // leave disconnected
+        notionToken = await getAccessToken(user.organizationId, 'notion', user.id);
+        if (notionToken) {
+          initializeNotionClient(notionToken);
+          void touchConnectionLastUsed(user.organizationId, 'notion', user.id);
         }
+      } catch {
+        // leave disconnected
       }
     }
 
     const result = await runWithConnectorContext(
-      { organizationId: user.organizationId, userId: user.id },
+      {
+        organizationId: user.organizationId,
+        userId: user.id,
+        slackBotToken,
+        slackUserToken,
+        notionToken,
+        saasStrict: !demoMode,
+      },
       () => runAgentTurn(message, user.organizationId, vectorStore, graphStore, user.id)
     );
 

@@ -324,7 +324,7 @@ function parseSlackActionQuery(query: string): Record<string, unknown> {
   }
 
   if (/\bblocker|blocked|blocking\b/.test(lower) || (/\bwhat\b/.test(lower) && /\bblocked\b/.test(lower))) {
-    return { action: 'findBlockers', query: quoted ?? query, channel: channel !== 'general' ? channel : undefined };
+    return { action: 'findBlockers', query: quoted ?? query, channel };
   }
 
   if (/\b(customer\s+complaint|complaints?|angry customer)\b/.test(lower)) {
@@ -332,15 +332,15 @@ function parseSlackActionQuery(query: string): Record<string, unknown> {
   }
 
   if (/\b(unanswered|no reply|without replies|waiting for (?:a )?reply)\b/.test(lower)) {
-    return { action: 'findUnansweredMessages', channel: channel !== 'general' ? channel : undefined };
+    return { action: 'findUnansweredMessages', channel };
   }
 
   if (/\b(follow[- ]?up|nudge)\b/.test(lower) && /\b(approv|pending|waiting|everyone)\b/.test(lower)) {
-    return { action: 'followUpPendingReplies', dryRun: false, channel: channel !== 'general' ? channel : undefined };
+    return { action: 'followUpPendingReplies', dryRun: false, channel };
   }
 
   if (/\b(action items?|extract todos?|detect todos?)\b/.test(lower)) {
-    return { action: 'detectActionItems', channel: channel !== 'general' ? channel : undefined, query: quoted ?? query };
+    return { action: 'detectActionItems', channel, query: quoted ?? query };
   }
 
   if (/\b(dead channels?|stale channels?|inactive channels?|auto[- ]?archive)\b/.test(lower)) {
@@ -369,11 +369,15 @@ function parseSlackActionQuery(query: string): Record<string, unknown> {
   }
 
   if (/\b(create|make|new)\b/.test(lower) && /\bcanvas\b/.test(lower)) {
+    const title =
+      quoted ??
+      query.match(/(?:called|named|titled)\s+["']?([^"'#\n]+?)["']?(?:\s+in\s+|\s+on\s+|\s+for\s+|$)/i)?.[1]?.trim() ??
+      'Nexora Canvas';
     return {
       action: 'createCanvas',
-      title: quoted ?? 'Nexora Canvas',
-      markdown: `# ${quoted ?? 'Notes'}\n\n${query}`,
-      channel: channel !== 'general' ? channel : undefined,
+      title,
+      markdown: `# ${title}\n\n${query}`,
+      channel,
     };
   }
 
