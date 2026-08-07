@@ -1,6 +1,5 @@
-# Root pointer — web app lives in apps/web
+# Nexora web — package-level Netlify config
 [build]
-  base = "apps/web"
   command = "cd ../.. && npm ci && npm run build -w apps/web"
   publish = ".next"
 
