@@ -15,15 +15,21 @@ import {
   listUsers,
   getThread,
   authTest,
+  setChannelTopic,
+  setChannelPurpose,
+  pinMessage,
+  createBookmark,
+  createCanvas,
+  scheduleReminder,
+  listPins,
+  searchFiles,
+  findUsersByRole,
 } from './slackService';
+import * as intelligence from './slackIntelligence';
 
 // ============================================================
-// Slack Connector
-// Live wiring: @slack/web-api WebClient via slack_service,
-// authorized with SLACK_BOT_TOKEN (same pattern as Notion's
-// NOTION_API_KEY). Toggle with SLACK_MODE=live.
-// Webhooks: Slack Events API (message.channels, app_mention,
-// reaction_added) — signature verified in the API routes layer.
+// Slack Connector — core CRUD preserved; enterprise AI workflows
+// composed in slackIntelligence.ts (war rooms, incidents, digests).
 // ============================================================
 
 const MOCK_MESSAGES: NormalizedDoc[] = [
@@ -66,6 +72,30 @@ const LIVE_ACTIONS = [
   'addReaction',
   'createChannel',
   'inviteUsers',
+  'setChannelTopic',
+  'setChannelPurpose',
+  'pinMessage',
+  'listPins',
+  'createBookmark',
+  'createCanvas',
+  'scheduleReminder',
+  'searchFiles',
+  'findUsersByRole',
+  'createWarRoom',
+  'createIncident',
+  'summarizeThread',
+  'findBlockers',
+  'findUnansweredMessages',
+  'findCustomerComplaints',
+  'detectActionItems',
+  'followUpPendingReplies',
+  'dailyDigest',
+  'weeklyDigest',
+  'semanticSearch',
+  'detectDeadChannels',
+  'findDecision',
+  'findOwner',
+  'generateMeetingNotes',
 ];
 
 function workspaceUrl(channelId: string, ts?: string): string {
@@ -75,6 +105,14 @@ function workspaceUrl(channelId: string, ts?: string): string {
     return `https://${team}.slack.com/archives/${channelId}/p${p}`;
   }
   return `https://${team}.slack.com/archives/${channelId}`;
+}
+
+function okResult(action: string, output: unknown): ToolCallResult {
+  return { tool: 'slack', action, ok: true, output, mocked: false };
+}
+
+function failResult(action: string, error: string): ToolCallResult {
+  return { tool: 'slack', action, ok: false, error, mocked: false };
 }
 
 class SlackConnector implements ToolConnector {
@@ -115,7 +153,7 @@ class SlackConnector implements ToolConnector {
             }
             if (hist.nextCursor) nextCursor = hist.nextCursor;
           } catch {
-            // Bot may lack access to some channels — skip.
+            // skip inaccessible channels
           }
         }
 
@@ -145,14 +183,12 @@ class SlackConnector implements ToolConnector {
       };
       event_id?: string;
       team_id?: string;
-      // mock / simplified shape
       channel?: string;
       user?: string;
       text?: string;
       ts?: string;
     };
 
-    // Live Events API envelope
     const event = body.event;
     if (event) {
       if (event.type === 'message' || event.type === 'app_mention') {
@@ -206,7 +242,6 @@ class SlackConnector implements ToolConnector {
       return [];
     }
 
-    // Mock / simplified payload
     await simulateLatency(20, 60);
     if (!body?.text) return [];
     return [
@@ -231,16 +266,12 @@ class SlackConnector implements ToolConnector {
       try {
         slackService.initializeClient();
       } catch (err) {
-        return {
-          tool: 'slack',
+        return failResult(
           action,
-          ok: false,
-          error:
-            err instanceof Error
-              ? err.message
-              : 'Slack is not connected for this user. Connect Slack in Integrations.',
-          mocked: false,
-        };
+          err instanceof Error
+            ? err.message
+            : 'Slack is not connected for this user. Connect Slack in Integrations.'
+        );
       }
       try {
         switch (action) {
@@ -251,15 +282,8 @@ class SlackConnector implements ToolConnector {
               text: String(input.text ?? ''),
               threadTs: input.threadTs as string | undefined,
             });
-            return {
-              tool: 'slack',
-              action,
-              ok: true,
-              output: { ...result, channelName: requestedChannel.replace(/^#/, '') },
-              mocked: false,
-            };
+            return okResult(action, { ...result, channelName: requestedChannel.replace(/^#/, '') });
           }
-
           case 'postMessageExternalChannel': {
             const requestedChannel = String(input.channel ?? '');
             const result = await postExternalMessage({
@@ -267,132 +291,292 @@ class SlackConnector implements ToolConnector {
               text: String(input.text ?? ''),
               threadTs: input.threadTs as string | undefined,
             });
-            return {
-              tool: 'slack',
+            return okResult(action, { ...result, channelName: requestedChannel.replace(/^#/, '') });
+          }
+          case 'listChannels':
+            return okResult(action, { channels: await listChannels(Number(input.limit ?? 200)) });
+          case 'listUsers':
+            return okResult(action, { users: await listUsers(Number(input.limit ?? 200)) });
+          case 'getChannelHistory':
+            return okResult(
               action,
-              ok: true,
-              output: { ...result, channelName: requestedChannel.replace(/^#/, '') },
-              mocked: false,
-            };
-          }
-
-          case 'listChannels': {
-            const channels = await listChannels(Number(input.limit ?? 200));
-            return { tool: 'slack', action, ok: true, output: { channels }, mocked: false };
-          }
-
-          case 'listUsers': {
-            const users = await listUsers(Number(input.limit ?? 200));
-            return { tool: 'slack', action, ok: true, output: { users }, mocked: false };
-          }
-
-          case 'getChannelHistory': {
-            const result = await getChannelHistory({
-              channel: String(input.channel ?? ''),
-              limit: Number(input.limit ?? 50),
-              oldest: input.oldest as string | undefined,
-              latest: input.latest as string | undefined,
-              cursor: input.cursor as string | undefined,
-            });
-            return { tool: 'slack', action, ok: true, output: result, mocked: false };
-          }
-
-          case 'getThread': {
-            const result = await getThread({
-              channel: String(input.channel ?? ''),
-              threadTs: String(input.threadTs ?? input.ts ?? ''),
-              limit: Number(input.limit ?? 50),
-            });
-            return { tool: 'slack', action, ok: true, output: result, mocked: false };
-          }
-
-          case 'searchHistory': {
-            const result = await searchHistory(String(input.query ?? input.text ?? ''), Number(input.count ?? 20));
-            return { tool: 'slack', action, ok: true, output: result, mocked: false };
-          }
-
-          case 'summarizeChannel': {
-            const channel = String(input.channel ?? 'general');
-            const hist = await getChannelHistory({ channel, limit: Number(input.limit ?? 30) });
-            const lines = (hist.messages ?? [])
-              .map((m: any) => `- ${m.user ?? 'unknown'}: ${String(m.text ?? '').trim()}`)
-              .filter((l: string) => l.length > 10)
-              .slice(0, 30);
-            const summary =
-              lines.length === 0
-                ? `No recent messages found in #${channel.replace(/^#/, '')}.`
-                : `Recent activity in #${String(hist.channel)} (${lines.length} messages):\n${lines.join('\n')}`;
-            return {
-              tool: 'slack',
+              await getChannelHistory({
+                channel: String(input.channel ?? ''),
+                limit: Number(input.limit ?? 50),
+                oldest: input.oldest as string | undefined,
+                latest: input.latest as string | undefined,
+                cursor: input.cursor as string | undefined,
+              })
+            );
+          case 'getThread':
+            return okResult(
               action,
-              ok: true,
-              output: { channel: hist.channel, messageCount: hist.messages.length, summary },
-              mocked: false,
-            };
-          }
-
-          case 'uploadFile': {
-            const result = await uploadFile({
-              channels: (input.channels as string) ?? (input.channel as string) ?? 'general',
-              content: input.content as string | undefined,
-              filename: (input.filename as string) ?? 'upload.txt',
-              title: input.title as string | undefined,
-              initialComment: (input.initialComment as string) ?? (input.comment as string) ?? undefined,
-              file: input.file as Buffer | undefined,
-            });
-            return { tool: 'slack', action, ok: true, output: result, mocked: false };
-          }
-
-          case 'addReaction': {
-            const result = await addReaction({
-              channel: String(input.channel ?? ''),
-              timestamp: String(input.timestamp ?? input.ts ?? ''),
-              name: String(input.name ?? input.reaction ?? 'thumbsup'),
-            });
-            return { tool: 'slack', action, ok: true, output: result, mocked: false };
-          }
-
+              await getThread({
+                channel: String(input.channel ?? ''),
+                threadTs: String(input.threadTs ?? input.ts ?? ''),
+                limit: Number(input.limit ?? 50),
+              })
+            );
+          case 'searchHistory':
+            return okResult(
+              action,
+              await searchHistory(String(input.query ?? input.text ?? ''), Number(input.count ?? 20))
+            );
+          case 'summarizeChannel':
+            return okResult(
+              action,
+              await intelligence.summarizeChannelDeep({
+                channel: String(input.channel ?? 'general'),
+                limit: Number(input.limit ?? 40),
+                focus: input.focus as string | undefined,
+              })
+            );
+          case 'uploadFile':
+            return okResult(
+              action,
+              await uploadFile({
+                channels: (input.channels as string) ?? (input.channel as string) ?? 'general',
+                content: input.content as string | undefined,
+                filename: (input.filename as string) ?? 'upload.txt',
+                title: input.title as string | undefined,
+                initialComment: (input.initialComment as string) ?? (input.comment as string) ?? undefined,
+                file: input.file as Buffer | undefined,
+              })
+            );
+          case 'addReaction':
+            return okResult(
+              action,
+              await addReaction({
+                channel: String(input.channel ?? ''),
+                timestamp: String(input.timestamp ?? input.ts ?? ''),
+                name: String(input.name ?? input.reaction ?? 'thumbsup'),
+              })
+            );
           case 'createChannel': {
             const result = await createChannel({
               name: String(input.name ?? input.channel ?? ''),
               isPrivate: Boolean(input.isPrivate),
             });
-            if (!result.id) {
-              return {
-                tool: 'slack',
-                action,
-                ok: false,
-                error: 'Slack createChannel returned no channel id',
-                mocked: false,
-              };
-            }
-            return { tool: 'slack', action, ok: true, output: result, mocked: false };
+            if (!result.id) return failResult(action, 'Slack createChannel returned no channel id');
+            return okResult(action, result);
           }
-
-          case 'inviteUsers': {
-            const result = await inviteUsers({
-              channel: String(input.channel ?? ''),
-              users: (input.users as string | string[]) ?? (input.user as string) ?? '',
-            });
-            return { tool: 'slack', action, ok: true, output: result, mocked: false };
+          case 'inviteUsers':
+            return okResult(
+              action,
+              await inviteUsers({
+                channel: String(input.channel ?? ''),
+                users: (input.users as string | string[]) ?? (input.user as string) ?? '',
+                roles: input.roles as string[] | undefined,
+              })
+            );
+          case 'authTest':
+            return okResult(action, await authTest());
+          case 'setChannelTopic':
+            return okResult(
+              action,
+              await setChannelTopic({
+                channel: String(input.channel ?? ''),
+                topic: String(input.topic ?? input.text ?? ''),
+              })
+            );
+          case 'setChannelPurpose':
+            return okResult(
+              action,
+              await setChannelPurpose({
+                channel: String(input.channel ?? ''),
+                purpose: String(input.purpose ?? input.text ?? ''),
+              })
+            );
+          case 'pinMessage':
+            return okResult(
+              action,
+              await pinMessage({
+                channel: String(input.channel ?? ''),
+                timestamp: String(input.timestamp ?? input.ts ?? ''),
+              })
+            );
+          case 'listPins':
+            return okResult(action, await listPins({ channel: String(input.channel ?? '') }));
+          case 'createBookmark':
+            return okResult(
+              action,
+              await createBookmark({
+                channel: String(input.channel ?? ''),
+                title: String(input.title ?? 'Bookmark'),
+                link: String(input.link ?? input.url ?? ''),
+                emoji: input.emoji as string | undefined,
+              })
+            );
+          case 'createCanvas':
+            return okResult(
+              action,
+              await createCanvas({
+                title: String(input.title ?? 'Nexora Canvas'),
+                markdown: String(input.markdown ?? input.content ?? input.text ?? ''),
+                channel: input.channel as string | undefined,
+              })
+            );
+          case 'scheduleReminder': {
+            const postAt =
+              Number(input.postAt) ||
+              Math.floor(Date.now() / 1000) + Number(input.inMinutes ?? 60) * 60;
+            return okResult(
+              action,
+              await scheduleReminder({
+                channel: String(input.channel ?? ''),
+                text: String(input.text ?? input.message ?? 'Reminder from Nexora'),
+                postAt,
+              })
+            );
           }
-
-          case 'authTest': {
-            const result = await authTest();
-            return { tool: 'slack', action, ok: true, output: result, mocked: false };
+          case 'searchFiles':
+            return okResult(action, await searchFiles(String(input.query ?? ''), Number(input.count ?? 20)));
+          case 'findUsersByRole': {
+            const roles = Array.isArray(input.roles)
+              ? (input.roles as string[])
+              : String(input.roles ?? input.role ?? '')
+                  .split(/[,/]| and /i)
+                  .map((r) => r.trim())
+                  .filter(Boolean);
+            return okResult(action, { users: await findUsersByRole(roles) });
           }
-
+          case 'createWarRoom':
+            return okResult(
+              action,
+              await intelligence.createWarRoom({
+                name: input.name as string | undefined,
+                project: (input.project as string) ?? (input.name as string) ?? undefined,
+                topic: input.topic as string | undefined,
+                roles: input.roles as string[] | undefined,
+                docs: input.docs as string[] | undefined,
+                roadmap: input.roadmap as string | undefined,
+              })
+            );
+          case 'createIncident':
+            return okResult(
+              action,
+              await intelligence.createIncident({
+                name: input.name as string | undefined,
+                severity: input.severity as string | undefined,
+                summary: (input.summary as string) ?? (input.text as string) ?? undefined,
+                roles: input.roles as string[] | undefined,
+              })
+            );
+          case 'summarizeThread':
+            return okResult(
+              action,
+              await intelligence.summarizeThread({
+                channel: String(input.channel ?? ''),
+                threadTs: String(input.threadTs ?? input.ts ?? ''),
+                limit: Number(input.limit ?? 80),
+              })
+            );
+          case 'findBlockers':
+            return okResult(
+              action,
+              await intelligence.findBlockers({
+                query: input.query as string | undefined,
+                channel: input.channel as string | undefined,
+                limit: Number(input.limit ?? 30),
+              })
+            );
+          case 'findUnansweredMessages':
+            return okResult(
+              action,
+              await intelligence.findUnansweredMessages({
+                channel: input.channel as string | undefined,
+                olderThanHours: Number(input.olderThanHours ?? 4),
+                limit: Number(input.limit ?? 40),
+              })
+            );
+          case 'findCustomerComplaints':
+            return okResult(
+              action,
+              await intelligence.findCustomerComplaints({
+                query: input.query as string | undefined,
+                limit: Number(input.limit ?? 30),
+              })
+            );
+          case 'detectActionItems':
+            return okResult(
+              action,
+              await intelligence.detectActionItems({
+                channel: input.channel as string | undefined,
+                query: input.query as string | undefined,
+                limit: Number(input.limit ?? 40),
+              })
+            );
+          case 'followUpPendingReplies':
+            return okResult(
+              action,
+              await intelligence.followUpPendingReplies({
+                channel: input.channel as string | undefined,
+                dryRun: Boolean(input.dryRun),
+                olderThanHours: Number(input.olderThanHours ?? 6),
+              })
+            );
+          case 'dailyDigest':
+            return okResult(
+              action,
+              await intelligence.dailyDigest({
+                channels: input.channels as string[] | undefined,
+                limit: Number(input.limit ?? 25),
+              })
+            );
+          case 'weeklyDigest':
+            return okResult(
+              action,
+              await intelligence.weeklyDigest({
+                channels: input.channels as string[] | undefined,
+                limit: Number(input.limit ?? 60),
+              })
+            );
+          case 'semanticSearch':
+            return okResult(
+              action,
+              await intelligence.semanticSearch({
+                query: String(input.query ?? input.text ?? ''),
+                count: Number(input.count ?? 20),
+              })
+            );
+          case 'detectDeadChannels':
+            return okResult(
+              action,
+              await intelligence.detectDeadChannels({
+                idleDays: Number(input.idleDays ?? 14),
+                limit: Number(input.limit ?? 40),
+              })
+            );
+          case 'findDecision':
+            return okResult(
+              action,
+              await intelligence.findDecision({ query: String(input.query ?? input.text ?? '') })
+            );
+          case 'findOwner':
+            return okResult(
+              action,
+              await intelligence.findOwner({
+                topic: String(input.topic ?? input.query ?? input.text ?? ''),
+              })
+            );
+          case 'generateMeetingNotes':
+            return okResult(
+              action,
+              await intelligence.generateMeetingNotes({
+                channel: String(input.channel ?? 'general'),
+                limit: Number(input.limit ?? 50),
+              })
+            );
           default:
-            return { tool: 'slack', action, ok: false, error: `Unknown action: ${action}`, mocked: false };
+            return failResult(action, `Unknown action: ${action}`);
         }
       } catch (err: any) {
         const message = err instanceof SlackServiceError ? err.message : err?.message ?? String(err);
-        return { tool: 'slack', action, ok: false, error: message, mocked: false };
+        return failResult(action, message);
       }
     }
 
     await simulateLatency();
-    // NEVER fake createChannel / invite / history as success in mock mode
     console.warn(`[MOCK slack.${action}] blocked from reporting fake success — SLACK_MODE is not live`);
     return {
       tool: 'slack',

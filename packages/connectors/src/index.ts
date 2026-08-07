@@ -11,10 +11,17 @@ export { slackConnector } from './slack';
 export { jiraConnector } from './jira';
 export { gmailConnector } from './gmail';
 export { salesforceConnector } from './salesforce';
-export { notionConnector, initializeNotionClient } from './notion';
+export { notionConnector, initializeNotionClient, clearNotionClient } from './notion';
 export { slackService, SlackServiceError, verifySlackSignature } from './slackService';
 export { default as slack_service } from './slackService';
-export { connectorContext, runWithConnectorContext, getConnectorContext } from './context';
+export * as slackIntelligence from './slackIntelligence';
+export {
+  connectorContext,
+  runWithConnectorContext,
+  getConnectorContext,
+  hasSlackTokenInContext,
+  hasNotionTokenInContext,
+} from './context';
 
 export const connectorRegistry: Record<ToolName, ToolConnector> = {
   slack: slackConnector,

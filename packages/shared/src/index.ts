@@ -104,6 +104,52 @@ export interface AgentTurnResult {
   plan: AgentPlan;
   executedCalls: ToolCallResult[];
   pendingApprovalIds: string[];
+  /** Enterprise OS execution trace (optional — additive) */
+  workflow?: WorkflowTrace;
+}
+
+// ---------- Enterprise AI OS workflow layer ----------
+
+export type WorkflowKind =
+  | 'launch_workflow'
+  | 'incident_workflow'
+  | 'standup_workflow'
+  | 'reminder_workflow'
+  | 'workspace_intelligence'
+  | 'notion_project'
+  | 'simple_action'
+  | 'read_only';
+
+export interface OsIntent {
+  kind: WorkflowKind;
+  confidence: number;
+  rationale: string;
+  /** Legacy read/action mapping for existing planner compatibility */
+  legacyIntent: QueryIntent;
+  entities: Record<string, string>;
+}
+
+export interface WorkflowStepResult {
+  stepId: string;
+  tool: ToolName;
+  action: string;
+  status: 'success' | 'retryable_failure' | 'fatal_failure' | 'skipped' | 'healed';
+  attempts: number;
+  durationMs: number;
+  error?: string;
+  healActions?: string[];
+  verified?: boolean;
+  output?: unknown;
+}
+
+export interface WorkflowTrace {
+  intent: OsIntent;
+  reasoning: string[];
+  planSteps: string[];
+  steps: WorkflowStepResult[];
+  retries: number;
+  durationMs: number;
+  memoryKeys?: string[];
 }
 
 // ---------- Approvals ----------
