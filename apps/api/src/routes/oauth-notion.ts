@@ -53,9 +53,44 @@ function verifyState(state: string): { sub: string; org: string } {
 
 function getNotionRedirectUri(): string | undefined {
   const raw = process.env.NOTION_OAUTH_REDIRECT_URI?.trim();
-  if (!raw) return undefined;
+  const railwayHost = process.env.RAILWAY_PUBLIC_DOMAIN?.trim() || process.env.API_PUBLIC_URL?.trim();
+  const productionFallback = railwayHost
+    ? `${railwayHost.startsWith('http') ? railwayHost.replace(/\/$/, '') : `https://${railwayHost}`}/oauth/notion/callback`
+    : undefined;
+
+  // Production: never use localhost redirect even if .env still has it.
+  if (raw) {
+    try {
+      const host = new URL(raw).hostname;
+      if ((host === 'localhost' || host === '127.0.0.1') && productionFallback && !/localhost|127\.0\.0\.1/i.test(productionFallback)) {
+        oauthLog('redirect_forced_railway', { was: raw, now: productionFallback });
+        return productionFallback;
+      }
+    } catch {
+      // fall through
+    }
+  }
+
+  let uri = raw || productionFallback;
+  if (!uri) return undefined;
+
   // Notion rejects IP redirect URIs ("can't use IP addresses"). Keep localhost.
-  return raw.replace('http://127.0.0.1:', 'http://localhost:');
+  uri = uri.replace('http://127.0.0.1:', 'http://localhost:');
+  // Dead Cloudflare quick tunnels break Connect after reboot — use local callback for local SaaS.
+  try {
+    const host = new URL(uri).hostname;
+    if (host.endsWith('trycloudflare.com')) {
+      uri = 'http://localhost:4000/oauth/notion/callback';
+      oauthLog('redirect_forced_localhost', {
+        was: raw,
+        now: uri,
+        hint: 'Also set this exact URI in Notion → Public integration → Redirect URIs',
+      });
+    }
+  } catch {
+    // keep uri as-is; assertRedirectUriShape will catch
+  }
+  return uri;
 }
 
 function assertRedirectUriShape(redirectUri: string): string | null {
@@ -68,10 +103,20 @@ function assertRedirectUriShape(redirectUri: string): string | null {
       return 'Notion rejects 127.0.0.1 redirect URIs — use localhost or an HTTPS hostname';
     }
     if (u.hostname.endsWith('trycloudflare.com')) {
-      oauthLog('warn_trycloudflare_redirect', {
-        hint: 'Quick tunnels break when DNS/ISP cannot resolve the hostname. Prefer localhost for local or a fixed HTTPS API domain for production.',
-        host: u.hostname,
-      });
+      // Local SaaS: prefer localhost over dead quick tunnels (common after reboot).
+      if ((process.env.SAAS_MODE ?? 'true') === 'true') {
+        const local = 'http://localhost:4000/oauth/notion/callback';
+        oauthLog('warn_trycloudflare_prefer_localhost', {
+          configured: redirectUri,
+          prefer: local,
+          hint: 'Set NOTION_OAUTH_REDIRECT_URI to localhost for local Connect, and match it in Notion Public Integration.',
+        });
+      } else {
+        oauthLog('warn_trycloudflare_redirect', {
+          hint: 'Quick tunnels break when DNS/ISP cannot resolve the hostname. Prefer localhost for local or a fixed HTTPS API domain for production.',
+          host: u.hostname,
+        });
+      }
     }
   } catch {
     return 'NOTION_OAUTH_REDIRECT_URI is not a valid URL';

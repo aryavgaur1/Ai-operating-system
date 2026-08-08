@@ -67,6 +67,32 @@ function getClient(): Client {
   return initializeNotionClient();
 }
 
+/**
+ * Resolve a parent page/database for creates.
+ * Prefer explicit input → NOTION_DATABASE_ID → first page the bot can see.
+ * OAuth integrations cannot create orphan workspace roots.
+ */
+async function resolveParentId(client: Client, explicit?: string): Promise<string> {
+  const fromInput = explicit?.trim();
+  if (fromInput) return fromInput;
+
+  const fromEnv = process.env.NOTION_DATABASE_ID?.trim();
+  if (fromEnv) return fromEnv;
+
+  const response = await client.search({
+    filter: { property: 'object', value: 'page' },
+    page_size: 25,
+  });
+  const pages = (response.results as any[]) ?? [];
+  const preferred = pages.find((p) => /nexora/i.test(extractTitle(p)));
+  const pick = preferred ?? pages[0];
+  if (pick?.id) return pick.id as string;
+
+  throw new Error(
+    'Notion has no shared parent page for Nexora yet. In Notion, open a page → ··· → Connections → add Nexora, then try again.'
+  );
+}
+
 /** Pulls the plain-text title out of whatever property type Notion gives us. */
 function extractTitle(page: any): string {
   const props = page.properties ?? {};
@@ -251,8 +277,7 @@ class NotionConnector implements ToolConnector {
       try {
         switch (action) {
           case 'createPage': {
-            const parentId = (input.parentPageId as string) ?? process.env.NOTION_DATABASE_ID;
-            if (!parentId) throw new Error('No parentPageId provided and NOTION_DATABASE_ID is not set');
+            const parentId = await resolveParentId(client, input.parentPageId as string | undefined);
 
             const title = String(input.title ?? 'Untitled');
             const propsResult = await buildCreateProperties(client, parentId, title);
@@ -294,8 +319,7 @@ class NotionConnector implements ToolConnector {
           }
 
           case 'createDatabase': {
-            const parentId = (input.parentPageId as string) ?? process.env.NOTION_DATABASE_ID;
-            if (!parentId) throw new Error('No parentPageId provided and NOTION_DATABASE_ID is not set');
+            const parentId = await resolveParentId(client, input.parentPageId as string | undefined);
 
             const title = String(input.title ?? 'Untitled Database');
             const database = await (client.databases.create as any)({
@@ -368,8 +392,7 @@ class NotionConnector implements ToolConnector {
           case 'createPRD':
           case 'createWiki':
           case 'createRoadmap': {
-            const parentId = (input.parentPageId as string) ?? process.env.NOTION_DATABASE_ID;
-            if (!parentId) throw new Error('No parentPageId provided and NOTION_DATABASE_ID is not set');
+            const parentId = await resolveParentId(client, input.parentPageId as string | undefined);
             const templates: Record<string, string> = {
               createProject: 'Project',
               createMeetingNotes: 'Meeting Notes',

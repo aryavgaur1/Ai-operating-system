@@ -166,26 +166,31 @@ export default function IntegrationsPage() {
   const [meta, setMeta] = useState<Record<string, IntegrationStatus>>({});
   const [enabled, setEnabled] = useState<Record<ToolId, boolean>>(DEFAULT_ENABLED);
   const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
   const [busy, setBusy] = useState<ToolId | null>(null);
   const [hydrated, setHydrated] = useState(false);
+  const [notionToken, setNotionToken] = useState('');
+  const [savingNotion, setSavingNotion] = useState(false);
+
+  async function refresh() {
+    const res = await api.listIntegrations();
+    const nextMeta: Record<string, IntegrationStatus> = {};
+    const nextEnabled = { ...DEFAULT_ENABLED };
+    for (const t of res.tools) {
+      nextMeta[t.tool] = t;
+      if (t.tool in nextEnabled) {
+        nextEnabled[t.tool as ToolId] = t.status === 'active';
+      }
+    }
+    setMeta(nextMeta);
+    setEnabled(nextEnabled);
+  }
 
   useEffect(() => {
     let cancelled = false;
-    api
-      .listIntegrations()
-      .then((res) => {
-        if (cancelled) return;
-        const nextMeta: Record<string, IntegrationStatus> = {};
-        const nextEnabled = { ...DEFAULT_ENABLED };
-        for (const t of res.tools) {
-          nextMeta[t.tool] = t;
-          if (t.tool in nextEnabled) {
-            nextEnabled[t.tool as ToolId] = t.status === 'active';
-          }
-        }
-        setMeta(nextMeta);
-        setEnabled(nextEnabled);
-        setError(null);
+    refresh()
+      .then(() => {
+        if (!cancelled) setError(null);
       })
       .catch((err) => {
         if (!cancelled) setError(err.message);
@@ -206,6 +211,7 @@ export default function IntegrationsPage() {
     setEnabled((prev) => ({ ...prev, [tool]: turningOn }));
     setBusy(tool);
     setError(null);
+    setInfo(null);
 
     try {
       const row = meta[tool];
@@ -233,6 +239,31 @@ export default function IntegrationsPage() {
     }
   }
 
+  async function saveNotionToken() {
+    const token = notionToken.trim();
+    if (!token) {
+      setError('Paste your Notion Internal Integration secret first');
+      return;
+    }
+    setSavingNotion(true);
+    setError(null);
+    setInfo(null);
+    try {
+      const res = await api.connectNotionToken(token);
+      setNotionToken('');
+      setInfo(`Notion connected${res.workspaceName ? `: ${res.workspaceName}` : ''}. Share pages with the integration in Notion.`);
+      await refresh();
+      setEnabled((prev) => ({ ...prev, notion: true }));
+    } catch (err: any) {
+      setError(err.message || 'Could not connect Notion token');
+    } finally {
+      setSavingNotion(false);
+    }
+  }
+
+  const notionActive = enabled.notion && meta.notion?.status === 'active';
+  const notionConnectUrl = meta.notion?.connectUrl;
+
   return (
     <div className="space-y-6 pb-10">
       <Reveal>
@@ -242,8 +273,8 @@ export default function IntegrationsPage() {
           </span>
           <h1 className="font-display mt-4 text-3xl font-semibold text-white sm:text-4xl">Integrations</h1>
           <p className="mt-3 max-w-2xl text-sm leading-7 text-neutral-400">
-            Toggle connectors on or off. Slack and Notion can run live from workspace credentials; others stay ready
-            for OAuth when you enable SaaS mode.
+            Connect Slack and Notion with OAuth. After Notion Allow, share at least one page with the integration
+            (page ··· → Connections) so Chat can create docs.
           </p>
         </GlassCard>
       </Reveal>
@@ -251,6 +282,90 @@ export default function IntegrationsPage() {
       {error && (
         <div className="rounded-2xl border border-red-500/25 bg-red-500/10 p-4 text-sm text-red-300">{error}</div>
       )}
+      {info && (
+        <div className="rounded-2xl border border-emerald-500/25 bg-emerald-500/10 p-4 text-sm text-emerald-300">{info}</div>
+      )}
+
+      <GlassCard className="p-6 sm:p-7" hoverLift={false}>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="font-display text-xl font-semibold text-white sm:text-2xl">Notion — connect now</h2>
+            <p className="mt-2 max-w-2xl text-sm text-neutral-400">
+              Use Connect Notion (OAuth) on try-nexora. After Allow, share at least one page with the integration so Chat can write.
+            </p>
+          </div>
+          <span
+            className={cn(
+              'rounded-full px-3 py-1 text-[11px] uppercase tracking-[0.18em]',
+              notionActive ? 'bg-emerald-400/15 text-emerald-300' : 'border border-white/10 bg-white/5 text-neutral-400'
+            )}
+          >
+            {notionActive ? 'Connected' : 'Not connected'}
+          </span>
+        </div>
+
+        {notionActive ? (
+          <div className="mt-5 rounded-2xl border border-emerald-400/20 bg-emerald-400/5 p-4 text-sm text-emerald-200">
+            Notion is live for this account
+            {meta.notion?.workspaceName ? ` · ${meta.notion.workspaceName}` : ''}.
+            In Notion, open any page → ··· → Connections → add your integration, or it can&apos;t write.
+          </div>
+        ) : (
+          <div className="mt-5 grid gap-4 lg:grid-cols-2">
+            <div className="rounded-2xl border border-accent/30 bg-accent/5 p-4">
+              <div className="text-sm font-semibold text-white">Connect Notion (OAuth)</div>
+              <p className="mt-2 text-xs leading-5 text-neutral-400">
+                Redirect URI in your Notion Public integration must include exactly:
+              </p>
+              <code className="mt-2 block break-all rounded-lg bg-black/40 px-3 py-2 text-[11px] text-neutral-300">
+                https://nexora-api.up.railway.app/oauth/notion/callback
+              </code>
+              <button
+                type="button"
+                disabled={!notionConnectUrl}
+                onClick={() => {
+                  if (notionConnectUrl) window.location.href = notionConnectUrl;
+                  else setError('Notion OAuth URL not available — API is missing NOTION_OAUTH_* env vars');
+                }}
+                className="mt-4 rounded-full bg-accent px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
+              >
+                Connect Notion
+              </button>
+            </div>
+
+            <div className="rounded-2xl border border-white/10 bg-black/25 p-4">
+              <div className="text-sm font-semibold text-white">Fallback — Internal token</div>
+              <ol className="mt-3 list-decimal space-y-1.5 pl-4 text-xs leading-5 text-neutral-400">
+                <li>
+                  Open{' '}
+                  <a className="text-accent underline" href="https://www.notion.so/my-integrations" target="_blank" rel="noreferrer">
+                    notion.so/my-integrations
+                  </a>
+                </li>
+                <li>New integration → type <strong className="text-neutral-200">Internal</strong></li>
+                <li>Copy the secret (<code className="text-neutral-300">secret_…</code> or <code className="text-neutral-300">ntn_…</code>)</li>
+                <li>Paste below → Save</li>
+                <li>In Notion: share target pages/databases with that integration</li>
+              </ol>
+              <input
+                className="mt-4 w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2.5 text-sm text-white outline-none focus:border-accent/40"
+                value={notionToken}
+                onChange={(e) => setNotionToken(e.target.value)}
+                placeholder="secret_… or ntn_…"
+                autoComplete="off"
+              />
+              <button
+                type="button"
+                disabled={savingNotion || !notionToken.trim()}
+                onClick={saveNotionToken}
+                className="mt-3 rounded-full border border-white/15 bg-white/5 px-4 py-2 text-sm text-white disabled:opacity-50"
+              >
+                {savingNotion ? 'Connecting…' : 'Save Notion token'}
+              </button>
+            </div>
+          </div>
+        )}
+      </GlassCard>
 
       <GlassCard className="p-6 sm:p-7" hoverLift={false}>
         <div className="flex flex-wrap items-center justify-between gap-3">

@@ -1,4 +1,5 @@
 import type { ToolCallResult, ToolName } from '@enterprise-ai-os/shared';
+import { hasNotionTokenInContext, hasSlackTokenInContext } from './context';
 
 // ============================================================
 // ToolConnector — the common interface every third-party
@@ -58,6 +59,15 @@ export function simulateLatency(minMs = 150, maxMs = 500): Promise<void> {
  * Investor demo: if a real token exists, never silently fall back to mock success.
  */
 export function isLiveMode(tool?: ToolName): boolean {
+  // Per-request SaaS tokens (ALS) count as live even when platform .env keys are absent.
+  if (tool === 'slack' && hasSlackTokenInContext()) {
+    const override = process.env.SLACK_MODE;
+    if (!override || override === 'live') return true;
+  }
+  if (tool === 'notion' && hasNotionTokenInContext()) {
+    const override = process.env.NOTION_MODE;
+    if (!override || override === 'live') return true;
+  }
   if (tool === 'slack' && process.env.SLACK_BOT_TOKEN?.trim()) {
     const override = process.env.SLACK_MODE;
     if (!override || override === 'live') return true;
