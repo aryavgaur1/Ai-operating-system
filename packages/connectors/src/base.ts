@@ -54,20 +54,13 @@ export function simulateLatency(minMs = 150, maxMs = 500): Promise<void> {
 
 /**
  * Checks whether a connector should run live.
- * Per-tool override (e.g. NOTION_MODE=live) wins if set;
- * otherwise falls back to the global CONNECTORS_MODE.
- * Investor demo: if a real token exists, never silently fall back to mock success.
+ * Per-request SaaS OAuth tokens always win (connected ⇒ live).
+ * Otherwise per-tool *_MODE / CONNECTORS_MODE / platform tokens apply.
  */
 export function isLiveMode(tool?: ToolName): boolean {
-  // Per-request SaaS tokens (ALS) count as live even when platform .env keys are absent.
-  if (tool === 'slack' && hasSlackTokenInContext()) {
-    const override = process.env.SLACK_MODE;
-    if (!override || override === 'live') return true;
-  }
-  if (tool === 'notion' && hasNotionTokenInContext()) {
-    const override = process.env.NOTION_MODE;
-    if (!override || override === 'live') return true;
-  }
+  if (tool === 'slack' && hasSlackTokenInContext()) return true;
+  if (tool === 'notion' && hasNotionTokenInContext()) return true;
+
   if (tool === 'slack' && process.env.SLACK_BOT_TOKEN?.trim()) {
     const override = process.env.SLACK_MODE;
     if (!override || override === 'live') return true;

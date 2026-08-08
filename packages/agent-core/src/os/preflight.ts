@@ -31,8 +31,14 @@ export async function preflightToolCall(call: ToolCall): Promise<PreflightResult
   const ctx = getConnectorContext();
 
   if (call.tool === 'slack') {
-    if (!isLiveMode('slack')) {
-      return { ok: false, input, healActions, fatal: 'Slack is not in live mode — connect Slack / set SLACK_MODE=live.' };
+    // Connected OAuth / env token ⇒ live. Only fail on missing connection.
+    if (!hasSlackTokenInContext() && !isLiveMode('slack')) {
+      return {
+        ok: false,
+        input,
+        healActions,
+        fatal: 'Slack is not connected. Open Integrations → Connect Slack, then ask again.',
+      };
     }
     if (!hasSlackTokenInContext()) {
       return {
@@ -127,8 +133,13 @@ export async function preflightToolCall(call: ToolCall): Promise<PreflightResult
   }
 
   if (call.tool === 'notion') {
-    if (!isLiveMode('notion')) {
-      return { ok: false, input, healActions, fatal: 'Notion is not in live mode — connect Notion / set NOTION_MODE=live.' };
+    if (!hasNotionTokenInContext() && !isLiveMode('notion')) {
+      return {
+        ok: false,
+        input,
+        healActions,
+        fatal: 'Notion is not connected. Open Integrations → Connect Notion, then ask again.',
+      };
     }
     if (!hasNotionTokenInContext()) {
       return {
