@@ -156,7 +156,11 @@ export function planWorkflow(query: string, intent: OsIntent): WorkflowPlan {
         toolCalls.push(call('notion', 'createWiki', { title, body: query }));
       } else if (/\bmeeting/.test(lower)) {
         toolCalls.push(call('notion', 'createMeetingNotes', { title, body: query }));
-      } else if (/\b(project|roadmap|sprint)\b/.test(lower)) {
+      } else if (/\b(database|db|table|board|kanban)\b/.test(lower)) {
+        toolCalls.push(call('notion', 'createDatabase', { title }));
+      } else if (/\broadmap\b/.test(lower)) {
+        toolCalls.push(call('notion', 'createRoadmap', { title, body: query }));
+      } else if (/\b(project|hub|sprint)\b/.test(lower)) {
         toolCalls.push(call('notion', 'createProject', { title, body: query }));
       } else if (/\b(search|find)\b/.test(lower)) {
         toolCalls.push(call('notion', 'searchPages', { query: title }));

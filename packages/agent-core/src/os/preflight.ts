@@ -285,9 +285,12 @@ export async function healAndRetry(
 /** Soft user-facing error — never dump raw API payloads. */
 export function humanizeError(tool: ToolName, action: string, error?: string): string {
   const msg = String(error || 'unknown issue');
-  // Preserve explicit connect / isolation messages for SaaS users
-  if (/not connected|Connect (Slack|Notion)|Integrations/i.test(msg)) {
+  // Preserve explicit connect / isolation / parent-share messages for SaaS users
+  if (/not connected|Connect (Slack|Notion)|Integrations|shared parent|Connections → add Nexora|select at least one page/i.test(msg)) {
     return msg;
+  }
+  if (/object_not_found|could not find|page_id|database_id|parent/i.test(msg) && tool === 'notion') {
+    return 'Notion could not use a parent page yet. Reconnect Notion and select at least one page to share, or in Notion open a page → ··· → Connections → add Nexora, then retry.';
   }
   if (/rate.?limit/i.test(msg)) return `${tool} is rate-limiting right now — Nexora backed off and can retry shortly.`;
   if (/missing_scope|missing.?permissions|requires .+ scope|pins:write/i.test(msg))

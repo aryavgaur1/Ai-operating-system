@@ -69,27 +69,58 @@ function getClient(): Client {
 
 /**
  * Resolve a parent page/database for creates.
- * Prefer explicit input → NOTION_DATABASE_ID → first page the bot can see.
+ * Prefer explicit input → (demo-only) NOTION_DATABASE_ID → first page/DB the token can see.
+ * Never use a global NOTION_DATABASE_ID for SaaS OAuth users — that ID belongs to another workspace.
  * OAuth integrations cannot create orphan workspace roots.
  */
 async function resolveParentId(client: Client, explicit?: string): Promise<string> {
   const fromInput = explicit?.trim();
   if (fromInput) return fromInput;
 
+  const ctx = getConnectorContext();
+  const usingUserOAuth = Boolean(ctx.notionToken?.trim()) || Boolean(ctx.saasStrict);
   const fromEnv = process.env.NOTION_DATABASE_ID?.trim();
-  if (fromEnv) return fromEnv;
 
-  const response = await client.search({
+  // Demo/platform only: env parent is safe when we are NOT using a per-user OAuth token.
+  if (fromEnv && !usingUserOAuth) {
+    return fromEnv;
+  }
+
+  // If env parent is set in mixed mode, only use it when this token can actually read it.
+  if (fromEnv && !ctx.saasStrict) {
+    try {
+      await client.databases.retrieve({ database_id: fromEnv });
+      return fromEnv;
+    } catch {
+      try {
+        await client.pages.retrieve({ page_id: fromEnv });
+        return fromEnv;
+      } catch {
+        // Fall through to search — common when env ID is founder-only.
+      }
+    }
+  }
+
+  const pageSearch = await client.search({
     filter: { property: 'object', value: 'page' },
     page_size: 25,
   });
-  const pages = (response.results as any[]) ?? [];
-  const preferred = pages.find((p) => /nexora/i.test(extractTitle(p)));
-  const pick = preferred ?? pages[0];
-  if (pick?.id) return pick.id as string;
+  const pages = (pageSearch.results as any[]) ?? [];
+  const preferredPage = pages.find((p) => /nexora/i.test(extractTitle(p)));
+  if (preferredPage?.id) return preferredPage.id as string;
+  if (pages[0]?.id) return pages[0].id as string;
+
+  const dbSearch = await client.search({
+    filter: { property: 'object', value: 'database' },
+    page_size: 25,
+  });
+  const databases = (dbSearch.results as any[]) ?? [];
+  const preferredDb = databases.find((d) => /nexora/i.test(extractTitle(d)));
+  if (preferredDb?.id) return preferredDb.id as string;
+  if (databases[0]?.id) return databases[0].id as string;
 
   throw new Error(
-    'Notion has no shared parent page for Nexora yet. In Notion, open a page → ··· → Connections → add Nexora, then try again.'
+    'Notion has no shared parent page for Nexora yet. During Connect, select at least one page (or in Notion open a page → ··· → Connections → add Nexora), then try again from Integrations.'
   );
 }
 
@@ -335,11 +366,17 @@ class NotionConnector implements ToolConnector {
           }
 
           case 'publishPage': {
-            const pageId = input.pageId as string;
-            if (!pageId) throw new Error('pageId is required');
+            let pageId = input.pageId as string | undefined;
+            const title = input.title as string | undefined;
+            if (!pageId) {
+              if (!title) throw new Error('pageId or title is required to publish a page');
+              const page = await findPageByTitle(client, title);
+              if (!page) throw new Error(`No Notion page found with title "${title}"`);
+              pageId = page.id;
+            }
             // Notion has no separate "publish" flag via the API for private pages;
             // this simply confirms the page is not archived (i.e. active/visible).
-            const page = await client.pages.update({ page_id: pageId, archived: false });
+            const page = await client.pages.update({ page_id: pageId as string, archived: false });
             return { tool: 'notion', action, ok: true, output: { id: page.id, applied: true }, mocked: false };
           }
 
