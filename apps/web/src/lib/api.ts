@@ -1,9 +1,15 @@
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
 const TOKEN_KEY = 'nexora_access_token';
+const REFRESH_KEY = 'nexora_refresh_token';
 
 export function getAccessToken(): string | null {
   if (typeof window === 'undefined') return null;
   return localStorage.getItem(TOKEN_KEY);
+}
+
+export function getRefreshToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  return localStorage.getItem(REFRESH_KEY);
 }
 
 export function setAccessToken(token: string | null) {
@@ -12,21 +18,46 @@ export function setAccessToken(token: string | null) {
   else localStorage.removeItem(TOKEN_KEY);
 }
 
+export function setRefreshToken(token: string | null) {
+  if (typeof window === 'undefined') return;
+  if (token) localStorage.setItem(REFRESH_KEY, token);
+  else localStorage.removeItem(REFRESH_KEY);
+}
+
+export function clearSession() {
+  setAccessToken(null);
+  setRefreshToken(null);
+}
+
 async function refreshAccessToken(): Promise<string | null> {
   try {
+    const refreshToken = getRefreshToken();
     const res = await fetch(`${API_URL}/auth/refresh`, {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(refreshToken ? { refreshToken } : {}),
     });
     if (!res.ok) return null;
     const body = await res.json();
-    const token = body?.data?.accessToken || body?.data?.token || body?.accessToken;
+    const data = body?.data ?? body;
+    const token = data?.accessToken || data?.token;
+    const nextRefresh = data?.refreshToken;
     if (token) setAccessToken(token);
+    if (nextRefresh) setRefreshToken(nextRefresh);
     return token ?? null;
   } catch {
     return null;
   }
+}
+
+function redirectToLogin() {
+  if (typeof window === 'undefined') return;
+  clearSession();
+  const next = window.location.pathname.startsWith('/app')
+    ? `?next=${encodeURIComponent(window.location.pathname)}`
+    : '';
+  window.location.href = `/login${next}`;
 }
 
 async function request<T>(path: string, init?: RequestInit, retry = true): Promise<T> {
@@ -44,9 +75,13 @@ async function request<T>(path: string, init?: RequestInit, retry = true): Promi
     cache: 'no-store',
   });
 
-  if (res.status === 401 && retry && path !== '/auth/login' && path !== '/auth/refresh') {
+  if (res.status === 401 && retry && path !== '/auth/login' && path !== '/auth/refresh' && path !== '/auth/signup') {
     const refreshed = await refreshAccessToken();
     if (refreshed) return request<T>(path, init, false);
+    // Session truly dead — bounce to login (except when already on auth pages)
+    if (typeof window !== 'undefined' && window.location.pathname.startsWith('/app')) {
+      redirectToLogin();
+    }
   }
 
   const body = await res.json().catch(() => ({}));
@@ -125,18 +160,40 @@ export interface AuthUser {
   isSuspended: boolean;
 }
 
+function persistSessionTokens(data: { accessToken?: string; token?: string; refreshToken?: string }) {
+  const access = data.accessToken || data.token;
+  if (access) setAccessToken(access);
+  if (data.refreshToken) setRefreshToken(data.refreshToken);
+}
+
 export const api = {
-  signup: (payload: Record<string, unknown>) =>
-    request<{ token: string; accessToken: string; user: AuthUser }>('/auth/signup', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    }),
-  login: (payload: Record<string, unknown>) =>
-    request<{ token: string; accessToken: string; user: AuthUser }>('/auth/login', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    }),
-  logout: () => request<null>('/auth/logout', { method: 'POST' }),
+  signup: async (payload: Record<string, unknown>) => {
+    const data = await request<{ token: string; accessToken: string; refreshToken?: string; user: AuthUser }>(
+      '/auth/signup',
+      { method: 'POST', body: JSON.stringify(payload) }
+    );
+    persistSessionTokens(data);
+    return data;
+  },
+  login: async (payload: Record<string, unknown>) => {
+    const data = await request<{ token: string; accessToken: string; refreshToken?: string; user: AuthUser }>(
+      '/auth/login',
+      { method: 'POST', body: JSON.stringify(payload) }
+    );
+    persistSessionTokens(data);
+    return data;
+  },
+  logout: async () => {
+    try {
+      await request<null>('/auth/logout', {
+        method: 'POST',
+        body: JSON.stringify({ refreshToken: getRefreshToken() }),
+      });
+    } finally {
+      clearSession();
+    }
+    return null;
+  },
   me: () => request<{ user: AuthUser; profile: any; workspace: any }>('/auth/me'),
   updateMe: (payload: Record<string, unknown>) =>
     request<null>('/auth/me', { method: 'PATCH', body: JSON.stringify(payload) }),
@@ -210,3 +267,11 @@ export const api = {
 export function googleLoginUrl() {
   return `${API_URL}/auth/google/start`;
 }
+
+export function oauthConnectUrl(tool: 'slack' | 'notion'): string | null {
+  const token = getAccessToken();
+  if (!token) return null;
+  return `${API_URL}/oauth/${tool}/start?token=${encodeURIComponent(token)}`;
+}
+
+export { API_URL };

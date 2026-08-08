@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import type { Response } from 'express';
+import type { CookieOptions, Response } from 'express';
 import { query } from '@enterprise-ai-os/stores';
 import { signAccessToken, signRefreshToken } from '../middleware/auth';
 
@@ -13,6 +13,24 @@ export function randomToken(bytes = 32): string {
 
 export function webAppUrl(): string {
   return (process.env.WEB_APP_URL ?? process.env.NEXT_PUBLIC_API_URL?.replace(':4000', ':3000') ?? 'http://localhost:3000').replace(/\/$/, '');
+}
+
+/** Cross-site SPA (Netlify) → API (Railway) needs SameSite=None; Secure. */
+function refreshCookieOptions(maxAgeMs: number): CookieOptions {
+  const web = webAppUrl();
+  const local = /localhost|127\.0\.0\.1/i.test(web);
+  const crossSite = !local && Boolean(process.env.RAILWAY_PUBLIC_DOMAIN || process.env.API_PUBLIC_URL);
+  return {
+    httpOnly: true,
+    secure: !local,
+    sameSite: crossSite || !local ? 'none' : 'lax',
+    maxAge: maxAgeMs,
+    path: '/',
+  };
+}
+
+export function clearRefreshCookie(res: Response): void {
+  res.clearCookie('nexora_refresh', refreshCookieOptions(0));
 }
 
 export async function issueSession(
@@ -33,14 +51,7 @@ export async function issueSession(
     [userId, tokenHash, expiresAt.toISOString(), opts.userAgent ?? null, opts.ip ?? null]
   );
 
-  const secure = process.env.NODE_ENV === 'production';
-  res.cookie('nexora_refresh', refreshToken, {
-    httpOnly: true,
-    secure,
-    sameSite: 'lax',
-    maxAge: days * 24 * 60 * 60 * 1000,
-    path: '/',
-  });
+  res.cookie('nexora_refresh', refreshToken, refreshCookieOptions(days * 24 * 60 * 60 * 1000));
 
   return { accessToken, refreshToken };
 }
@@ -55,7 +66,7 @@ export async function rotateRefreshToken(
   res: Response,
   raw: string,
   opts: { userAgent?: string; ip?: string } = {}
-): Promise<{ accessToken: string; userId: string; organizationId: string } | null> {
+): Promise<{ accessToken: string; refreshToken: string; userId: string; organizationId: string } | null> {
   const tokenHash = hashToken(raw);
   const result = await query<{ user_id: string; expires_at: Date }>(
     `select user_id, expires_at from refresh_tokens
@@ -74,7 +85,12 @@ export async function rotateRefreshToken(
   if (!orgId) return null;
 
   const session = await issueSession(res, row.user_id, orgId, opts);
-  return { accessToken: session.accessToken, userId: row.user_id, organizationId: orgId };
+  return {
+    accessToken: session.accessToken,
+    refreshToken: session.refreshToken,
+    userId: row.user_id,
+    organizationId: orgId,
+  };
 }
 
 export function slugify(name: string): string {

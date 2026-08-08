@@ -48,7 +48,9 @@ integrationsRouter.get(
       return {
         tool,
         status,
-        mode: isLiveMode(tool) ? 'live' : 'mock',
+        mode: detail?.status === 'active' || isLiveMode(tool) || process.env[`${tool.toUpperCase()}_MODE`] === 'live' || process.env.CONNECTORS_MODE === 'live'
+          ? 'live'
+          : 'mock',
         availableActions: connector.listActions(),
         connectUrl: demoMode ? null : connectUrl,
         canConnect: !demoMode && (tool === 'slack' || tool === 'notion'),

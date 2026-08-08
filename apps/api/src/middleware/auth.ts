@@ -29,8 +29,10 @@ export function getJwtSecret(): string {
 }
 
 export function signAccessToken(userId: string, organizationId: string): string {
+  // SPA on Netlify calling Railway — short tokens caused mass Unauthorized when
+  // cross-site refresh cookies failed. Keep sessions usable for a work day.
   return jwt.sign({ sub: userId, org: organizationId, typ: 'access' }, getJwtSecret(), {
-    expiresIn: '15m',
+    expiresIn: '12h',
   });
 }
 

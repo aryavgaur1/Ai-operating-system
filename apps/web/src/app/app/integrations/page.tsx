@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Plug } from 'lucide-react';
-import { api, type IntegrationStatus } from '@/lib/api';
+import { api, getAccessToken, oauthConnectUrl, type IntegrationStatus } from '@/lib/api';
 import { GlassCard, Reveal } from '@/components/motion';
 import { cn } from '@/lib/utils';
 
@@ -216,14 +216,24 @@ export default function IntegrationsPage() {
     try {
       const row = meta[tool];
       if (turningOn) {
-        // Real OAuth path only when SaaS mode exposes a connect URL
-        if (row?.canConnect && row.connectUrl) {
-          window.location.href = row.connectUrl;
+        // Always redirect Slack/Notion to real OAuth when possible
+        if (tool === 'slack' || tool === 'notion') {
+          const url = row?.connectUrl || oauthConnectUrl(tool);
+          if (url) {
+            window.location.href = url;
+            return;
+          }
+          if (!getAccessToken()) {
+            setError('Please sign in again, then toggle Slack/Notion to connect.');
+            setEnabled((prev) => ({ ...prev, [tool]: false }));
+            return;
+          }
+          setError(`Connect URL unavailable for ${tool}. Refresh the page and try again.`);
+          setEnabled((prev) => ({ ...prev, [tool]: false }));
           return;
         }
-        // Demo / mock: keep local ON (already set)
+        // Other tools stay local/demo until wired
       } else {
-        // Best-effort disconnect; demo API may still report active — local state wins
         try {
           await api.disconnectIntegration(tool);
         } catch {
@@ -231,7 +241,6 @@ export default function IntegrationsPage() {
         }
       }
     } catch (err: any) {
-      // Revert only on hard failure of the toggle itself
       setEnabled((prev) => ({ ...prev, [tool]: !turningOn }));
       setError(err.message || 'Could not update integration');
     } finally {
@@ -402,7 +411,14 @@ export default function IntegrationsPage() {
                     >
                       {active ? 'Online' : 'Offline'}
                     </span>
-                    <span className="text-[10px] uppercase tracking-wide text-neutral-600">{mode}</span>
+                    <span
+                      className={cn(
+                        'text-[10px] uppercase tracking-wide',
+                        mode === 'live' ? 'text-emerald-400/90' : 'text-neutral-600'
+                      )}
+                    >
+                      {mode}
+                    </span>
                   </div>
                   <p className="mt-0.5 line-clamp-2 text-sm text-neutral-400">{item.description}</p>
                   {meta[item.tool]?.workspaceName && (

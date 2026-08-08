@@ -17,7 +17,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
-import { api, setAccessToken } from '@/lib/api';
+import { api, clearSession } from '@/lib/api';
 import { APP_HOME, APP_ROUTES, LOGIN } from '@/lib/routes';
 import { isPlatformAdminEmail } from '@/lib/platformAdmin';
 
@@ -73,7 +73,7 @@ export function Nav() {
     } catch {
       // ignore
     }
-    setAccessToken(null);
+    clearSession();
     router.push(LOGIN);
   }
 

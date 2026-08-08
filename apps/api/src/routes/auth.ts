@@ -7,15 +7,16 @@ import { mailer } from '../lib/mailer';
 import { logger } from '../lib/logger';
 import { AppError, ok, asyncHandler } from '../lib/errors';
 import {
+  clearRefreshCookie,
+  webAppUrl,
+  parseUserAgent,
   hashToken,
   issueSession,
-  parseUserAgent,
   randomToken,
   revokeAllRefreshTokens,
   revokeRefreshToken,
   rotateRefreshToken,
   slugify,
-  webAppUrl,
 } from '../lib/authTokens';
 import { isPlatformAdminEmail } from '../lib/platformAdmin';
 
@@ -151,6 +152,7 @@ authRouter.post(
       {
         token: session.accessToken,
         accessToken: session.accessToken,
+        refreshToken: session.refreshToken,
         user: serializeUserProfile(user),
         requiresVerification: !autoVerifyLocal,
       },
@@ -219,6 +221,7 @@ authRouter.post(
     ok(res, {
       token: session.accessToken,
       accessToken: session.accessToken,
+      refreshToken: session.refreshToken,
       user: serializeUserProfile(user),
     });
   })
@@ -234,16 +237,20 @@ authRouter.post(
       ip: (req.header('x-forwarded-for') ?? req.socket.remoteAddress ?? '').toString(),
     });
     if (!rotated) throw new AppError('Invalid or expired refresh token', 401);
-    ok(res, { token: rotated.accessToken, accessToken: rotated.accessToken });
+    ok(res, {
+      token: rotated.accessToken,
+      accessToken: rotated.accessToken,
+      refreshToken: rotated.refreshToken,
+    });
   })
 );
 
 authRouter.post(
   '/logout',
   asyncHandler(async (req, res) => {
-    const raw = req.cookies?.nexora_refresh;
+    const raw = req.cookies?.nexora_refresh || req.body?.refreshToken;
     if (raw) await revokeRefreshToken(raw);
-    res.clearCookie('nexora_refresh', { path: '/' });
+    clearRefreshCookie(res);
     logger.info('user.logout', { userId: req.user?.id });
     ok(res, null, 'Logged out');
   })
@@ -612,7 +619,7 @@ authRouter.get('/google/callback', async (req, res) => {
       ip: (req.header('x-forwarded-for') ?? req.socket.remoteAddress ?? '').toString(),
     });
 
-    const dest = `${webAppUrl()}/app/dashboard?token=${encodeURIComponent(session.accessToken)}`;
+    const dest = `${webAppUrl()}/app/dashboard?token=${encodeURIComponent(session.accessToken)}&refresh=${encodeURIComponent(session.refreshToken)}`;
     logger.info('auth.google.success', { userId: user.id, email: user.email });
     res.redirect(dest);
   } catch (err) {

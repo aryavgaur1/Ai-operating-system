@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { getAccessToken, setAccessToken, api } from '@/lib/api';
+import { getAccessToken, setAccessToken, setRefreshToken, api } from '@/lib/api';
 import {
   APP_HOME,
   APP_ROUTES,
@@ -20,27 +20,37 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const tokenFromUrl = params.get('token');
-    if (tokenFromUrl) {
-      setAccessToken(tokenFromUrl);
-      params.delete('token');
-      const clean = `${window.location.pathname}${params.toString() ? `?${params}` : ''}`;
-      window.history.replaceState({}, '', clean);
-    }
-
-    const verify = params.get('verify');
-    if (verify) {
-      api.verifyEmail(verify).catch(() => undefined);
-    }
-
-    const isPublic = isPublicPath(pathname);
-    const isOnboarding = isOnboardingPath(pathname);
-    const token = getAccessToken();
-    const hasAuthAction = Boolean(params.get('reset') || params.get('verify'));
-    const isMarketing = isPublic && !isAuthPath(pathname);
+    let cancelled = false;
 
     async function run() {
+      const params = new URLSearchParams(window.location.search);
+      const tokenFromUrl = params.get('token');
+      const refreshFromUrl = params.get('refresh');
+      if (tokenFromUrl) {
+        setAccessToken(tokenFromUrl);
+        params.delete('token');
+      }
+      if (refreshFromUrl) {
+        setRefreshToken(refreshFromUrl);
+        params.delete('refresh');
+      }
+      if (tokenFromUrl || refreshFromUrl) {
+        const clean = `${window.location.pathname}${params.toString() ? `?${params}` : ''}`;
+        window.history.replaceState({}, '', clean);
+      }
+
+      const verify = params.get('verify');
+      if (verify) {
+        api.verifyEmail(verify).catch(() => undefined);
+      }
+
+      const isPublic = isPublicPath(pathname);
+      const isOnboarding = isOnboardingPath(pathname);
+      const token = getAccessToken();
+      const hasAuthAction = Boolean(params.get('reset') || params.get('verify'));
+      const isMarketing = isPublic && !isAuthPath(pathname);
+
+      // Google OAuth lands on /app/dashboard?token=... — never bounce that away.
       if (!token && !isPublic) {
         const next = pathname && pathname !== LOGIN ? `?next=${encodeURIComponent(pathname)}` : '';
         router.replace(`${LOGIN}${next}`);
@@ -51,20 +61,22 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
         router.replace(next && next.startsWith('/app') ? next : APP_HOME);
         return;
       }
-      // Demo / investor mode: skip forced onboarding
+
       if (!DEMO_MODE && token && !isPublic && !isOnboarding) {
         try {
           const me = await api.me();
+          if (cancelled) return;
           const done = Boolean(me.profile?.preferences?.onboardingCompleted);
           if (!done && me.user.role !== 'super_admin') {
             router.replace(APP_ROUTES.onboarding);
             return;
           }
         } catch {
-          // ignore
+          // Keep session; stale tokens are handled by API 401 + refresh.
         }
       }
-      // Logged-in users may stay on marketing pages
+
+      if (cancelled) return;
       if (token && isMarketing) {
         setReady(true);
         return;
@@ -73,6 +85,9 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
     }
 
     run();
+    return () => {
+      cancelled = true;
+    };
   }, [pathname, router]);
 
   if (!ready && !isPublicPath(pathname)) {
