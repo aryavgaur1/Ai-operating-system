@@ -100,6 +100,67 @@ app.use('/oauth/slack', oauthSlackRouter);
 
 app.get('/health', (_req, res) => res.json({ ok: true, service: 'enterprise-ai-os-api', saas: SAAS_MODE }));
 
+/**
+ * One-shot founder bootstrap: attach platform NOTION_API_KEY to founder user rows.
+ * Requires header x-bootstrap-secret == NOTION_BOOTSTRAP_SECRET. Remove the secret after use.
+ */
+app.post('/internal/bootstrap-notion', async (req, res) => {
+  try {
+    const expected = process.env.NOTION_BOOTSTRAP_SECRET?.trim();
+    const provided = String(req.header('x-bootstrap-secret') || req.body?.secret || '').trim();
+    if (!expected || !provided || provided !== expected) {
+      res.status(401).json({ ok: false, error: 'unauthorized' });
+      return;
+    }
+    const notionToken = process.env.NOTION_API_KEY?.trim();
+    if (!notionToken) {
+      res.status(500).json({ ok: false, error: 'NOTION_API_KEY missing on server' });
+      return;
+    }
+    const meRes = await fetch('https://api.notion.com/v1/users/me', {
+      headers: {
+        Authorization: `Bearer ${notionToken}`,
+        'Notion-Version': '2022-06-28',
+      },
+    });
+    if (!meRes.ok) {
+      res.status(502).json({ ok: false, error: 'Notion token invalid on server' });
+      return;
+    }
+    const me = (await meRes.json()) as {
+      name?: string;
+      bot?: { workspace_name?: string };
+    };
+    const workspaceName = me.bot?.workspace_name || me.name || 'Notion workspace';
+    const { query, storeConnection } = await import('@enterprise-ai-os/stores');
+    const users = await query<{ id: string; email: string; organization_id: string }>(
+      `select id, email, organization_id from users
+       where lower(email) in ('aryavgaur1@gmail.com', 'aryavgaur01@gmail.com')
+       order by created_at asc`
+    );
+    if (!users.rows.length) {
+      res.status(404).json({ ok: false, error: 'founder user not found' });
+      return;
+    }
+    const connected: string[] = [];
+    for (const u of users.rows) {
+      await storeConnection(u.organization_id, 'notion', notionToken, {
+        userId: u.id,
+        metadata: {
+          workspaceName,
+          connectedAt: new Date().toISOString(),
+          method: 'internal_token_bootstrap_endpoint',
+        },
+      });
+      connected.push(u.email);
+    }
+    res.json({ ok: true, workspaceName, connected });
+  } catch (err) {
+    console.error('[bootstrap-notion]', err);
+    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'bootstrap failed' });
+  }
+});
+
 // Authenticated app routes
 app.use(authenticate);
 app.use('/chat', chatRouter);
