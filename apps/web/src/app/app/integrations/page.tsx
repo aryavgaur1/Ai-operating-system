@@ -298,9 +298,10 @@ export default function IntegrationsPage() {
       <GlassCard className="p-6 sm:p-7" hoverLift={false}>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h2 className="font-display text-xl font-semibold text-white sm:text-2xl">Notion — connect now</h2>
+            <h2 className="font-display text-xl font-semibold text-white sm:text-2xl">Notion — connect your workspace</h2>
             <p className="mt-2 max-w-2xl text-sm text-neutral-400">
-              Use Connect Notion (OAuth) on try-nexora. After Allow, share at least one page with the integration so Chat can write.
+              Every Nexora user connects their own Notion. Use OAuth (one-click) or paste your Internal Integration secret.
+              After connecting, share at least one page with the integration so Chat can write.
             </p>
           </div>
           <span
@@ -322,19 +323,27 @@ export default function IntegrationsPage() {
         ) : (
           <div className="mt-5 grid gap-4 lg:grid-cols-2">
             <div className="rounded-2xl border border-accent/30 bg-accent/5 p-4">
-              <div className="text-sm font-semibold text-white">Connect Notion (OAuth)</div>
+              <div className="text-sm font-semibold text-white">Option A — Connect Notion (OAuth)</div>
               <p className="mt-2 text-xs leading-5 text-neutral-400">
-                Redirect URI in your Notion Public integration must include exactly:
+                Works for every Nexora account. One-time setup on the Nexora Public Notion app: add this Redirect URI, then click Connect.
               </p>
               <code className="mt-2 block break-all rounded-lg bg-black/40 px-3 py-2 text-[11px] text-neutral-300">
                 https://nexora-api.up.railway.app/oauth/notion/callback
               </code>
+              <a
+                className="mt-2 inline-block text-[11px] text-accent underline"
+                href="https://www.notion.so/my-integrations"
+                target="_blank"
+                rel="noreferrer"
+              >
+                Open Notion integrations → your Public app → OAuth Redirect URIs
+              </a>
               <button
                 type="button"
                 disabled={!notionConnectUrl}
                 onClick={() => {
                   if (notionConnectUrl) window.location.href = notionConnectUrl;
-                  else setError('Notion OAuth URL not available — API is missing NOTION_OAUTH_* env vars');
+                  else setError('Notion OAuth URL not available — sign in again, then retry Connect');
                 }}
                 className="mt-4 rounded-full bg-accent px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
               >
@@ -343,7 +352,10 @@ export default function IntegrationsPage() {
             </div>
 
             <div className="rounded-2xl border border-white/10 bg-black/25 p-4">
-              <div className="text-sm font-semibold text-white">Fallback — Internal token</div>
+              <div className="text-sm font-semibold text-white">Option B — Your Internal Integration token</div>
+              <p className="mt-2 text-xs leading-5 text-neutral-400">
+                Each user can paste their own Notion Internal Integration secret. This connects that user&apos;s workspace only.
+              </p>
               <ol className="mt-3 list-decimal space-y-1.5 pl-4 text-xs leading-5 text-neutral-400">
                 <li>
                   Open{' '}
