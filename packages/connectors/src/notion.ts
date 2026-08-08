@@ -110,11 +110,11 @@ async function resolveParentId(client: Client, explicit?: string): Promise<strin
   if (preferredPage?.id) return preferredPage.id as string;
   if (pages[0]?.id) return pages[0].id as string;
 
+  // Newer Notion SDK typings use data_source; cast + filter keeps DB parents working.
   const dbSearch = await client.search({
-    filter: { property: 'object', value: 'database' },
     page_size: 25,
-  });
-  const databases = (dbSearch.results as any[]) ?? [];
+  } as any);
+  const databases = ((dbSearch.results as any[]) ?? []).filter((d) => d?.object === 'database' || d?.object === 'data_source');
   const preferredDb = databases.find((d) => /nexora/i.test(extractTitle(d)));
   if (preferredDb?.id) return preferredDb.id as string;
   if (databases[0]?.id) return databases[0].id as string;
