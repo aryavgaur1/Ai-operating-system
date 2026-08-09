@@ -86,8 +86,9 @@ async function resolveParentId(client: Client, explicit?: string): Promise<strin
     return fromEnv;
   }
 
-  // If env parent is set in mixed mode, only use it when this token can actually read it.
-  if (fromEnv && !ctx.saasStrict) {
+  // Fast path for founder (or any user whose OAuth token can see the env parent).
+  // Other SaaS users fail this retrieve quickly (object_not_found) and fall through to search.
+  if (fromEnv) {
     try {
       await client.databases.retrieve({ database_id: fromEnv });
       return fromEnv;
@@ -96,7 +97,7 @@ async function resolveParentId(client: Client, explicit?: string): Promise<strin
         await client.pages.retrieve({ page_id: fromEnv });
         return fromEnv;
       } catch {
-        // Fall through to search — common when env ID is founder-only.
+        // Expected for other workspaces — continue to per-user search.
       }
     }
   }

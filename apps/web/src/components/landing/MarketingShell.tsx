@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { SmoothScroll } from '@/components/landing/SmoothScroll';
 import { MarketingNav } from '@/components/landing/MarketingNav';
+import { ChatAssistant } from '@/components/landing/ChatAssistant';
 
 const SHELL_LINKS = [
   { href: '/#features', label: 'Why Nexora' },
@@ -98,6 +99,8 @@ export function MarketingShell({
           © {new Date().getFullYear()} Nexora OS
         </div>
       </footer>
+
+      <ChatAssistant />
     </div>
   );
 }

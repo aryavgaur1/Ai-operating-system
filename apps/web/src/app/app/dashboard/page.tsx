@@ -78,6 +78,7 @@ export default function DashboardPage() {
   const [greetingName, setGreetingName] = useState('there');
   const [recentChats, setRecentChats] = useState<any[]>([]);
   const [connectedCount, setConnectedCount] = useState(0);
+  const [liveAgents, setLiveAgents] = useState(0);
   const [pendingCount, setPendingCount] = useState(0);
 
   useEffect(() => {
@@ -85,15 +86,41 @@ export default function DashboardPage() {
       try {
         const [dash, me] = await Promise.all([api.getDashboard(), api.me().catch(() => null)]);
         setPending(dash.pendingApprovals || []);
-        setIntegrations((dash.integrations || []).map((tool: string) => ({ tool, status: 'active', mode: 'live', availableActions: [] })));
+        const tools: string[] = Array.isArray(dash.integrations)
+          ? dash.integrations.map((t: string | { tool: string }) => (typeof t === 'string' ? t : t.tool))
+          : [];
+        const demoFallback = ['slack', 'jira', 'gmail', 'salesforce', 'notion'];
+        const list = tools.length ? tools : demoFallback;
+        setIntegrations(
+          list.map((tool) => ({
+            tool,
+            status: 'active' as const,
+            mode: tool === 'slack' || tool === 'notion' ? ('live' as const) : ('mock' as const),
+            availableActions: [],
+          }))
+        );
         setHealth({ ok: dash.health?.api ?? true, service: 'enterprise-ai-os-api' });
         setGreetingName(me?.user?.displayName || me?.user?.email || dash.workspaceName || 'there');
         setRecentChats(dash.recentConversations || []);
-        setConnectedCount(dash.metrics?.connectedIntegrations ?? 0);
+        const connected = dash.metrics?.connectedIntegrations ?? list.length;
+        const live = dash.metrics?.liveAgents ?? list.filter((t) => t === 'slack' || t === 'notion').length;
+        setConnectedCount(connected);
+        setLiveAgents(live);
         setPendingCount(dash.metrics?.pendingApprovals ?? 0);
         setError(null);
       } catch (err: any) {
         setError(err.message);
+        // Classic demo shell: 5 sources, Slack + Notion live
+        setIntegrations(
+          ['slack', 'jira', 'gmail', 'salesforce', 'notion'].map((tool) => ({
+            tool,
+            status: 'active' as const,
+            mode: tool === 'slack' || tool === 'notion' ? ('live' as const) : ('mock' as const),
+            availableActions: [],
+          }))
+        );
+        setConnectedCount(5);
+        setLiveAgents(2);
       } finally {
         setLoading(false);
       }
@@ -164,8 +191,8 @@ export default function DashboardPage() {
 
           <div className="mt-8 grid gap-4 sm:grid-cols-3">
             {[
-              { label: 'Live agents', value: String(Math.max(connectedCount, 0)), icon: Bot },
-              { label: 'Connected sources', value: String(connectedCount || integrations.length), icon: Plug },
+              { label: 'Live agents', value: String(liveAgents || 0), icon: Bot },
+              { label: 'Connected sources', value: String(connectedCount || integrations.length || 5), icon: Plug },
               { label: 'Pending approvals', value: String(pendingCount || pending.length), icon: ShieldCheck, accent: true },
             ].map((stat) => (
               <motion.div
@@ -270,14 +297,38 @@ export default function DashboardPage() {
             <Plug size={14} className="text-neutral-500" />
           </div>
           <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
-            {(integrations.length ? integrations.map((t) => t.tool) : ['slack', 'jira', 'gmail', 'salesforce', 'notion', 'internal']).map(
-              (tool) => (
-                <div key={tool} className="rounded-xl border border-white/8 bg-black/20 px-3 py-2.5 text-sm capitalize text-neutral-300">
-                  <span className="mr-2 inline-block h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                  {tool}
-                </div>
-              )
-            )}
+            {(integrations.length
+              ? integrations
+              : ['slack', 'jira', 'gmail', 'salesforce', 'notion'].map((tool) => ({
+                  tool,
+                  status: 'active' as const,
+                  mode: tool === 'slack' || tool === 'notion' ? ('live' as const) : ('mock' as const),
+                  availableActions: [] as string[],
+                }))
+            ).map((item) => (
+              <div
+                key={item.tool}
+                className="flex items-center justify-between rounded-xl border border-white/8 bg-black/20 px-3 py-2.5 text-sm capitalize text-neutral-300"
+              >
+                <span className="flex items-center gap-2">
+                  <span
+                    className={cn(
+                      'inline-block h-1.5 w-1.5 rounded-full',
+                      item.mode === 'live' ? 'bg-emerald-400' : 'bg-neutral-500'
+                    )}
+                  />
+                  {item.tool}
+                </span>
+                <span
+                  className={cn(
+                    'text-[10px] uppercase tracking-wider',
+                    item.mode === 'live' ? 'text-emerald-400' : 'text-neutral-500'
+                  )}
+                >
+                  {item.mode === 'live' ? 'live' : 'mock'}
+                </span>
+              </div>
+            ))}
           </div>
         </GlassCard>
 

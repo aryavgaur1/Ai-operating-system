@@ -30,32 +30,51 @@ dashboardRouter.get(
     ]);
 
     const demoMode = (process.env.SAAS_MODE ?? 'true') !== 'true';
-    // Old demo UX: show all 5 connectors as connected (Slack + Notion live from .env; others mock)
+    const slackLive = Boolean(process.env.SLACK_BOT_TOKEN?.trim());
+    const notionLive = Boolean(process.env.NOTION_API_KEY?.trim());
+    // Old demo UX: always show all 5 connectors (Slack + Notion live from .env; others mock)
     const connected = demoMode
       ? (['slack', 'jira', 'gmail', 'salesforce', 'notion'] as string[])
       : connections.filter((c) => c.status === 'active').map((c) => c.tool);
 
+    // Guarantee classic shell numbers when tokens exist even if OAuth rows are empty
+    const connectedCount = demoMode
+      ? 5
+      : Math.max(
+          connected.length,
+          [slackLive && 'slack', notionLive && 'notion'].filter(Boolean).length
+        );
+
     const liveCount = demoMode
-      ? [process.env.SLACK_BOT_TOKEN?.trim(), process.env.NOTION_API_KEY?.trim()].filter(Boolean).length
-      : connected.length;
+      ? [slackLive, notionLive].filter(Boolean).length || 2
+      : [slackLive, notionLive].filter(Boolean).length || connected.length;
 
     ok(res, {
       workspaceName: org.rows[0]?.name ?? 'Workspace',
       metrics: {
         pendingApprovals: pending.length,
         recentConversations: conversations.rows.length,
-        connectedIntegrations: connected.length,
+        connectedIntegrations: connectedCount,
         liveAgents: liveCount,
       },
       pendingApprovals: pending.slice(0, 5),
       recentConversations: conversations.rows,
-      integrations: connected,
+      integrations: connected.length ? connected : demoMode ? ['slack', 'jira', 'gmail', 'salesforce', 'notion'] : connected,
       activity: activity.rows,
       health: {
         api: true,
         database: Boolean(process.env.DATABASE_URL),
         chat: true,
         approvals: true,
+      },
+      liveTools: {
+        slack: slackLive || demoMode,
+        notion: notionLive || demoMode,
+      },
+      os: {
+        pipeline: 'intent→plan→preflight→execute→verify→heal→memory→log',
+        connectedShell: connectedCount,
+        liveAgents: liveCount,
       },
     });
   })

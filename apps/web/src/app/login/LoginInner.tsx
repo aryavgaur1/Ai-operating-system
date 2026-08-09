@@ -27,6 +27,10 @@ export default function LoginInner() {
         .then(() => setInfo('Email verified. You can sign in.'))
         .catch((e) => setError(e.message));
     }
+    const oauthError = search.get('error');
+    if (oauthError) {
+      setError(oauthError);
+    }
   }, [resetToken, search]);
 
   async function onSubmit(e: FormEvent) {

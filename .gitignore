@@ -1,5 +1,8 @@
-﻿node_modules/
+node_modules/
 dist/
 .next/
 .env
 *.log
+apps/api/data/
+.npm-cache/
+*.tsbuildinfo

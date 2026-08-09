@@ -1,5 +1,6 @@
 import { Router, type Request, type Response, type NextFunction } from 'express';
-import { isLiveMode, slackService, SlackServiceError } from '@enterprise-ai-os/connectors';
+import { isLiveMode, slackService, SlackServiceError, runWithConnectorContext } from '@enterprise-ai-os/connectors';
+import { runAgentTurn } from '@enterprise-ai-os/agent-core';
 import {
   getSlackInstallation,
   upsertSlackInstallation,
@@ -7,7 +8,7 @@ import {
   listSlackEvents,
   logSlackAction,
 } from '@enterprise-ai-os/stores';
-import { handleWebhookEvent } from '../ingestion/pipeline';
+import { handleWebhookEvent, getStores } from '../ingestion/pipeline';
 import { getDemoOrgId } from '../middleware/auth';
 import { asyncHandler, ok, fail, AppError } from '../lib/errors';
 import { logger } from '../lib/logger';
@@ -371,6 +372,54 @@ slackEventsRouter.post(
           logger.error('slack.events.ingest_failed', {
             message: err instanceof Error ? err.message : String(err),
           });
+        }
+      }
+
+      // Slack Agent Mode: @nexora mentions → reason → plan → execute → reply in-thread
+      if (eventType === 'app_mention' && event.text && event.channel && !event.bot_id) {
+        const mentionText = String(event.text).replace(/<@[A-Z0-9]+>/g, '').trim();
+        if (mentionText) {
+          void (async () => {
+            const started = Date.now();
+            try {
+              if (isLiveMode('slack') && process.env.SLACK_BOT_TOKEN?.trim()) {
+                slackService.initializeClient();
+              }
+              const { vectorStore, graphStore } = getStores();
+              const orgId = getDemoOrgId();
+              const result = await runWithConnectorContext({ organizationId: orgId }, () =>
+                runAgentTurn(mentionText, orgId, vectorStore, graphStore)
+              );
+              await slackService.postMessage({
+                channel: String(event.channel),
+                text: result.reply.slice(0, 3500) || 'Done.',
+                threadTs: event.thread_ts || event.ts,
+              });
+              await logSlackAction({
+                organizationId: orgId,
+                action: 'app_mention_agent',
+                payload: {
+                  text: mentionText,
+                  executed: result.executedCalls.map((c) => ({ action: c.action, ok: c.ok })),
+                },
+                status: 'ok',
+                executionTimeMs: Date.now() - started,
+              });
+            } catch (err) {
+              logger.error('slack.app_mention_agent_failed', {
+                message: err instanceof Error ? err.message : String(err),
+              });
+              try {
+                await slackService.postMessage({
+                  channel: String(event.channel),
+                  text: `I hit an error running that: ${err instanceof Error ? err.message : String(err)}`,
+                  threadTs: event.thread_ts || event.ts,
+                });
+              } catch {
+                // ignore secondary failure
+              }
+            }
+          })();
         }
       }
 

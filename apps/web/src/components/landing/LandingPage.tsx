@@ -24,6 +24,8 @@ import { WhyNexora } from '@/components/landing/WhyNexora';
 import { MarketingNav } from '@/components/landing/MarketingNav';
 import { TestimonialsSlider } from '@/components/landing/TestimonialsSlider';
 import { AnalysisDashboard } from '@/components/landing/AnalysisDashboard';
+import { ChatAssistant } from '@/components/landing/ChatAssistant';
+import { FounderDesk } from '@/components/landing/FounderDesk';
 import { cn } from '@/lib/utils';
 
 const INTEGRATIONS = LANDING_TOOLS.map((t) => t.name);
@@ -547,6 +549,8 @@ export function LandingPage() {
         </motion.div>
       </section>
 
+      <FounderDesk />
+
       {/* Footer */}
       <footer className="border-t border-white/5 py-14">
         <div className="mx-auto grid max-w-7xl gap-10 px-4 sm:px-6 md:grid-cols-4">
@@ -573,6 +577,8 @@ export function LandingPage() {
           © {new Date().getFullYear()} Nexora OS
         </div>
       </footer>
+
+      <ChatAssistant />
     </div>
   );
 }

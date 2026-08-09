@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   Check,
@@ -9,6 +10,7 @@ import {
   Mic,
   Quote,
   Send,
+  ShieldAlert,
   Sparkles,
   Terminal,
   Wand2,
@@ -17,6 +19,7 @@ import { api, type AgentTurnResult } from '@/lib/api';
 import { GlassCard, Reveal } from '@/components/motion';
 import { MarkdownLite } from '@/components/MarkdownLite';
 import { cn } from '@/lib/utils';
+import { APP_ROUTES } from '@/lib/routes';
 
 interface Turn {
   role: 'user' | 'assistant';
@@ -249,6 +252,15 @@ export default function ChatPage() {
                               </div>
                             ))}
                           </div>
+                          {turn.detail.pendingApprovalIds?.length > 0 && (
+                            <Link
+                              href={APP_ROUTES.approvals}
+                              className="mt-3 inline-flex items-center gap-2 rounded-full border border-amber-400/30 bg-amber-400/10 px-3.5 py-1.5 text-xs font-medium text-amber-200 hover:bg-amber-400/15"
+                            >
+                              <ShieldAlert size={12} />
+                              Open Approvals — Approve &amp; run ({turn.detail.pendingApprovalIds.length})
+                            </Link>
+                          )}
                         </div>
                       )}
                     </div>

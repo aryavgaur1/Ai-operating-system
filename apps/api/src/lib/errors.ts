@@ -46,7 +46,24 @@ export function errorMiddleware(err: unknown, req: Request, res: Response, _next
     return fail(res, err.message, err.statusCode);
   }
 
-  const message = err instanceof Error ? err.message : String(err);
+  const anyErr = err as Error & { code?: string };
+  const raw = err instanceof Error ? err.message : String(err);
+  const isDbDown =
+    anyErr?.code === 'ECONNREFUSED' ||
+    /ECONNREFUSED/i.test(raw) ||
+    (!raw.trim() && err instanceof Error && /AggregateError/i.test(err.name));
+
+  if (isDbDown) {
+    logger.error('request.db_offline', { path: req.path });
+    return fail(
+      res,
+      'Database is offline. Start Postgres with: docker compose up -d',
+      503,
+      'database_unavailable'
+    );
+  }
+
+  const message = raw.trim() || 'internal_error';
   logger.error('request.unhandled_error', { path: req.path, message, stack: err instanceof Error ? err.stack : undefined });
   return fail(res, 'Something went wrong. Please try again.', 500, 'internal_server_error');
 }
