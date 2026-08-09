@@ -1,8 +1,8 @@
-# Root pointer — web app lives in apps/web
+# Build from monorepo git root. Avoid "cd ../.." — with some CLI/filter layouts that
+# escapes the repo and npm ci fails (no package-lock) in ~30s.
 [build]
-  base = "apps/web"
-  command = "cd ../.. && npm ci && npm run build -w apps/web"
-  publish = ".next"
+  command = "ROOT=$(git rev-parse --show-toplevel) && cd \"$ROOT\" && npm ci && npm run build -w apps/web"
+  publish = "apps/web/.next"
 
 [[plugins]]
   package = "@netlify/plugin-nextjs"
