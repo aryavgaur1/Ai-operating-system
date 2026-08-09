@@ -117,11 +117,11 @@ const LOGOS: Record<ToolId, (props: { className?: string }) => JSX.Element> = {
 };
 
 const DEFAULT_ENABLED: Record<ToolId, boolean> = {
-  slack: true,
-  jira: true,
+  slack: false,
+  jira: false,
   gmail: false,
-  salesforce: true,
-  notion: true,
+  salesforce: false,
+  notion: false,
 };
 
 function SmoothToggle({
@@ -205,7 +205,11 @@ export default function IntegrationsPage() {
 
   async function toggle(tool: ToolId) {
     if (busy) return;
-    const turningOn = !enabled[tool];
+    const row = meta[tool];
+    const isOauthTool = tool === 'slack' || tool === 'notion' || tool === 'jira';
+    const actuallyConnected = row?.status === 'active';
+    // If OAuth tool isn't really connected, always start Connect (ignore stale ON UI).
+    const turningOn = isOauthTool ? !actuallyConnected : !enabled[tool];
 
     // Optimistic UI — never wait on API to feel the switch
     setEnabled((prev) => ({ ...prev, [tool]: turningOn }));
@@ -214,17 +218,15 @@ export default function IntegrationsPage() {
     setInfo(null);
 
     try {
-      const row = meta[tool];
       if (turningOn) {
-        // Always redirect Slack/Notion/Jira to real OAuth when possible
-        if (tool === 'slack' || tool === 'notion' || tool === 'jira') {
+        if (isOauthTool) {
           const url = row?.connectUrl || oauthConnectUrl(tool);
           if (url) {
             window.location.href = url;
             return;
           }
           if (!getAccessToken()) {
-            setError('Please sign in again, then toggle Slack/Notion/Jira to connect.');
+            setError('Please sign in again, then toggle to connect.');
             setEnabled((prev) => ({ ...prev, [tool]: false }));
             return;
           }
@@ -232,10 +234,14 @@ export default function IntegrationsPage() {
           setEnabled((prev) => ({ ...prev, [tool]: false }));
           return;
         }
-        // Other tools stay local/demo until wired
+        setError(`${tool} Connect is not live yet — Slack, Notion, and Jira are available now.`);
+        setEnabled((prev) => ({ ...prev, [tool]: false }));
+        return;
       } else {
         try {
           await api.disconnectIntegration(tool);
+          setInfo(`${tool} disconnected`);
+          await refresh();
         } catch {
           // ignore — UI already reflects OFF
         }
@@ -272,6 +278,8 @@ export default function IntegrationsPage() {
 
   const notionActive = enabled.notion && meta.notion?.status === 'active';
   const notionConnectUrl = meta.notion?.connectUrl;
+  const jiraActive = meta.jira?.status === 'active';
+  const jiraConnectUrl = meta.jira?.connectUrl || oauthConnectUrl('jira');
 
   return (
     <div className="space-y-6 pb-10">
@@ -394,6 +402,62 @@ export default function IntegrationsPage() {
       </GlassCard>
 
       <GlassCard className="p-6 sm:p-7" hoverLift={false}>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="font-display text-xl font-semibold text-white sm:text-2xl">Jira — connect your site</h2>
+            <p className="mt-2 max-w-2xl text-sm text-neutral-400">
+              Connect your Atlassian Jira Cloud site so Chat can create tickets, comment, and transition issues.
+            </p>
+          </div>
+          <span
+            className={cn(
+              'rounded-full px-3 py-1 text-[11px] uppercase tracking-[0.18em]',
+              jiraActive ? 'bg-emerald-400/15 text-emerald-300' : 'border border-white/10 bg-white/5 text-neutral-400'
+            )}
+          >
+            {jiraActive ? 'Connected' : 'Not connected'}
+          </span>
+        </div>
+
+        {jiraActive ? (
+          <div className="mt-5 rounded-2xl border border-emerald-400/20 bg-emerald-400/5 p-4 text-sm text-emerald-200">
+            Jira is live for this account
+            {meta.jira?.workspaceName ? ` · ${meta.jira.workspaceName}` : ''}.
+          </div>
+        ) : (
+          <div className="mt-5 rounded-2xl border border-accent/30 bg-accent/5 p-4">
+            <p className="text-xs leading-5 text-neutral-400">
+              Uses your Atlassian OAuth app. Callback must be
+              <code className="mx-1 text-neutral-300">https://nexora-api.up.railway.app/oauth/jira/callback</code>
+            </p>
+            <button
+              type="button"
+              disabled={!jiraConnectUrl}
+              onClick={() => {
+                if (jiraConnectUrl) window.location.href = jiraConnectUrl;
+                else setError('Jira OAuth URL not available — sign in again, then retry Connect');
+              }}
+              className="mt-4 rounded-full bg-accent px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
+            >
+              Connect Jira
+            </button>
+          </div>
+        )}
+        {jiraActive && (
+          <button
+            type="button"
+            disabled={!jiraConnectUrl}
+            onClick={() => {
+              if (jiraConnectUrl) window.location.href = jiraConnectUrl;
+            }}
+            className="mt-4 rounded-full border border-white/15 bg-white/5 px-4 py-2 text-sm text-white disabled:opacity-40"
+          >
+            Reconnect Jira
+          </button>
+        )}
+      </GlassCard>
+
+      <GlassCard className="p-6 sm:p-7" hoverLift={false}>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h2 className="font-display text-xl font-semibold text-accent sm:text-2xl">Integration framework</h2>
           <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-neutral-400">
@@ -403,9 +467,11 @@ export default function IntegrationsPage() {
 
         <div className="mt-6 grid grid-cols-1 gap-3 md:grid-cols-2">
           {CATALOG.map((item) => {
-            const active = enabled[item.tool];
+            const connected = meta[item.tool]?.status === 'active';
+            const active = connected || enabled[item.tool];
             const Logo = LOGOS[item.tool];
             const mode = meta[item.tool]?.mode ?? 'mock';
+            const canConnect = Boolean(meta[item.tool]?.canConnect);
             return (
               <motion.div
                 key={item.tool}
@@ -423,22 +489,26 @@ export default function IntegrationsPage() {
                     <span
                       className={cn(
                         'rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide transition-colors duration-300',
-                        active ? 'bg-emerald-400/15 text-emerald-300' : 'bg-white/5 text-neutral-500'
+                        connected ? 'bg-emerald-400/15 text-emerald-300' : 'bg-white/5 text-neutral-500'
                       )}
                     >
-                      {active ? 'Online' : 'Offline'}
+                      {connected ? 'Online' : 'Offline'}
                     </span>
                     <span
                       className={cn(
                         'text-[10px] uppercase tracking-wide',
-                        mode === 'live' ? 'text-emerald-400/90' : 'text-neutral-600'
+                        connected && mode === 'live'
+                          ? 'text-emerald-400/90'
+                          : mode === 'live'
+                            ? 'text-amber-300/80'
+                            : 'text-neutral-600'
                       )}
                     >
-                      {mode}
+                      {connected ? mode : mode === 'live' ? 'ready' : mode}
                     </span>
                   </div>
                   <p className="mt-0.5 line-clamp-2 text-sm text-neutral-400">{item.description}</p>
-                  {meta[item.tool]?.workspaceName && (
+                  {meta[item.tool]?.workspaceName && connected && (
                     <p className="mt-1 text-[11px] text-neutral-500">
                       Workspace: {meta[item.tool].workspaceName}
                       {meta[item.tool].connectedAt
@@ -449,12 +519,15 @@ export default function IntegrationsPage() {
                         : ''}
                     </p>
                   )}
-                  {!active && meta[item.tool]?.canConnect && (
-                    <p className="mt-1 text-[11px] text-amber-300/90">Not connected — toggle on to Connect</p>
+                  {!connected && canConnect && (
+                    <p className="mt-1 text-[11px] text-amber-300/90">Not connected — toggle on or use Connect button</p>
+                  )}
+                  {!connected && !canConnect && (item.tool === 'gmail' || item.tool === 'salesforce') && (
+                    <p className="mt-1 text-[11px] text-neutral-500">Coming soon</p>
                   )}
                 </div>
                 <SmoothToggle
-                  checked={active}
+                  checked={connected}
                   busy={busy === item.tool}
                   onChange={() => toggle(item.tool)}
                 />
