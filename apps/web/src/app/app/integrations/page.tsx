@@ -321,71 +321,76 @@ export default function IntegrationsPage() {
             In Notion, open any page → ··· → Connections → add your integration, or it can&apos;t write.
           </div>
         ) : (
-          <div className="mt-5 grid gap-4 lg:grid-cols-2">
-            <div className="rounded-2xl border border-accent/30 bg-accent/5 p-4">
-              <div className="text-sm font-semibold text-white">Option A — Connect Notion (OAuth)</div>
-              <p className="mt-2 text-xs leading-5 text-neutral-400">
-                Works for every Nexora account. One-time setup on the Nexora Public Notion app: add this Redirect URI, then click Connect.
-              </p>
-              <code className="mt-2 block break-all rounded-lg bg-black/40 px-3 py-2 text-[11px] text-neutral-300">
-                https://nexora-api.up.railway.app/oauth/notion/callback
-              </code>
-              <a
-                className="mt-2 inline-block text-[11px] text-accent underline"
-                href="https://www.notion.so/my-integrations"
-                target="_blank"
-                rel="noreferrer"
-              >
-                Open Notion integrations → your Public app → OAuth Redirect URIs
-              </a>
-              <button
-                type="button"
-                disabled={!notionConnectUrl}
-                onClick={() => {
-                  if (notionConnectUrl) window.location.href = notionConnectUrl;
-                  else setError('Notion OAuth URL not available — sign in again, then retry Connect');
-                }}
-                className="mt-4 rounded-full bg-accent px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
-              >
-                Connect Notion
-              </button>
-            </div>
-
-            <div className="rounded-2xl border border-white/10 bg-black/25 p-4">
-              <div className="text-sm font-semibold text-white">Option B — Your Internal Integration token</div>
-              <p className="mt-2 text-xs leading-5 text-neutral-400">
-                Each user can paste their own Notion Internal Integration secret. This connects that user&apos;s workspace only.
-              </p>
-              <ol className="mt-3 list-decimal space-y-1.5 pl-4 text-xs leading-5 text-neutral-400">
-                <li>
-                  Open{' '}
-                  <a className="text-accent underline" href="https://www.notion.so/my-integrations" target="_blank" rel="noreferrer">
-                    notion.so/my-integrations
-                  </a>
-                </li>
-                <li>New integration → type <strong className="text-neutral-200">Internal</strong></li>
-                <li>Copy the secret (<code className="text-neutral-300">secret_…</code> or <code className="text-neutral-300">ntn_…</code>)</li>
-                <li>Paste below → Save</li>
-                <li>In Notion: share target pages/databases with that integration</li>
-              </ol>
-              <input
-                className="mt-4 w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2.5 text-sm text-white outline-none focus:border-accent/40"
-                value={notionToken}
-                onChange={(e) => setNotionToken(e.target.value)}
-                placeholder="secret_… or ntn_…"
-                autoComplete="off"
-              />
-              <button
-                type="button"
-                disabled={savingNotion || !notionToken.trim()}
-                onClick={saveNotionToken}
-                className="mt-3 rounded-full border border-white/15 bg-white/5 px-4 py-2 text-sm text-white disabled:opacity-50"
-              >
-                {savingNotion ? 'Connecting…' : 'Save Notion token'}
-              </button>
-            </div>
+          <div className="mt-5 rounded-2xl border border-amber-400/25 bg-amber-400/5 p-4 text-xs leading-5 text-amber-100/90">
+            If <strong className="text-amber-50">Connect Notion</strong> sticks on Notion&apos;s &quot;Authorizing…&quot; screen, that is a Notion hang for the
+            Public integration owner — other users can still OAuth fine. Use <strong className="text-amber-50">Option B</strong> below (Internal secret) for your account.
           </div>
         )}
+
+        <div className="mt-5 grid gap-4 lg:grid-cols-2">
+          <div className="rounded-2xl border border-accent/30 bg-accent/5 p-4">
+            <div className="text-sm font-semibold text-white">
+              {notionActive ? 'Reconnect Notion (OAuth)' : 'Option A — Connect Notion (OAuth)'}
+            </div>
+            <p className="mt-2 text-xs leading-5 text-neutral-400">
+              Works for customer accounts. If you created the Public Notion app, OAuth can hang on Authorizing for your own workspace — use Option B.
+            </p>
+            <code className="mt-2 block break-all rounded-lg bg-black/40 px-3 py-2 text-[11px] text-neutral-300">
+              https://nexora-api.up.railway.app/oauth/notion/callback
+            </code>
+            <button
+              type="button"
+              disabled={!notionConnectUrl && !oauthConnectUrl('notion')}
+              onClick={() => {
+                const url = notionConnectUrl || oauthConnectUrl('notion');
+                if (url) window.location.href = url;
+                else setError('Notion OAuth URL not available — sign in again, then retry Connect');
+              }}
+              className="mt-4 rounded-full bg-accent px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
+            >
+              {notionActive ? 'Reconnect Notion' : 'Connect Notion'}
+            </button>
+          </div>
+
+          <div className="rounded-2xl border border-white/10 bg-black/25 p-4">
+            <div className="text-sm font-semibold text-white">Option B — Your Internal Integration token</div>
+            <p className="mt-2 text-xs leading-5 text-neutral-400">
+              Recommended if you own the Public Notion app. Paste your Internal Integration secret — no OAuth popup.
+            </p>
+            <ol className="mt-3 list-decimal space-y-1.5 pl-4 text-xs leading-5 text-neutral-400">
+              <li>
+                Open{' '}
+                <a className="text-accent underline" href="https://www.notion.so/my-integrations" target="_blank" rel="noreferrer">
+                  notion.so/my-integrations
+                </a>
+              </li>
+              <li>
+                Open / create an <strong className="text-neutral-200">Internal</strong> integration (not the Public OAuth app)
+              </li>
+              <li>
+                Copy <strong className="text-neutral-200">Internal Integration Secret</strong> (
+                <code className="text-neutral-300">secret_…</code> or <code className="text-neutral-300">ntn_…</code>)
+              </li>
+              <li>Paste below → Save</li>
+              <li>In Notion: share target pages with that Internal integration</li>
+            </ol>
+            <input
+              className="mt-4 w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2.5 text-sm text-white outline-none focus:border-accent/40"
+              value={notionToken}
+              onChange={(e) => setNotionToken(e.target.value)}
+              placeholder="secret_… or ntn_…"
+              autoComplete="off"
+            />
+            <button
+              type="button"
+              disabled={savingNotion || !notionToken.trim()}
+              onClick={saveNotionToken}
+              className="mt-3 rounded-full border border-white/15 bg-white/5 px-4 py-2 text-sm text-white disabled:opacity-50"
+            >
+              {savingNotion ? 'Connecting…' : 'Save Notion token'}
+            </button>
+          </div>
+        </div>
       </GlassCard>
 
       <GlassCard className="p-6 sm:p-7" hoverLift={false}>
