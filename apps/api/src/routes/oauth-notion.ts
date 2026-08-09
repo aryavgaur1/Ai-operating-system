@@ -1,17 +1,51 @@
 import crypto from 'crypto';
 import { Router } from 'express';
 import jwt from 'jsonwebtoken';
-import { storeConnection } from '@enterprise-ai-os/stores';
+import { storeConnection, query } from '@enterprise-ai-os/stores';
 import { webAppUrl } from '../lib/authTokens';
 import { getJwtSecret } from '../middleware/auth';
+import { isFounderNotionEmail } from '../lib/platformAdmin';
 
 // ============================================================
 // Notion OAuth (Public connection) — per-user tokens in Postgres.
 // See OAUTH_ROOT_CAUSE_ANALYSIS.md: Allow→redirect failures are usually
 // redirect URI / DNS / tunnel / API reachability — not this handler.
+// Founder (Public app owner): Notion often hangs on Authorizing…;
+// /start auto-attaches NOTION_API_KEY for founder emails when available.
 // ============================================================
 
 export const oauthNotionRouter = Router();
+
+async function attachPlatformNotionToken(userId: string, organizationId: string): Promise<{ workspaceName: string } | null> {
+  const notionToken = process.env.NOTION_API_KEY?.trim();
+  if (!notionToken) return null;
+
+  const meRes = await fetch('https://api.notion.com/v1/users/me', {
+    headers: {
+      Authorization: `Bearer ${notionToken}`,
+      'Notion-Version': '2022-06-28',
+    },
+  });
+  if (!meRes.ok) {
+    oauthLog('founder_platform_token_invalid', { status: meRes.status });
+    return null;
+  }
+  const me = (await meRes.json()) as {
+    name?: string | null;
+    bot?: { workspace_name?: string; workspace_id?: string };
+  };
+  const workspaceName = me.bot?.workspace_name || me.name || 'Notion workspace';
+  await storeConnection(organizationId, 'notion', notionToken, {
+    userId,
+    metadata: {
+      workspaceName,
+      workspaceId: me.bot?.workspace_id,
+      connectedAt: new Date().toISOString(),
+      method: 'founder_platform_token_auto',
+    },
+  });
+  return { workspaceName };
+}
 
 function oauthDebugEnabled(): boolean {
   return (process.env.OAUTH_DEBUG ?? '').toLowerCase() === 'true';
@@ -169,6 +203,39 @@ oauthNotionRouter.get('/start', async (req, res) => {
     oauthLog('start_invalid_session', {});
     res.status(401).json({ error: 'Invalid or expired session' });
     return;
+  }
+
+  // Founder / Public-app owner: Notion often forces re-login + hangs on Authorizing.
+  // Attach platform Internal token immediately so Connect works on the owner's PC.
+  try {
+    const userRow = await query<{ email: string }>(`select email from users where id = $1 limit 1`, [payload.sub]);
+    const email = userRow.rows[0]?.email;
+    if (isFounderNotionEmail(email)) {
+      const forceOAuth = String(req.query.force_oauth ?? '').toLowerCase() === '1';
+      if (!forceOAuth) {
+        const attached = await attachPlatformNotionToken(payload.sub, payload.org);
+        if (attached) {
+          oauthLog('founder_platform_connect_success', {
+            userId: payload.sub,
+            email,
+            workspace: attached.workspaceName,
+          });
+          res.redirect(
+            `${webAppUrl()}/app/integrations?connected=notion&method=founder_platform&workspace=${encodeURIComponent(attached.workspaceName)}`
+          );
+          return;
+        }
+        oauthLog('founder_platform_connect_fallback_oauth', {
+          userId: payload.sub,
+          email,
+          hint: 'NOTION_API_KEY missing/invalid — continuing to public OAuth',
+        });
+      }
+    }
+  } catch (err) {
+    oauthLog('founder_platform_connect_error', {
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 
   const clientId = process.env.NOTION_OAUTH_CLIENT_ID?.trim();
