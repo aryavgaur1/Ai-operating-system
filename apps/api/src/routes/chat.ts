@@ -1,6 +1,11 @@
 import { Router } from 'express';
 import { runAgentTurn } from '@enterprise-ai-os/agent-core';
-import { getAccessToken, getSlackUserToken, touchConnectionLastUsed } from '@enterprise-ai-os/stores';
+import {
+  getAccessToken,
+  getConnectionDetails,
+  getSlackUserToken,
+  touchConnectionLastUsed,
+} from '@enterprise-ai-os/stores';
 import {
   runWithConnectorContext,
   slackService,
@@ -30,6 +35,9 @@ chatRouter.post(
     let slackBotToken: string | undefined;
     let slackUserToken: string | undefined;
     let notionToken: string | undefined;
+    let jiraToken: string | undefined;
+    let jiraCloudId: string | undefined;
+    let jiraSiteUrl: string | undefined;
 
     // Demo/admin: always use shared .env Slack/Notion (investor demo / pre-SaaS)
     if (demoMode) {
@@ -80,6 +88,23 @@ chatRouter.post(
       } catch {
         // leave disconnected
       }
+
+      try {
+        jiraToken = await getAccessToken(user.organizationId, 'jira', user.id);
+        if (jiraToken) {
+          const details = await getConnectionDetails(user.organizationId, user.id);
+          const jira = details.find((d) => d.tool === 'jira' && d.status === 'active');
+          const meta = jira?.metadata ?? {};
+          jiraCloudId =
+            (typeof meta.cloudId === 'string' && meta.cloudId) ||
+            (typeof meta.workspaceId === 'string' && meta.workspaceId) ||
+            undefined;
+          jiraSiteUrl = typeof meta.siteUrl === 'string' ? meta.siteUrl : undefined;
+          void touchConnectionLastUsed(user.organizationId, 'jira', user.id);
+        }
+      } catch {
+        // leave disconnected
+      }
     }
 
     const result = await runWithConnectorContext(
@@ -89,6 +114,9 @@ chatRouter.post(
         slackBotToken,
         slackUserToken,
         notionToken,
+        jiraToken,
+        jiraCloudId,
+        jiraSiteUrl,
         saasStrict: !demoMode,
       },
       () => runAgentTurn(message, user.organizationId, vectorStore, graphStore, user.id)

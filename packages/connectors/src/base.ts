@@ -1,5 +1,5 @@
 import type { ToolCallResult, ToolName } from '@enterprise-ai-os/shared';
-import { hasNotionTokenInContext, hasSlackTokenInContext } from './context';
+import { hasJiraTokenInContext, hasNotionTokenInContext, hasSlackTokenInContext } from './context';
 
 // ============================================================
 // ToolConnector — the common interface every third-party
@@ -60,6 +60,7 @@ export function simulateLatency(minMs = 150, maxMs = 500): Promise<void> {
 export function isLiveMode(tool?: ToolName): boolean {
   if (tool === 'slack' && hasSlackTokenInContext()) return true;
   if (tool === 'notion' && hasNotionTokenInContext()) return true;
+  if (tool === 'jira' && hasJiraTokenInContext()) return true;
 
   if (tool === 'slack' && process.env.SLACK_BOT_TOKEN?.trim()) {
     const override = process.env.SLACK_MODE;

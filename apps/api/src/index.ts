@@ -16,6 +16,7 @@ import { authRouter } from './routes/auth';
 import { adminRouter } from './routes/admin';
 import { oauthNotionRouter } from './routes/oauth-notion';
 import { oauthSlackRouter } from './routes/oauth-slack';
+import { oauthJiraRouter } from './routes/oauth-jira';
 import { conversationsRouter } from './routes/conversations';
 import { dashboardRouter } from './routes/dashboard';
 import { errorMiddleware } from './lib/errors';
@@ -97,6 +98,7 @@ app.use('/integrations/slack/events', slackEventsRouter);
 app.use('/auth', authLimiter, authRouter);
 app.use('/oauth/notion', oauthNotionRouter);
 app.use('/oauth/slack', oauthSlackRouter);
+app.use('/oauth/jira', oauthJiraRouter);
 
 app.get('/health', (_req, res) => res.json({ ok: true, service: 'enterprise-ai-os-api', saas: SAAS_MODE }));
 

@@ -6,6 +6,7 @@ import {
   getConnectorContext,
   hasSlackTokenInContext,
   hasNotionTokenInContext,
+  hasJiraTokenInContext,
 } from '@enterprise-ai-os/connectors';
 
 // ============================================================
@@ -165,6 +166,21 @@ export async function preflightToolCall(call: ToolCall): Promise<PreflightResult
     if (!input.title && (call.action.startsWith('create') || call.action === 'createPage')) {
       input.title = `Nexora Note ${new Date().toISOString().slice(0, 10)}`;
       healActions.push('inferred_notion_title');
+    }
+  }
+
+  if (call.tool === 'jira') {
+    if (!hasJiraTokenInContext()) {
+      return {
+        ok: false,
+        input,
+        healActions,
+        fatal: 'Jira is not connected for this workspace. Open Integrations → Connect Jira, then ask again.',
+      };
+    }
+    if (!input.summary && (call.action === 'createIssue' || call.action.startsWith('create'))) {
+      input.summary = `Nexora task ${new Date().toISOString().slice(0, 10)}`;
+      healActions.push('inferred_jira_summary');
     }
   }
 

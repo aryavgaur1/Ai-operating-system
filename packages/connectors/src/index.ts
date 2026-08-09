@@ -21,6 +21,7 @@ export {
   getConnectorContext,
   hasSlackTokenInContext,
   hasNotionTokenInContext,
+  hasJiraTokenInContext,
 } from './context';
 
 export const connectorRegistry: Record<ToolName, ToolConnector> = {

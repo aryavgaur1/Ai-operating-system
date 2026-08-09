@@ -7,6 +7,9 @@ export interface ConnectorContext {
   slackBotToken?: string;
   slackUserToken?: string;
   notionToken?: string;
+  jiraToken?: string;
+  jiraCloudId?: string;
+  jiraSiteUrl?: string;
   /** When true, never fall back to platform .env tokens. */
   saasStrict?: boolean;
 }
@@ -33,4 +36,11 @@ export function hasNotionTokenInContext(): boolean {
   if (ctx.notionToken?.trim()) return true;
   if (ctx.saasStrict) return false;
   return Boolean(process.env.NOTION_API_KEY?.trim());
+}
+
+export function hasJiraTokenInContext(): boolean {
+  const ctx = getConnectorContext();
+  if (ctx.jiraToken?.trim() && ctx.jiraCloudId?.trim()) return true;
+  if (ctx.saasStrict) return false;
+  return false;
 }

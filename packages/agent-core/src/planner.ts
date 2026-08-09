@@ -64,11 +64,17 @@ const TOOL_RULES: ToolRule[] = [
     tool: 'jira',
     action: 'createIssue',
     keywords: ['jira', 'ticket', 'issue', 'task'],
-    buildInput: (query) => ({
-      project: 'PHX',
-      summary: query.slice(0, 100),
-      description: query,
-    }),
+    buildInput: (query) => {
+      const titled =
+        query.match(/(?:titled|called|named)\s+["']?([^"'\n.]+)["']?/i)?.[1]?.trim() ||
+        query.match(/create (?:a )?(?:jira )?(?:ticket|issue|task)(?: for| about)?\s+(.+)/i)?.[1]?.trim();
+      const summary = (titled || query.replace(/\bjira\b/gi, '').trim() || query).slice(0, 100);
+      return {
+        project: process.env.JIRA_DEFAULT_PROJECT || undefined,
+        summary,
+        description: query,
+      };
+    },
   },
   {
     tool: 'slack',

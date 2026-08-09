@@ -216,15 +216,15 @@ export default function IntegrationsPage() {
     try {
       const row = meta[tool];
       if (turningOn) {
-        // Always redirect Slack/Notion to real OAuth when possible
-        if (tool === 'slack' || tool === 'notion') {
+        // Always redirect Slack/Notion/Jira to real OAuth when possible
+        if (tool === 'slack' || tool === 'notion' || tool === 'jira') {
           const url = row?.connectUrl || oauthConnectUrl(tool);
           if (url) {
             window.location.href = url;
             return;
           }
           if (!getAccessToken()) {
-            setError('Please sign in again, then toggle Slack/Notion to connect.');
+            setError('Please sign in again, then toggle Slack/Notion/Jira to connect.');
             setEnabled((prev) => ({ ...prev, [tool]: false }));
             return;
           }

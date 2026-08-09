@@ -268,7 +268,7 @@ export function googleLoginUrl() {
   return `${API_URL}/auth/google/start`;
 }
 
-export function oauthConnectUrl(tool: 'slack' | 'notion'): string | null {
+export function oauthConnectUrl(tool: 'slack' | 'notion' | 'jira'): string | null {
   const token = getAccessToken();
   if (!token) return null;
   return `${API_URL}/oauth/${tool}/start?token=${encodeURIComponent(token)}`;

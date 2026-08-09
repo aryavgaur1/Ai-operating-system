@@ -39,7 +39,9 @@ integrationsRouter.get(
           ? `${apiBase}/oauth/slack/start?token=${encodeURIComponent(token)}`
           : tool === 'notion'
             ? `${apiBase}/oauth/notion/start?token=${encodeURIComponent(token)}`
-            : null;
+            : tool === 'jira'
+              ? `${apiBase}/oauth/jira/start?token=${encodeURIComponent(token)}`
+              : null;
 
       // Demo/admin: all look connected; no Connect buttons (preserve admin UX)
       // SaaS: active ONLY if this user has a DB connection — never treat .env as theirs
@@ -53,13 +55,15 @@ integrationsRouter.get(
           : 'mock',
         availableActions: connector.listActions(),
         connectUrl: demoMode ? null : connectUrl,
-        canConnect: !demoMode && (tool === 'slack' || tool === 'notion'),
+        canConnect: !demoMode && (tool === 'slack' || tool === 'notion' || tool === 'jira'),
         workspaceName: demoMode
           ? tool === 'slack'
             ? 'Platform (admin .env)'
             : tool === 'notion'
               ? 'Platform (admin .env)'
-              : undefined
+              : tool === 'jira'
+                ? 'Platform (admin .env)'
+                : undefined
           : workspaceName,
         workspaceId: demoMode ? undefined : workspaceId,
         workspaceIcon: demoMode ? undefined : workspaceIcon,
