@@ -87,17 +87,33 @@ export function WeekBars({ color = '#8be9d0' }: { color?: string }) {
 export function RiskRadial({ value, color = '#f5b95d' }: { value: number; color?: string }) {
   const data = [{ name: 'risk', value, fill: color }];
   return (
-    <ResponsiveContainer width="100%" height="100%">
-      <RadialBarChart
-        innerRadius="70%"
-        outerRadius="100%"
-        data={data}
-        startAngle={90}
-        endAngle={90 - 360 * (value / 100)}
-        barSize={10}
-      >
-        <RadialBar background={{ fill: 'rgba(255,255,255,0.06)' }} dataKey="value" cornerRadius={10} />
-      </RadialBarChart>
-    </ResponsiveContainer>
+    <div className="relative h-full w-full">
+      <div
+        className="pointer-events-none absolute inset-[-6%] animate-risk-orbit rounded-full opacity-70"
+        style={{
+          background: `conic-gradient(from 0deg, transparent 0%, ${color}55 35%, transparent 70%)`,
+        }}
+      />
+      <ResponsiveContainer width="100%" height="100%">
+        <RadialBarChart
+          innerRadius="70%"
+          outerRadius="100%"
+          data={data}
+          startAngle={90}
+          endAngle={90 - 360 * (Math.max(0, Math.min(100, value)) / 100)}
+          barSize={10}
+        >
+          <RadialBar
+            background={{ fill: 'rgba(255,255,255,0.06)' }}
+            dataKey="value"
+            cornerRadius={10}
+            isAnimationActive
+            animationBegin={80}
+            animationDuration={1100}
+            animationEasing="ease-out"
+          />
+        </RadialBarChart>
+      </ResponsiveContainer>
+    </div>
   );
 }

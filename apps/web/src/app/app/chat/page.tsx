@@ -18,8 +18,12 @@ import {
 import { api, type AgentTurnResult } from '@/lib/api';
 import { GlassCard, Reveal } from '@/components/motion';
 import { MarkdownLite } from '@/components/MarkdownLite';
+import { RiskRadial } from '@/components/charts';
 import { cn } from '@/lib/utils';
 import { APP_ROUTES } from '@/lib/routes';
+
+const riskScore: Record<string, number> = { low: 24, medium: 58, high: 88 };
+const riskColor: Record<string, string> = { low: '#8be9d0', medium: '#f5b95d', high: '#fb7185' };
 
 interface Turn {
   role: 'user' | 'assistant';
@@ -73,11 +77,24 @@ export default function ChatPage() {
       const data = await api.getConversation(id);
       setConversationId(id);
       setTurns(
-        (data.messages || []).map((m: any) => ({
-          role: m.role === 'assistant' ? 'assistant' : 'user',
-          content: m.content,
-          timestamp: new Date(m.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
-        }))
+        (data.messages || []).map((m: any) => {
+          const stored = m.tool_calls;
+          const detail: AgentTurnResult | undefined =
+            stored && typeof stored === 'object' && stored.plan
+              ? {
+                  reply: m.content,
+                  plan: stored.plan,
+                  executedCalls: Array.isArray(stored.executedCalls) ? stored.executedCalls : [],
+                  pendingApprovalIds: Array.isArray(stored.pendingApprovalIds) ? stored.pendingApprovalIds : [],
+                }
+              : undefined;
+          return {
+            role: m.role === 'assistant' ? 'assistant' : 'user',
+            content: m.content,
+            timestamp: new Date(m.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+            detail,
+          };
+        })
       );
       setError(null);
     } catch (err) {
@@ -252,15 +269,48 @@ export default function ChatPage() {
                               </div>
                             ))}
                           </div>
-                          {turn.detail.pendingApprovalIds?.length > 0 && (
-                            <Link
-                              href={APP_ROUTES.approvals}
-                              className="mt-3 inline-flex items-center gap-2 rounded-full border border-amber-400/30 bg-amber-400/10 px-3.5 py-1.5 text-xs font-medium text-amber-200 hover:bg-amber-400/15"
-                            >
-                              <ShieldAlert size={12} />
-                              Open Approvals — Approve &amp; run ({turn.detail.pendingApprovalIds.length})
-                            </Link>
-                          )}
+                          {turn.detail.pendingApprovalIds?.length > 0 && (() => {
+                            const risky =
+                              turn.detail.plan.toolCalls.find((c) => c.requiresApproval) ||
+                              turn.detail.plan.toolCalls[0];
+                            const level = risky?.riskLevel || 'high';
+                            const score = riskScore[level] ?? 88;
+                            const color = riskColor[level] ?? '#fb7185';
+                            return (
+                              <motion.div
+                                initial={{ opacity: 0, y: 12, scale: 0.97 }}
+                                animate={{ opacity: 1, y: 0, scale: 1 }}
+                                transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
+                                className="mt-4 overflow-hidden rounded-[22px] border border-rose-400/25 bg-gradient-to-br from-rose-500/10 via-black/40 to-amber-500/10 p-4"
+                              >
+                                <div className="grid gap-4 sm:grid-cols-[1fr_120px] sm:items-center">
+                                  <div>
+                                    <div className="text-xs font-semibold uppercase tracking-[0.2em] text-rose-200/90">
+                                      Approval required · {level} risk
+                                    </div>
+                                    <p className="mt-2 text-sm leading-6 text-neutral-300">
+                                      This action is paused for human review. Open Approvals to inspect the preview,
+                                      then Approve &amp; run.
+                                    </p>
+                                    <Link
+                                      href={APP_ROUTES.approvals}
+                                      className="mt-3 inline-flex items-center gap-2 rounded-full bg-accent px-4 py-2 text-xs font-semibold text-[#04101f] transition hover:bg-[#7db6ff]"
+                                    >
+                                      <ShieldAlert size={12} />
+                                      Approve &amp; run ({turn.detail.pendingApprovalIds.length})
+                                    </Link>
+                                  </div>
+                                  <div className="relative mx-auto h-24 w-24">
+                                    <RiskRadial value={score} color={color} />
+                                    <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+                                      <span className="text-lg font-semibold text-white">{score}</span>
+                                      <span className="text-[9px] uppercase tracking-wide text-neutral-500">risk</span>
+                                    </div>
+                                  </div>
+                                </div>
+                              </motion.div>
+                            );
+                          })()}
                         </div>
                       )}
                     </div>

@@ -175,7 +175,8 @@ export interface ApprovalRequest {
 export const HIGH_CONSEQUENCE_ACTIONS: Record<ToolName, string[]> = {
   gmail: ['sendEmail', 'deleteEmail'],
   slack: ['postMessageExternalChannel', 'deleteMessage'],
-  jira: ['deleteIssue', 'transitionIssue'],
+  // Ticket creates/changes pause for human review (Approvals risk dial + Approve & run).
+  jira: ['createIssue', 'deleteIssue', 'transitionIssue', 'addComment'],
   salesforce: ['deleteRecord', 'updateRecord', 'createOpportunity'],
   notion: [],
 };

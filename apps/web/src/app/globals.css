@@ -168,3 +168,29 @@ body::-webkit-scrollbar-track {
   background: rgba(255,255,255,0.14);
   border-radius: 999px;
 }
+
+/* Approvals risk dial — roundabout entrance + slow idle spin */
+@keyframes risk-orbit-in {
+  0% {
+    transform: rotate(-140deg) scale(0.82);
+    opacity: 0;
+  }
+  55% {
+    opacity: 0.9;
+  }
+  100% {
+    transform: rotate(12deg) scale(1);
+    opacity: 0.55;
+  }
+}
+@keyframes risk-orbit-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+.animate-risk-orbit {
+  animation: risk-orbit-in 2.2s ease-out 1, risk-orbit-spin 9s linear 2.2s infinite;
+}
