@@ -18,8 +18,9 @@ const ACTION_VERBS = [
   'list', 'search', 'upload', 'invite', 'react', 'summarize', 'summarise',
   'make', 'add', 'show', 'get', 'fetch', 'read', 'history',
   'incident', 'outage', 'war room', 'warroom', 'digest', 'standup',
-  'blocker', 'blocked', 'follow up', 'follow-up', 'complaint', 'canvas',
+  'blocker', 'blocked', 'blocking', 'follow up', 'follow-up', 'complaint', 'canvas',
   'bookmark', 'prepare', 'find', 'detect', 'launch', 'set', 'topic',
+  'move', 'comment', 'link', 'priority', 'sprint', 'board', 'assign',
 ];
 
 export function classifyIntent(query: string): ClassifiedIntent {

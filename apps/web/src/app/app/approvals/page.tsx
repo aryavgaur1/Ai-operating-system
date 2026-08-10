@@ -23,6 +23,8 @@ export default function ApprovalsPage() {
   const [error, setError] = useState<string | null>(null);
   const [decidingId, setDecidingId] = useState<string | null>(null);
 
+  const [stepResults, setStepResults] = useState<Record<string, string>>({});
+
   function load() {
     setLoading(true);
     api
@@ -45,12 +47,22 @@ export default function ApprovalsPage() {
         if (out?.ok && !out.mocked) {
           const o = (out.output || {}) as Record<string, unknown>;
           const key = o.key || o.id || o.ts;
+          setStepResults((prev) => ({
+            ...prev,
+            [id]: key ? `✓ ${String(key)}` : '✓ verified',
+          }));
           const url = o.url;
           const msg = key
             ? `Approved and created ${key}${url ? ` — ${url}` : ''}`
             : `Approved and executed ${res.approval.tool}.${res.approval.action} (verified).`;
-          window.sessionStorage.setItem('nexora:approvalFlash', msg);
-          window.location.href = '/app/chat';
+          // If more pending remain, stay and show progress; otherwise flash to chat
+          const remaining = pending.filter((p) => p.id !== id);
+          if (remaining.length === 0) {
+            window.sessionStorage.setItem('nexora:approvalFlash', msg);
+            window.location.href = '/app/chat';
+            return;
+          }
+          load();
           return;
         }
         load();
@@ -60,7 +72,8 @@ export default function ApprovalsPage() {
               'Mock result rejected — connect the live integration under Integrations, then retry Approve & run.'
           );
         } else if (out && !out.ok) {
-          setError(out.error || 'Approved, but execution failed.');
+          setStepResults((prev) => ({ ...prev, [id]: `✗ ${out.error || 'failed'}` }));
+          setError(out.error || 'Approved, but execution failed. You can retry if safe.');
         } else {
           setError('Approved, but no verified execution result was returned.');
         }
@@ -75,8 +88,55 @@ export default function ApprovalsPage() {
     }
   }
 
+  async function approveAll() {
+    if (decidingId || pending.length === 0) return;
+    setError(null);
+    const lines: string[] = [];
+    for (const a of pending) {
+      setDecidingId(a.id);
+      try {
+        const res = await api.decideApproval(a.id, 'approved');
+        const out = res.executionResult;
+        if (out?.ok && !out.mocked) {
+          const key = (out.output as any)?.key || (out.output as any)?.id || 'ok';
+          lines.push(`✓ ${a.tool}.${a.action} → ${key}`);
+          setStepResults((prev) => ({ ...prev, [a.id]: `✓ ${key}` }));
+        } else {
+          lines.push(`✗ ${a.tool}.${a.action} → ${out?.error || 'failed'}`);
+          setStepResults((prev) => ({ ...prev, [a.id]: `✗ ${out?.error || 'failed'}` }));
+          setError(`Stopped after failure on ${a.tool}.${a.action}. Remaining steps not run.`);
+          break;
+        }
+      } catch (err) {
+        setError((err as Error).message);
+        break;
+      }
+    }
+    setDecidingId(null);
+    load();
+    if (lines.length && lines.every((l) => l.startsWith('✓'))) {
+      window.sessionStorage.setItem('nexora:approvalFlash', lines.join('\n'));
+      window.location.href = '/app/chat';
+    }
+  }
+
   const pending = approvals.filter((a) => a.status === 'pending');
   const decided = approvals.filter((a) => a.status !== 'pending');
+  const failedExec = decided.filter(
+    (a) => a.status === 'approved' && (a.executionStatus === 'failed' || a.executionResult?.ok === false)
+  );
+
+  const highRiskHint: Record<string, string> = {
+    createIssue: 'Creates a real Jira issue',
+    updateIssue: 'Mutates fields on a live issue',
+    transitionIssue: 'Changes workflow status',
+    deleteIssue: 'Deletes a live issue',
+    addComment: 'Posts a public comment',
+    linkIssues: 'Creates issue links',
+    addAttachment: 'Uploads a file to Jira',
+    sendEmail: 'Sends external email',
+    postMessageExternalChannel: 'Posts outside your workspace',
+  };
 
   return (
     <div className="space-y-6 pb-10">
@@ -106,7 +166,22 @@ export default function ApprovalsPage() {
       )}
 
       <div className="space-y-5">
-        <div className="text-xs uppercase tracking-[0.24em] text-neutral-500">Pending ({pending.length})</div>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="text-xs uppercase tracking-[0.24em] text-neutral-500">
+            Pending ({pending.length})
+            {pending.length > 1 ? ' · multi-step workflow' : ''}
+          </div>
+          {pending.length > 1 && (
+            <button
+              type="button"
+              onClick={() => void approveAll()}
+              disabled={decidingId !== null}
+              className="inline-flex items-center gap-2 rounded-full bg-accent px-4 py-2 text-xs font-semibold text-[#04101f] disabled:opacity-50"
+            >
+              <CheckCircle2 size={14} /> Approve &amp; run all ({pending.length})
+            </button>
+          )}
+        </div>
 
         {pending.length === 0 && !loading && (
           <GlassCard className="p-6 text-sm text-neutral-400" hoverLift={false}>
@@ -116,9 +191,10 @@ export default function ApprovalsPage() {
 
         <div className="grid gap-5">
           <AnimatePresence>
-            {pending.map((a) => {
+            {pending.map((a, idx) => {
               const score = riskScore[a.riskLevel] ?? 40;
               const color = riskColor[a.riskLevel] ?? '#5b9dff';
+              const hint = highRiskHint[a.action] || riskCopy[a.riskLevel] || riskCopy.high;
               return (
                 <motion.div
                   key={a.id}
@@ -132,6 +208,10 @@ export default function ApprovalsPage() {
                       <div>
                         <div className="flex flex-wrap items-start justify-between gap-3">
                           <div>
+                            <div className="mb-1 text-[11px] uppercase tracking-[0.2em] text-neutral-500">
+                              Step {idx + 1} of {pending.length}
+                              {stepResults[a.id] ? ` · ${stepResults[a.id]}` : ''}
+                            </div>
                             <div className="code text-lg font-semibold text-white">
                               {a.tool}.{a.action}
                             </div>
@@ -143,6 +223,9 @@ export default function ApprovalsPage() {
                               <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1">
                                 Pending review
                               </span>
+                              <span className="rounded-full border border-rose-400/25 bg-rose-500/10 px-2.5 py-1 text-rose-200">
+                                id {a.id.slice(0, 8)}
+                              </span>
                             </div>
                           </div>
                           <span
@@ -153,12 +236,12 @@ export default function ApprovalsPage() {
                           </span>
                         </div>
 
-                        <p className="mt-3 text-sm leading-6 text-neutral-400">
-                          {riskCopy[a.riskLevel] || riskCopy.high}
-                        </p>
+                        <p className="mt-3 text-sm leading-6 text-neutral-400">{hint}</p>
 
                         <div className="mt-4">
-                          <div className="mb-2 text-xs uppercase tracking-[0.2em] text-neutral-500">Preview</div>
+                          <div className="mb-2 text-xs uppercase tracking-[0.2em] text-neutral-500">
+                            Preview (stored params — not invented by UI)
+                          </div>
                           <pre className="code thin-scroll max-h-40 overflow-auto rounded-2xl border border-white/10 bg-black/40 p-4 text-xs leading-6 text-neutral-300">
                             {JSON.stringify(a.input ?? {}, null, 2)}
                           </pre>
@@ -201,6 +284,37 @@ export default function ApprovalsPage() {
             })}
           </AnimatePresence>
         </div>
+
+        {failedExec.length > 0 && (
+          <div>
+            <div className="mb-4 text-xs uppercase tracking-[0.24em] text-amber-400/80">
+              Failed executions ({failedExec.length})
+            </div>
+            <div className="space-y-2.5">
+              {failedExec.map((a) => (
+                <div
+                  key={`fail-${a.id}`}
+                  className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-500/20 bg-amber-500/5 px-5 py-3.5 text-sm"
+                >
+                  <div>
+                    <span className="code text-neutral-300">
+                      {a.tool}.{a.action}
+                    </span>
+                    <div className="mt-1 text-[11px] text-amber-200/80">
+                      {a.executionResult?.error || 'Execution failed — fix connection/scopes, then re-ask in Chat to create a new approval'}
+                    </div>
+                  </div>
+                  <Link
+                    href="/app/chat"
+                    className="rounded-full border border-amber-400/30 bg-amber-500/10 px-4 py-2 text-xs font-semibold text-amber-100"
+                  >
+                    Return to Chat
+                  </Link>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {decided.length > 0 && (
           <div>

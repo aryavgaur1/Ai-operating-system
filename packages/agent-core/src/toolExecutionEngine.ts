@@ -85,15 +85,17 @@ async function confirmExternalObject(call: ToolCall, result: ToolCallResult): Pr
   const output = (result.output || {}) as Record<string, unknown>;
 
   try {
-    if (call.tool === 'jira' && call.action === 'createIssue') {
-      const key = String(output.key ?? '').trim();
-      if (!key) return false;
+    if (call.tool === 'jira' && ['createIssue', 'updateIssue', 'transitionIssue', 'addComment'].includes(call.action)) {
+      const key = String(output.key ?? call.input?.key ?? call.input?.issueKey ?? '').trim();
+      if (!key && call.action !== 'createIssue') return false;
+      const checkKey = key || String(output.key ?? '').trim();
+      if (!checkKey) return false;
       const ctx = getConnectorContext();
       const token = ctx.jiraToken?.trim();
       const cloudId = ctx.jiraCloudId?.trim();
       if (!token || !cloudId) return false;
       const res = await fetch(
-        `https://api.atlassian.com/ex/jira/${cloudId}/rest/api/3/issue/${encodeURIComponent(key)}`,
+        `https://api.atlassian.com/ex/jira/${cloudId}/rest/api/3/issue/${encodeURIComponent(checkKey)}`,
         {
           headers: {
             Authorization: `Bearer ${token}`,
@@ -102,8 +104,21 @@ async function confirmExternalObject(call: ToolCall, result: ToolCallResult): Pr
         }
       );
       if (!res.ok) return false;
-      const body = (await res.json()) as { key?: string; id?: string };
-      return Boolean(body.key === key || body.id);
+      const body = (await res.json()) as { key?: string; id?: string; fields?: { status?: { name?: string } } };
+      if (call.action === 'transitionIssue' && call.input?.status) {
+        const want = String(call.input.status).toLowerCase();
+        const got = String(body.fields?.status?.name ?? '').toLowerCase();
+        return Boolean(body.key === checkKey && (got.includes(want) || want.includes(got)));
+      }
+      return Boolean(body.key === checkKey || body.id);
+    }
+
+    if (call.tool === 'jira' && call.action === 'searchIssues') {
+      return Array.isArray(output.results) && typeof output.count === 'number';
+    }
+
+    if (call.tool === 'jira' && (call.action === 'listBoards' || call.action === 'listSprints' || call.action === 'getSprintIssues' || call.action === 'linkIssues' || call.action === 'addAttachment')) {
+      return output.verified === true || Boolean(output.attachmentId || output.linkType || output.boards || output.sprints || output.issues);
     }
 
     if (

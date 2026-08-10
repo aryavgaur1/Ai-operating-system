@@ -190,7 +190,15 @@ export const HIGH_CONSEQUENCE_ACTIONS: Record<ToolName, string[]> = {
   gmail: ['sendEmail', 'deleteEmail'],
   slack: ['postMessageExternalChannel', 'deleteMessage'],
   // Ticket creates/changes pause for human review (Approvals risk dial + Approve & run).
-  jira: ['createIssue', 'deleteIssue', 'transitionIssue', 'addComment'],
+  jira: [
+    'createIssue',
+    'updateIssue',
+    'deleteIssue',
+    'transitionIssue',
+    'addComment',
+    'linkIssues',
+    'addAttachment',
+  ],
   salesforce: ['deleteRecord', 'updateRecord', 'createOpportunity'],
   notion: [],
 };

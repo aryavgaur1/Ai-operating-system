@@ -1,6 +1,6 @@
-# Same command as root netlify.toml so filter/base layouts cannot escape the repo.
+# Used with --filter @enterprise-ai-os/web. Netlify cwd is monorepo root (/app).
 [build]
-  command = "ROOT=$(git rev-parse --show-toplevel) && cd \"$ROOT\" && npm ci && npm run build -w apps/web"
+  command = "npm ci && npm run build -w apps/web"
   publish = "apps/web/.next"
 
 [[plugins]]

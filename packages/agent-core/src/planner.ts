@@ -62,6 +62,102 @@ const TOOL_RULES: ToolRule[] = [
   },
   {
     tool: 'jira',
+    action: 'searchIssues',
+    keywords: ['blocking', 'blocked', 'blocker', 'what is blocking', "what's blocking"],
+    match: (query: string) =>
+      /\b(what('?s| is)?\s+blocking|blockers?\s+(for|on)|find\s+blockers?)\b/i.test(query) ||
+      (/\b(blocking|blocked)\b/i.test(query) && /\b(project|jira|ticket|issue)\b/i.test(query)),
+    buildInput: (query) => {
+      const projectHint =
+        query.match(/\bproject\s+([A-Za-z0-9_-]+)/i)?.[1] ||
+        query.match(/\b([A-Z]{2,10})\b/)?.[1] ||
+        process.env.JIRA_DEFAULT_PROJECT ||
+        'KAN';
+      return {
+        project: projectHint,
+        query,
+        blockedOnly: true,
+        limit: 10,
+      };
+    },
+  },
+  {
+    tool: 'jira',
+    action: 'transitionIssue',
+    keywords: ['move', 'transition', 'in progress', 'done', 'to do'],
+    match: (query: string) =>
+      /\b(move|transition)\b/i.test(query) &&
+      /\b([A-Z][A-Z0-9]+-\d+)\b/.test(query) &&
+      /\b(to|into)\b/i.test(query),
+    buildInput: (query) => {
+      const key = query.match(/\b([A-Z][A-Z0-9]+-\d+)\b/)?.[1] || '';
+      const status =
+        query.match(/\b(?:to|into)\s+["']?([A-Za-z][A-Za-z0-9 /-]+?)["']?(?:\s*$|\.|\,)/i)?.[1]?.trim() ||
+        query.match(/\bIn Progress\b/i)?.[0] ||
+        'In Progress';
+      return { key, status };
+    },
+  },
+  {
+    tool: 'jira',
+    action: 'addComment',
+    keywords: ['comment', 'add a comment', 'leave a comment'],
+    match: (query: string) =>
+      /\b(add|leave|post)\b/i.test(query) &&
+      /\bcomment\b/i.test(query) &&
+      (/\b([A-Z][A-Z0-9]+-\d+)\b/.test(query) || /\bjira\b/i.test(query)),
+    buildInput: (query) => {
+      const key = query.match(/\b([A-Z][A-Z0-9]+-\d+)\b/)?.[1] || '';
+      const body =
+        query.match(/comment(?:\s+for\s+\w+)?(?:\s+on\s+[A-Z][A-Z0-9]+-\d+)?[:\s]+(.+)/i)?.[1]?.trim() ||
+        query.match(/["“]([^"”]+)["”]/)?.[1] ||
+        query;
+      return { key, body: body.slice(0, 4000) };
+    },
+  },
+  {
+    tool: 'jira',
+    action: 'updateIssue',
+    keywords: ['assign', 'priority', 'due date', 'label', 'labels'],
+    match: (query: string) =>
+      /\b([A-Z][A-Z0-9]+-\d+)\b/.test(query) &&
+      /\b(assign|priority|due\s*date|label)\b/i.test(query),
+    buildInput: (query) => {
+      const key = query.match(/\b([A-Z][A-Z0-9]+-\d+)\b/)?.[1] || '';
+      const priority = query.match(/\bpriority\s+(Highest|High|Medium|Low|Lowest)\b/i)?.[1];
+      const dueDate = query.match(/\bdue\s*(?:date)?\s+(\d{4}-\d{2}-\d{2})\b/i)?.[1];
+      const assignee = query.match(/\bassign(?:\s+to)?\s+([^\s,]+@[^\s,]+|\w[\w.-]+)/i)?.[1];
+      const labels = query.match(/\blabels?\s+([a-z0-9,_-]+)/i)?.[1];
+      return {
+        key,
+        ...(priority ? { priority } : {}),
+        ...(dueDate ? { dueDate } : {}),
+        ...(assignee ? { assignee } : {}),
+        ...(labels ? { labels } : {}),
+      };
+    },
+  },
+  {
+    tool: 'jira',
+    action: 'linkIssues',
+    keywords: ['blocks', 'blocked by', 'link issue', 'link ticket'],
+    match: (query: string) =>
+      /\b(blocks|blocked by|link)\b/i.test(query) &&
+      (query.match(/\b([A-Z][A-Z0-9]+-\d+)\b/g) || []).length >= 2,
+    buildInput: (query) => {
+      const keys = query.match(/\b([A-Z][A-Z0-9]+-\d+)\b/g) || [];
+      const blockedBy = /\bblocked by\b/i.test(query);
+      return {
+        from: keys[0],
+        to: keys[1],
+        linkType: blockedBy ? 'Blocks' : 'Blocks',
+        inwardKey: blockedBy ? keys[0] : keys[1],
+        outwardKey: blockedBy ? keys[1] : keys[0],
+      };
+    },
+  },
+  {
+    tool: 'jira',
     action: 'createIssue',
     keywords: ['jira', 'ticket', 'issue', 'task', 'risk'],
     match: (query: string) =>
@@ -74,12 +170,16 @@ const TOOL_RULES: ToolRule[] = [
         query.match(/create (?:a )?(?:jira )?(?:ticket|issue|task|risk)(?: for| about)?\s+(.+)/i)?.[1]?.trim();
       const wantsRisk = /\brisk\b/i.test(query);
       const summary = (titled || query.replace(/\bjira\b/gi, '').trim() || query).slice(0, 100);
+      const priority = query.match(/\bpriority\s+(Highest|High|Medium|Low|Lowest)\b/i)?.[1];
+      const labels = query.match(/\blabels?\s+([a-z0-9,_-]+)/i)?.[1];
       return {
-        project: process.env.JIRA_DEFAULT_PROJECT || undefined,
+        project: process.env.JIRA_DEFAULT_PROJECT || 'KAN',
         summary: wantsRisk && !/\brisk\b/i.test(summary) ? `Risk: ${summary}`.slice(0, 255) : summary,
         description: query,
-        // Map NL "create a Jira risk" → real createIssue (Risk issue type when available; connector falls back)
         issueType: wantsRisk ? 'Risk' : 'Task',
+        ...(priority ? { priority } : {}),
+        ...(labels ? { labels } : {}),
+        ...(wantsRisk ? { sev: 'SEV-2', environment: 'production', deploymentRisk: 'high' } : {}),
       };
     },
   },
@@ -600,6 +700,49 @@ function parseNotionActionQuery(query: string) {
 
 function proposeToolCalls(query: string): ToolCall[] {
   const lower = query.toLowerCase();
+
+  // Multi-tool playbook: incident workspace → Slack + Jira + Notion (+ notify)
+  if (
+    /\b(incident\s+workspace|prepare\s+an?\s+incident|create\s+an?\s+incident\s+workspace)\b/i.test(query) ||
+    (/\bincident\b/i.test(query) && /\b(workspace|slack|jira|notion)\b/i.test(query) && /\b(create|prepare|set\s*up)\b/i.test(query))
+  ) {
+    const summary = query.match(/["“]([^"”]+)["”]/)?.[1] || query.slice(0, 160);
+    const channelName = `incident-${Date.now().toString(36).slice(-5)}`;
+    const project = process.env.JIRA_DEFAULT_PROJECT || 'KAN';
+    const mk = (tool: ToolName, action: string, input: Record<string, unknown>): ToolCall => {
+      const requiresApproval = isHighConsequence(tool, action);
+      return {
+        tool,
+        action,
+        input,
+        riskLevel: requiresApproval ? 'high' : 'low',
+        requiresApproval,
+      };
+    };
+    return [
+      mk('slack', 'createChannel', { name: channelName, isPrivate: false }),
+      mk('jira', 'createIssue', {
+        project,
+        summary: `Incident: ${summary}`.slice(0, 255),
+        description: query,
+        issueType: 'Bug',
+        priority: 'Highest',
+        labels: 'incident,sev',
+        sev: 'SEV-1',
+        environment: 'production',
+      }),
+      mk('notion', 'createPage', {
+        title: `Incident — ${summary}`.slice(0, 120),
+        body: `# Incident\n\n${query}\n\n## Status\nInvestigating\n`,
+        template: 'doc',
+      }),
+      mk('slack', 'postMessage', {
+        channel: channelName,
+        text: `Incident workspace opened. Tracking in Jira + Notion.\n>${summary}`,
+      }),
+    ];
+  }
+
   const calls: ToolCall[] = [];
   const slackOnly = isExplicitSlackCommand(query);
   const notionOnly = isExplicitNotionCommand(query) && !slackOnly;
@@ -634,6 +777,11 @@ function proposeToolCalls(query: string): ToolCall[] {
       riskLevel: requiresApproval ? 'high' : 'low',
       requiresApproval,
     });
+
+    // Prefer first high-confidence Jira/read-style hit alone (avoid stacking with Slack createIncident)
+    if (rule.tool === 'jira' && (action === 'searchIssues' || action === 'transitionIssue' || action === 'addComment' || action === 'updateIssue' || action === 'linkIssues')) {
+      break;
+    }
   }
   return calls;
 }

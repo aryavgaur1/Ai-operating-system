@@ -1,7 +1,6 @@
-# Build from monorepo git root. Avoid "cd ../.." — with some CLI/filter layouts that
-# escapes the repo and npm ci fails (no package-lock) in ~30s.
+# Build from monorepo root (Netlify base must be empty / repo root).
 [build]
-  command = "ROOT=$(git rev-parse --show-toplevel) && cd \"$ROOT\" && npm ci && npm run build -w apps/web"
+  command = "npm ci && npm run build -w apps/web"
   publish = "apps/web/.next"
 
 [[plugins]]

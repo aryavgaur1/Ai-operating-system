@@ -55,6 +55,25 @@ webhooksRouter.post('/:tool', async (req, res) => {
 
   try {
     const result = await handleWebhookEvent(tool, getDemoOrgId(), req.body);
+
+    // Jira status change → optional Slack notify (set JIRA_STATUS_SLACK_CHANNEL=#channel)
+    if (tool === 'jira') {
+      const channel = process.env.JIRA_STATUS_SLACK_CHANNEL?.trim();
+      if (channel && isLiveMode('slack')) {
+        const { jiraConnector } = await import('@enterprise-ai-os/connectors');
+        const docs = await jiraConnector.handleWebhook(req.body);
+        for (const doc of docs) {
+          if (!doc.metadata?.notifySlack) continue;
+          const text = `Jira update: *${doc.externalId}* — ${doc.text}\n${doc.url || ''}`.trim();
+          try {
+            await slackService.postMessage({ channel, text });
+          } catch (err) {
+            console.warn('[webhooks/jira] slack notify failed', err);
+          }
+        }
+      }
+    }
+
     res.json({ ok: true, ...result });
   } catch (err) {
     console.error(`[webhooks] failed to process ${tool} webhook:`, err);

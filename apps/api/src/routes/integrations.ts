@@ -144,6 +144,60 @@ integrationsRouter.post(
   })
 );
 
+integrationsRouter.get(
+  '/jira/fields',
+  asyncHandler(async (req, res) => {
+    const { withUserConnectorContext } = await import('../lib/withUserConnectors');
+    const { getConnectorContext } = await import('@enterprise-ai-os/connectors');
+
+    const fields = await withUserConnectorContext(
+      { id: req.user!.id, organizationId: req.user!.organizationId },
+      async () => {
+        const ctx = getConnectorContext();
+        const token = ctx.jiraToken?.trim();
+        const cloudId = ctx.jiraCloudId?.trim();
+        if (!token || !cloudId) {
+          throw new AppError('Connect Jira under Integrations first.', 400);
+        }
+        const r = await fetch(`https://api.atlassian.com/ex/jira/${cloudId}/rest/api/3/field`, {
+          headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+        });
+        if (!r.ok) {
+          const body = await r.text();
+          throw new AppError(`Jira field list failed (${r.status}): ${body.slice(0, 200)}`, 502);
+        }
+        const all = (await r.json()) as Array<{
+          id: string;
+          name: string;
+          custom?: boolean;
+          schema?: { type?: string; custom?: string };
+        }>;
+        const custom = all.filter((f) => f.custom || String(f.id).startsWith('customfield_'));
+        const score = (name: string) => {
+          const n = name.toLowerCase();
+          return {
+            sev: /\b(sev|severity)\b/.test(n),
+            env: /\b(env|environment)\b/.test(n),
+            deployRisk: /\b(deploy|deployment).*(risk)|risk.*(deploy|deployment)|\bdeploy risk\b/.test(n),
+          };
+        };
+        const suggested = {
+          JIRA_CUSTOM_SEV_FIELD: custom.find((f) => score(f.name).sev)?.id ?? null,
+          JIRA_CUSTOM_ENV_FIELD: custom.find((f) => score(f.name).env)?.id ?? null,
+          JIRA_CUSTOM_DEPLOY_RISK_FIELD: custom.find((f) => score(f.name).deployRisk)?.id ?? null,
+        };
+        return {
+          suggested,
+          customFields: custom.map((f) => ({ id: f.id, name: f.name, type: f.schema?.type })),
+          total: all.length,
+        };
+      }
+    );
+
+    ok(res, fields);
+  })
+);
+
 integrationsRouter.post(
   '/:tool/disconnect',
   asyncHandler(async (req, res) => {
