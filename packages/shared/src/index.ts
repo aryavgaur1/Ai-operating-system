@@ -156,6 +156,14 @@ export interface WorkflowTrace {
 
 export type ApprovalStatus = 'pending' | 'approved' | 'rejected' | 'expired';
 
+/** Post-decision execution lifecycle for Approve & run. */
+export type ApprovalExecutionStatus =
+  | 'executing'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'partially_completed';
+
 export interface ApprovalRequest {
   id: string;
   organizationId: string;
@@ -166,6 +174,12 @@ export interface ApprovalRequest {
   status: ApprovalStatus;
   requestedByUserId?: string;
   createdAt: string;
+  executionStatus?: ApprovalExecutionStatus;
+  executionResult?: ToolCallResult;
+  executionVerified?: boolean;
+  executedAt?: string;
+  decidedByUserId?: string;
+  decidedAt?: string;
 }
 
 // ---------- High-consequence action policy ----------

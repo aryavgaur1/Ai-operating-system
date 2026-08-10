@@ -198,7 +198,21 @@ export async function verifyToolResult(call: ToolCall, result: ToolCallResult): 
       return Boolean((info as any).ok && (info as any).channel?.id);
     }
     if (call.tool === 'slack' && (call.action === 'postMessage' || call.action === 'postMessageExternalChannel')) {
-      return Boolean(output.ts || output.ok);
+      const ts = output.ts;
+      const channel = output.channel;
+      if (!ts || !channel) return false;
+      try {
+        const hist = await slackService.getClient().conversations.history({
+          channel: String(channel),
+          latest: String(ts),
+          oldest: String(ts),
+          inclusive: true,
+          limit: 1,
+        });
+        return Boolean((hist as any).ok && Array.isArray((hist as any).messages) && (hist as any).messages.length > 0);
+      } catch {
+        return Boolean(ts);
+      }
     }
     if (call.tool === 'slack' && call.action === 'createWarRoom') {
       const channel = (output.channel || {}) as { id?: string };
@@ -208,8 +222,15 @@ export async function verifyToolResult(call: ToolCall, result: ToolCallResult): 
       const channel = (output.channel || {}) as { id?: string };
       return Boolean(channel.id);
     }
+    if (call.tool === 'jira' && (call.action === 'createIssue' || call.action === 'addComment' || call.action === 'transitionIssue')) {
+      return Boolean(output.key || output.id);
+    }
     if (call.tool === 'notion' && (call.action === 'createPage' || call.action === 'createProject' || call.action === 'createPRD' || call.action === 'createWiki' || call.action === 'createMeetingNotes' || call.action === 'createDatabase')) {
       return Boolean(output.id || output.url);
+    }
+    // Gmail / Salesforce must never pass verification without a live external id
+    if (call.tool === 'gmail' || call.tool === 'salesforce') {
+      return false;
     }
   } catch {
     return false;

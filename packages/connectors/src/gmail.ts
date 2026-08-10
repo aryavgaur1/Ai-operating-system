@@ -63,24 +63,26 @@ class GmailConnector implements ToolConnector {
 
   async execute(action: string, input: Record<string, unknown>): Promise<ToolCallResult> {
     await simulateLatency();
-    if (isLiveMode()) {
-      // TODO(live): gmail.users.messages.send({ userId: 'me', requestBody: { raw: mimeMessage } })
-      throw new Error('Gmail live mode not implemented yet — set CONNECTORS_MODE=mock.');
-    }
-    console.log(`[MOCK gmail.${action}]`, input);
-    if (action === 'sendEmail') {
+    // Never report fake success — Gmail OAuth send is not wired yet.
+    if (isLiveMode('gmail')) {
       return {
         tool: 'gmail',
         action,
-        ok: true,
-        output: { messageId: `mock-${Date.now()}`, to: input.to, subject: input.subject },
-        mocked: true,
+        ok: false,
+        error:
+          'Gmail live send is not connected yet. Connect Gmail under Integrations (when available), or use Slack/Jira/Notion for live actions.',
+        mocked: false,
       };
     }
-    if (action === 'deleteEmail') {
-      return { tool: 'gmail', action, ok: true, output: { deleted: input.messageId }, mocked: true };
-    }
-    return { tool: 'gmail', action, ok: false, error: `Unknown action: ${action}`, mocked: true };
+    console.warn(`[MOCK gmail.${action}] blocked from reporting fake success`);
+    return {
+      tool: 'gmail',
+      action,
+      ok: false,
+      error:
+        'Gmail is not live. Refusing to fake a successful send — connect a live mailbox integration or use Slack/Jira/Notion.',
+      mocked: true,
+    };
   }
 }
 

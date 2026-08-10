@@ -35,29 +35,41 @@ export default function ApprovalsPage() {
   useEffect(load, []);
 
   async function decide(id: string, decision: 'approved' | 'rejected') {
+    if (decidingId) return; // double-click guard
     setDecidingId(id);
     setError(null);
     try {
       const res = await api.decideApproval(id, decision);
-      load();
       if (decision === 'approved') {
         const out = res.executionResult;
-        if (out?.ok) {
-          const key = (out.output as any)?.key;
-          const url = (out.output as any)?.url;
+        if (out?.ok && !out.mocked) {
+          const o = (out.output || {}) as Record<string, unknown>;
+          const key = o.key || o.id || o.ts;
+          const url = o.url;
           const msg = key
             ? `Approved and created ${key}${url ? ` — ${url}` : ''}`
-            : 'Approved and executed successfully.';
+            : `Approved and executed ${res.approval.tool}.${res.approval.action} (verified).`;
           window.sessionStorage.setItem('nexora:approvalFlash', msg);
           window.location.href = '/app/chat';
           return;
         }
-        if (out && !out.ok) {
+        load();
+        if (out?.mocked) {
+          setError(
+            out.error ||
+              'Mock result rejected — connect the live integration under Integrations, then retry Approve & run.'
+          );
+        } else if (out && !out.ok) {
           setError(out.error || 'Approved, but execution failed.');
+        } else {
+          setError('Approved, but no verified execution result was returned.');
         }
+        return;
       }
+      load();
     } catch (err) {
       setError((err as Error).message);
+      load();
     } finally {
       setDecidingId(null);
     }
@@ -156,10 +168,11 @@ export default function ApprovalsPage() {
                           <button
                             type="button"
                             onClick={() => decide(a.id, 'approved')}
-                            disabled={decidingId === a.id}
+                            disabled={decidingId === a.id || decidingId !== null}
                             className="inline-flex items-center gap-2 rounded-full bg-accent px-5 py-2.5 text-sm font-semibold text-[#04101f] transition hover:bg-[#7db6ff] disabled:cursor-not-allowed disabled:opacity-50"
                           >
-                            <CheckCircle2 size={14} /> Approve &amp; run
+                            <CheckCircle2 size={14} />{' '}
+                            {decidingId === a.id ? 'Executing…' : 'Approve & run'}
                           </button>
                           <button
                             type="button"
@@ -195,9 +208,22 @@ export default function ApprovalsPage() {
             <div className="space-y-2.5">
               {decided.map((a) => (
                 <div key={a.id} className="flex items-center justify-between rounded-2xl border border-white/8 bg-black/20 px-5 py-3.5 text-sm">
-                  <span className="code text-neutral-300">
-                    {a.tool}.{a.action}
-                  </span>
+                  <div className="min-w-0">
+                    <span className="code text-neutral-300">
+                      {a.tool}.{a.action}
+                    </span>
+                    {a.executionStatus && (
+                      <div className="mt-1 text-[11px] text-neutral-500">
+                        execution: {a.executionStatus}
+                        {a.executionVerified ? ' · verified' : ''}
+                        {(a.executionResult?.output as any)?.key
+                          ? ` · ${(a.executionResult!.output as any).key}`
+                          : (a.executionResult?.output as any)?.id
+                            ? ` · ${(a.executionResult!.output as any).id}`
+                            : ''}
+                      </div>
+                    )}
+                  </div>
                   <span
                     className={cn(
                       'inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide',

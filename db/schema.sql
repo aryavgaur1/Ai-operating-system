@@ -151,9 +151,15 @@ create table if not exists approvals (
   status          text not null default 'pending', -- 'pending' | 'approved' | 'rejected' | 'expired'
   decided_by_user_id uuid references users(id),
   decided_at      timestamptz,
+  -- Execution lifecycle after Approve & run (additive; see 011_approval_execution.sql)
+  execution_status text,                   -- 'executing' | 'completed' | 'failed' | 'cancelled'
+  execution_result jsonb,
+  execution_verified boolean not null default false,
+  executed_at     timestamptz,
   created_at      timestamptz not null default now()
 );
 create index if not exists idx_approvals_org_status on approvals(organization_id, status);
+create index if not exists idx_approvals_execution_status on approvals(organization_id, execution_status);
 
 -- ---------- Audit log (immutable trail of every read/action the agent performs) ----------
 

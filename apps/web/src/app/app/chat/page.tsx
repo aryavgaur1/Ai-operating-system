@@ -88,15 +88,28 @@ export default function ChatPage() {
     setError(null);
     try {
       const results: string[] = [];
+      const succeeded: string[] = [];
+      const failed: string[] = [];
       for (const id of ids) {
         const res = await api.decideApproval(id, 'approved');
         const out = res.executionResult;
-        if (out?.ok) {
-          const key = (out.output as any)?.key;
-          const url = (out.output as any)?.url;
-          results.push(key ? `Created **${key}**${url ? ` — ${url}` : ''}` : `Ran ${res.approval.tool}.${res.approval.action}`);
+        // Never treat mock / unverified as success
+        if (out?.ok && !out.mocked) {
+          succeeded.push(id);
+          const o = (out.output || {}) as Record<string, unknown>;
+          const key = o.key || o.id || o.ts;
+          const url = o.url;
+          const label = `${res.approval.tool}.${res.approval.action}`;
+          if (key && url) results.push(`✓ ${label} → **${key}** — ${url}`);
+          else if (key) results.push(`✓ ${label} → **${key}**`);
+          else results.push(`✓ ${label} completed (verified)`);
         } else {
-          results.push(out?.error || `Failed to run approval ${id}`);
+          failed.push(id);
+          results.push(
+            `✗ ${res.approval?.tool || 'tool'}.${res.approval?.action || 'action'}: ${
+              out?.error || (out?.mocked ? 'Mock result rejected — connect live integration.' : `Failed to run approval ${id}`)
+            }`
+          );
         }
       }
       const now = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
@@ -104,14 +117,20 @@ export default function ChatPage() {
         const next = [...prev];
         const turn = next[turnIndex];
         if (turn?.detail) {
+          // Keep failed ids pending so the user can retry; clear only successes
+          const remaining = (turn.detail.pendingApprovalIds || []).filter((pid) => !succeeded.includes(pid));
           next[turnIndex] = {
             ...turn,
-            detail: { ...turn.detail, pendingApprovalIds: [] },
+            detail: { ...turn.detail, pendingApprovalIds: remaining },
           };
         }
+        const summary =
+          failed.length && succeeded.length
+            ? `Partially completed (${succeeded.length} ok, ${failed.length} failed):\n${results.join('\n')}`
+            : results.join('\n') || 'Approved and executed.';
         next.push({
           role: 'assistant',
-          content: results.join('\n') || 'Approved and executed.',
+          content: summary,
           timestamp: now,
         });
         return next;
@@ -358,7 +377,7 @@ export default function ChatPage() {
                                       >
                                         <ShieldAlert size={12} />
                                         {approvingTurn === i
-                                          ? 'Running…'
+                                          ? 'Executing…'
                                           : `Approve & run (${turn.detail.pendingApprovalIds.length})`}
                                       </button>
                                       <Link

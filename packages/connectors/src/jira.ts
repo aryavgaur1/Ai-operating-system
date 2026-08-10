@@ -190,72 +190,72 @@ class JiraConnector implements ToolConnector {
               cloudId,
               String(input.project ?? input.projectKey ?? '')
             );
-            const issueType = String(input.issueType ?? input.type ?? 'Task');
-            const res = await jiraFetch('/issue', {
-              method: 'POST',
-              token,
-              cloudId,
-              body: JSON.stringify({
-                fields: {
-                  project: { key: projectKey },
-                  summary,
-                  description: toAdf(description),
-                  issuetype: { name: issueType },
-                },
-              }),
-            });
-            if (!res.ok) {
-              const body = await res.text();
-              // Retry with Bug if Task name invalid
-              if (/issuetype|issue type/i.test(body)) {
-                const retry = await jiraFetch('/issue', {
-                  method: 'POST',
-                  token,
-                  cloudId,
-                  body: JSON.stringify({
-                    fields: {
-                      project: { key: projectKey },
-                      summary,
-                      description: toAdf(description),
-                      issuetype: { name: 'Bug' },
-                    },
-                  }),
-                });
-                if (!retry.ok) {
-                  const retryBody = await retry.text();
-                  return {
-                    tool: 'jira',
-                    action,
-                    ok: false,
-                    error: `Jira createIssue failed (${retry.status}): ${retryBody.slice(0, 300)}`,
-                    mocked: false,
-                  };
-                }
-                const created = (await retry.json()) as { id: string; key: string };
-                console.log(`[jira.createIssue] REAL ok key=${created.key}`);
+            const preferredType = String(input.issueType ?? input.type ?? 'Task');
+            const typeCandidates = Array.from(
+              new Set([preferredType, 'Task', 'Bug', 'Story'].filter(Boolean))
+            );
+
+            let created: { id: string; key: string } | null = null;
+            let lastError = '';
+            let usedType = preferredType;
+            for (const issueType of typeCandidates) {
+              const res = await jiraFetch('/issue', {
+                method: 'POST',
+                token,
+                cloudId,
+                body: JSON.stringify({
+                  fields: {
+                    project: { key: projectKey },
+                    summary,
+                    description: toAdf(description),
+                    issuetype: { name: issueType },
+                  },
+                }),
+              });
+              if (res.ok) {
+                created = (await res.json()) as { id: string; key: string };
+                usedType = issueType;
+                break;
+              }
+              lastError = await res.text();
+              if (!/issuetype|issue type/i.test(lastError)) {
                 return {
                   tool: 'jira',
                   action,
-                  ok: true,
-                  output: {
-                    id: created.id,
-                    key: created.key,
-                    url: browseUrl(siteUrl, created.key),
-                    project: projectKey,
-                  },
+                  ok: false,
+                  error: `Jira createIssue failed (${res.status}): ${lastError.slice(0, 300)}`,
                   mocked: false,
                 };
               }
+            }
+
+            if (!created) {
               return {
                 tool: 'jira',
                 action,
                 ok: false,
-                error: `Jira createIssue failed (${res.status}): ${body.slice(0, 300)}`,
+                error: `Jira createIssue failed: ${lastError.slice(0, 300)}`,
                 mocked: false,
               };
             }
-            const created = (await res.json()) as { id: string; key: string };
-            console.log(`[jira.createIssue] REAL ok key=${created.key}`);
+
+            // Confirm the issue exists before reporting success
+            const verify = await jiraFetch(`/issue/${encodeURIComponent(created.key)}`, {
+              method: 'GET',
+              token,
+              cloudId,
+            });
+            if (!verify.ok) {
+              return {
+                tool: 'jira',
+                action,
+                ok: false,
+                error: `Jira created ${created.key} but verification fetch failed (${verify.status}).`,
+                mocked: false,
+              };
+            }
+
+            console.log(`[jira.createIssue] REAL ok key=${created.key} type=${usedType}`);
             return {
               tool: 'jira',
               action,
@@ -265,6 +265,8 @@ class JiraConnector implements ToolConnector {
                 key: created.key,
                 url: browseUrl(siteUrl, created.key),
                 project: projectKey,
+                issueType: usedType,
+                verified: true,
               },
               mocked: false,
             };

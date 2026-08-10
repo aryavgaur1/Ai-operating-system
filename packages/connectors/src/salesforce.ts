@@ -62,20 +62,26 @@ class SalesforceConnector implements ToolConnector {
 
   async execute(action: string, input: Record<string, unknown>): Promise<ToolCallResult> {
     await simulateLatency();
-    if (isLiveMode()) {
-      // TODO(live): conn.sobject(objectType).create/update/destroy(...)
-      throw new Error('Salesforce live mode not implemented yet — set CONNECTORS_MODE=mock.');
+    // Never report fake success — Salesforce live API is not wired yet.
+    if (isLiveMode('salesforce')) {
+      return {
+        tool: 'salesforce',
+        action,
+        ok: false,
+        error:
+          'Salesforce live mode is not implemented yet. Connect Salesforce under Integrations when available, or use Slack/Jira/Notion.',
+        mocked: false,
+      };
     }
-    console.log(`[MOCK salesforce.${action}]`, input);
-    switch (action) {
-      case 'createOpportunity':
-        return { tool: 'salesforce', action, ok: true, output: { id: `006-${Date.now()}`, ...input }, mocked: true };
-      case 'updateRecord':
-      case 'deleteRecord':
-        return { tool: 'salesforce', action, ok: true, output: { ...input, applied: true }, mocked: true };
-      default:
-        return { tool: 'salesforce', action, ok: false, error: `Unknown action: ${action}`, mocked: true };
-    }
+    console.warn(`[MOCK salesforce.${action}] blocked from reporting fake success`);
+    return {
+      tool: 'salesforce',
+      action,
+      ok: false,
+      error:
+        'Salesforce is not live. Refusing to fake a successful CRM write — connect a live integration or use Slack/Jira/Notion.',
+      mocked: true,
+    };
   }
 }
 

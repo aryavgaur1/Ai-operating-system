@@ -63,16 +63,23 @@ const TOOL_RULES: ToolRule[] = [
   {
     tool: 'jira',
     action: 'createIssue',
-    keywords: ['jira', 'ticket', 'issue', 'task'],
+    keywords: ['jira', 'ticket', 'issue', 'task', 'risk'],
+    match: (query: string) =>
+      /\bjira\b/i.test(query) &&
+      /\b(create|open|file|log|track)\b/i.test(query) &&
+      /\b(ticket|issue|task|risk|bug)\b/i.test(query),
     buildInput: (query) => {
       const titled =
         query.match(/(?:titled|called|named)\s+["']?([^"'\n.]+)["']?/i)?.[1]?.trim() ||
-        query.match(/create (?:a )?(?:jira )?(?:ticket|issue|task)(?: for| about)?\s+(.+)/i)?.[1]?.trim();
+        query.match(/create (?:a )?(?:jira )?(?:ticket|issue|task|risk)(?: for| about)?\s+(.+)/i)?.[1]?.trim();
+      const wantsRisk = /\brisk\b/i.test(query);
       const summary = (titled || query.replace(/\bjira\b/gi, '').trim() || query).slice(0, 100);
       return {
         project: process.env.JIRA_DEFAULT_PROJECT || undefined,
-        summary,
+        summary: wantsRisk && !/\brisk\b/i.test(summary) ? `Risk: ${summary}`.slice(0, 255) : summary,
         description: query,
+        // Map NL "create a Jira risk" → real createIssue (Risk issue type when available; connector falls back)
+        issueType: wantsRisk ? 'Risk' : 'Task',
       };
     },
   },

@@ -126,6 +126,10 @@ export interface ApprovalRequest {
   input: Record<string, unknown>;
   status: 'pending' | 'approved' | 'rejected' | 'expired';
   createdAt: string;
+  executionStatus?: 'executing' | 'completed' | 'failed' | 'cancelled' | 'partially_completed';
+  executionResult?: ToolCallResult;
+  executionVerified?: boolean;
+  executedAt?: string;
 }
 
 export interface IntegrationStatus {
@@ -229,10 +233,13 @@ export const api = {
   listApprovals: (status?: string) =>
     request<{ approvals: ApprovalRequest[] }>(`/approvals${status ? `?status=${status}` : ''}`),
   decideApproval: (id: string, decision: 'approved' | 'rejected') =>
-    request<{ approval: ApprovalRequest; executionResult?: ToolCallResult }>(`/approvals/${id}/decide`, {
-      method: 'POST',
-      body: JSON.stringify({ decision }),
-    }),
+    request<{ approval: ApprovalRequest; executionResult?: ToolCallResult; idempotent?: boolean }>(
+      `/approvals/${id}/decide`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ decision }),
+      }
+    ),
   listIntegrations: () => request<{ tools: IntegrationStatus[] }>('/integrations'),
   disconnectIntegration: (tool: string) =>
     request<null>(`/integrations/${tool}/disconnect`, { method: 'POST' }),
