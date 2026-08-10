@@ -21,10 +21,6 @@ import { api, clearSession } from '@/lib/api';
 import { APP_HOME, APP_ROUTES, LOGIN } from '@/lib/routes';
 import { isPlatformAdminEmail } from '@/lib/platformAdmin';
 
-const NOTIFICATIONS = [
-  { id: 1, text: 'Approvals and integrations update live from your workspace', time: 'now' },
-];
-
 const LINKS = [
   { href: APP_ROUTES.dashboard, label: 'Dashboard', icon: LayoutGrid },
   { href: APP_ROUTES.chat, label: 'Chat', icon: MessageSquare },
@@ -42,6 +38,9 @@ export function Nav() {
   const [email, setEmail] = useState('');
   const [role, setRole] = useState('member');
   const [isVerified, setIsVerified] = useState(true);
+  const [pendingApprovals, setPendingApprovals] = useState(0);
+  const [newUsers24h, setNewUsers24h] = useState(0);
+  const [liveNotifs, setLiveNotifs] = useState<{ id: string; text: string; time: string; href?: string }[]>([]);
   const notifRef = useRef<HTMLDivElement | null>(null);
   const profileRef = useRef<HTMLDivElement | null>(null);
 
@@ -56,6 +55,61 @@ export function Nav() {
       })
       .catch(() => undefined);
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function refreshNotifs() {
+      try {
+        const approvals = await api.listApprovals('pending');
+        const pending = (approvals.approvals || []).filter((a) => a.status === 'pending');
+        if (cancelled) return;
+        setPendingApprovals(pending.length);
+        const items: { id: string; text: string; time: string; href?: string }[] = [];
+        if (pending.length > 0) {
+          items.push({
+            id: 'approvals',
+            text: `${pending.length} action${pending.length === 1 ? '' : 's'} awaiting Approve & run`,
+            time: 'now',
+            href: APP_ROUTES.approvals,
+          });
+        }
+        if (isPlatformAdminEmail(email)) {
+          try {
+            const m = await api.adminMetrics();
+            if (cancelled) return;
+            const n = Number(m.newUsersLast24h || 0);
+            setNewUsers24h(n);
+            if (n > 0) {
+              items.push({
+                id: 'users',
+                text: `${n} new user${n === 1 ? '' : 's'} in the last 24h (Google + email)`,
+                time: 'today',
+                href: APP_ROUTES.admin,
+              });
+            }
+          } catch {
+            // non-admin / fail quiet
+          }
+        }
+        if (items.length === 0) {
+          items.push({
+            id: 'idle',
+            text: 'Approvals and new signups will show up here live',
+            time: 'now',
+          });
+        }
+        setLiveNotifs(items);
+      } catch {
+        // ignore
+      }
+    }
+    refreshNotifs();
+    const id = window.setInterval(refreshNotifs, 20000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [email]);
 
   useEffect(() => {
     function onClick(e: MouseEvent) {
@@ -84,6 +138,7 @@ export function Nav() {
     .slice(0, 2)
     .toUpperCase();
   const isAdmin = isPlatformAdminEmail(email);
+  const notifDot = pendingApprovals > 0 || newUsers24h > 0;
 
   return (
     <div className="sticky top-4 z-50 px-4 sm:px-6">
@@ -118,6 +173,7 @@ export function Nav() {
           {LINKS.map((link) => {
             const active = pathname?.startsWith(link.href);
             const Icon = link.icon;
+            const showApprovalBadge = link.href === APP_ROUTES.approvals && pendingApprovals > 0;
             return (
               <Link key={link.href} href={link.href} className="relative">
                 {active && (
@@ -135,6 +191,11 @@ export function Nav() {
                 >
                   <Icon size={14} />
                   {link.label}
+                  {showApprovalBadge ? (
+                    <span className="ml-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-400 px-1 text-[9px] font-bold text-black">
+                      {pendingApprovals > 9 ? '9+' : pendingApprovals}
+                    </span>
+                  ) : null}
                 </span>
               </Link>
             );
@@ -163,8 +224,16 @@ export function Nav() {
             18ms latency
           </span>
           {isAdmin && (
-            <Link href={APP_ROUTES.admin} className="hidden rounded-full border border-white/10 px-3 py-1 text-[11px] text-neutral-300 hover:text-white sm:inline">
+            <Link
+              href={APP_ROUTES.admin}
+              className="relative hidden rounded-full border border-white/10 px-3 py-1 text-[11px] text-neutral-300 hover:text-white sm:inline"
+            >
               Admin
+              {newUsers24h > 0 ? (
+                <span className="ml-1.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-accent2/90 px-1 text-[9px] font-bold text-black">
+                  {newUsers24h > 9 ? '9+' : newUsers24h}
+                </span>
+              ) : null}
             </Link>
           )}
 
@@ -177,7 +246,7 @@ export function Nav() {
               className="relative flex h-9 w-9 items-center justify-center rounded-full border border-white/8 bg-white/5 text-neutral-300 transition hover:border-accent/40 hover:text-white"
             >
               <Bell size={15} />
-              <span className="absolute right-2 top-2 h-1.5 w-1.5 rounded-full bg-accent2" />
+              {notifDot ? <span className="absolute right-2 top-2 h-1.5 w-1.5 rounded-full bg-accent2" /> : null}
             </button>
             <AnimatePresence>
               {notifOpen && (
@@ -190,12 +259,24 @@ export function Nav() {
                 >
                   <div className="px-3 py-2 text-xs uppercase tracking-[0.2em] text-neutral-500">Notifications</div>
                   <div className="space-y-1">
-                    {NOTIFICATIONS.map((n) => (
-                      <div key={n.id} className="rounded-xl px-3 py-2.5 text-sm transition hover:bg-white/5">
-                        <div className="text-neutral-200">{n.text}</div>
-                        <div className="mt-0.5 text-[11px] text-neutral-500">{n.time}</div>
-                      </div>
-                    ))}
+                    {liveNotifs.map((n) =>
+                      n.href ? (
+                        <Link
+                          key={n.id}
+                          href={n.href}
+                          onClick={() => setNotifOpen(false)}
+                          className="block rounded-xl px-3 py-2.5 text-sm transition hover:bg-white/5"
+                        >
+                          <div className="text-neutral-200">{n.text}</div>
+                          <div className="mt-0.5 text-[11px] text-neutral-500">{n.time}</div>
+                        </Link>
+                      ) : (
+                        <div key={n.id} className="rounded-xl px-3 py-2.5 text-sm">
+                          <div className="text-neutral-200">{n.text}</div>
+                          <div className="mt-0.5 text-[11px] text-neutral-500">{n.time}</div>
+                        </div>
+                      )
+                    )}
                   </div>
                 </motion.div>
               )}
@@ -245,6 +326,7 @@ export function Nav() {
                       className="flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-sm text-neutral-300 transition hover:bg-white/5 hover:text-white"
                     >
                       <ShieldCheck size={14} /> Admin panel
+                      {newUsers24h > 0 ? ` · ${newUsers24h} new` : ''}
                     </Link>
                   )}
                   <Link
@@ -272,6 +354,7 @@ export function Nav() {
         {LINKS.map((link) => {
           const active = pathname?.startsWith(link.href);
           const Icon = link.icon;
+          const showApprovalBadge = link.href === APP_ROUTES.approvals && pendingApprovals > 0;
           return (
             <Link
               key={link.href}
@@ -283,6 +366,11 @@ export function Nav() {
             >
               <Icon size={13} />
               {link.label}
+              {showApprovalBadge ? (
+                <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-400 px-1 text-[9px] font-bold text-black">
+                  {pendingApprovals > 9 ? '9+' : pendingApprovals}
+                </span>
+              ) : null}
             </Link>
           );
         })}
