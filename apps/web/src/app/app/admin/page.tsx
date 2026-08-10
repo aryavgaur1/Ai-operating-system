@@ -93,6 +93,11 @@ export default function AdminPage() {
               className={`rounded-full border px-3 py-1.5 text-xs capitalize ${tab === t ? 'border-accent/40 bg-accent/20 text-white' : 'border-white/10 text-neutral-400'}`}
             >
               {t}
+              {t === 'users' && Number(metrics?.newUsersLast24h) > 0 ? (
+                <span className="ml-1.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-accent2/90 px-1 text-[10px] font-semibold text-black">
+                  {metrics.newUsersLast24h}
+                </span>
+              ) : null}
             </button>
           ))}
           <a
@@ -118,6 +123,7 @@ export default function AdminPage() {
             ['Pending approvals', metrics.pendingApprovals],
             ['Google signups', metrics.googleSignups],
             ['Email signups', metrics.emailSignups],
+            ['New users (24h)', metrics.newUsersLast24h ?? 0],
           ].map(([label, value]) => (
             <div key={String(label)} className="glass rounded-2xl p-4">
               <div className="text-[11px] uppercase tracking-wide text-neutral-500">{label}</div>
@@ -144,10 +150,27 @@ export default function AdminPage() {
             {users.map((u) => (
               <div key={u.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-white/8 bg-black/20 px-3 py-3 text-sm">
                 <div>
-                  <div className="font-medium text-white">{u.display_name || u.email}</div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-medium text-white">{u.display_name || u.email}</span>
+                    <span
+                      className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                        u.auth_provider === 'google'
+                          ? 'border-sky-400/30 bg-sky-400/10 text-sky-200'
+                          : 'border-white/10 bg-white/5 text-neutral-400'
+                      }`}
+                    >
+                      {u.auth_provider === 'google' ? 'Google' : 'Email'}
+                    </span>
+                    {u.created_at && Date.now() - new Date(u.created_at).getTime() < 24 * 60 * 60 * 1000 ? (
+                      <span className="rounded-full border border-accent2/30 bg-accent2/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent2">
+                        New
+                      </span>
+                    ) : null}
+                  </div>
                   <div className="text-xs text-neutral-500">
                     {u.email} · {u.role} · {u.workspace_name || '—'} · {u.is_verified ? 'verified' : 'unverified'}
                     {u.is_suspended ? ' · suspended' : ''}
+                    {u.last_login ? ` · last login ${new Date(u.last_login).toLocaleString()}` : ''}
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2">

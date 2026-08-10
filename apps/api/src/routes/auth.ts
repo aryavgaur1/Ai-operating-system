@@ -579,8 +579,8 @@ authRouter.get('/google/callback', async (req, res) => {
         slug,
       ]);
       userResult = await query<UserProfileRow>(
-        `insert into users (organization_id, email, display_name, role, is_verified, auth_provider, google_sub)
-         values ($1, $2, $3, 'owner', true, 'google', $4)
+        `insert into users (organization_id, email, display_name, role, is_verified, auth_provider, google_sub, last_login)
+         values ($1, $2, $3, 'owner', true, 'google', $4, now())
          returning id, email, display_name, role, organization_id, created_at, last_login, is_verified, is_suspended`,
         [org.rows[0].id, profile.email.toLowerCase(), profile.name ?? null, profile.sub]
       );
@@ -611,6 +611,11 @@ authRouter.get('/google/callback', async (req, res) => {
 
     const { device, browser } = parseUserAgent(req.header('user-agent'));
     const ip = (req.header('x-forwarded-for') ?? req.socket.remoteAddress ?? 'unknown').toString();
+    await query(
+      `insert into login_history (user_id, organization_id, ip, user_agent, device, browser, success)
+       values ($1, $2, $3, $4, $5, $6, true)`,
+      [user.id, user.organization_id, ip, req.header('user-agent'), device, browser]
+    ).catch(() => undefined);
     await logAuthEvent(user.organization_id, user.id, 'google_login', { email: user.email, device, browser, ip });
 
     const session = await issueSession(res, user.id, user.organization_id, {

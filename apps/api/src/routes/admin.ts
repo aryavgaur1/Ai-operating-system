@@ -12,7 +12,7 @@ adminRouter.use(requireAdmin);
 adminRouter.get(
   '/metrics',
   asyncHandler(async (_req, res) => {
-    const [users, verified, suspended, google, emailAuth, connections, chats, approvals, audits] =
+    const [users, verified, suspended, google, emailAuth, connections, chats, approvals, audits, recentUsers] =
       await Promise.all([
         query(`select count(*)::int as c from users`),
         query(`select count(*)::int as c from users where is_verified = true`),
@@ -23,6 +23,7 @@ adminRouter.get(
         query(`select count(*)::int as c from conversations`),
         query(`select count(*)::int as c from approvals where status = 'pending'`),
         query(`select count(*)::int as c from audit_logs where created_at > now() - interval '24 hours'`),
+        query(`select count(*)::int as c from users where created_at > now() - interval '24 hours'`),
       ]);
 
     ok(res, {
@@ -35,6 +36,7 @@ adminRouter.get(
       conversations: chats.rows[0].c,
       pendingApprovals: approvals.rows[0].c,
       activityLast24h: audits.rows[0].c,
+      newUsersLast24h: recentUsers.rows[0].c,
       revenuePlaceholder: 0,
       systemHealth: {
         api: true,
