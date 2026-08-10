@@ -30,12 +30,23 @@ NL examples:
    - `JIRA_CUSTOM_ENV_FIELD=customfield_XXXXX`
    - `JIRA_CUSTOM_DEPLOY_RISK_FIELD=customfield_XXXXX`
 4. **Webhook (status → Slack)**  
-   - In Jira: Settings → System → Webhooks  
-   - URL: `https://nexora-api.up.railway.app/webhooks/jira`  
-   - Events: Issue updated (status)  
-   - Env on API: `JIRA_STATUS_SLACK_CHANNEL=#engineering` (or channel ID)
-5. **Your Atlassian accountId** (for assign-by-id) if email assign fails — optional.
-6. **Deploy this branch** to Railway (API) + Netlify (web) when ready.
+   - In Jira: **Settings → System → Webhooks → Create**  
+   - **URL:** `https://nexora-api.up.railway.app/webhooks/jira`  
+   - **Events:** Issue → updated (include status changes)  
+   - **Slack channel for pings (configured):** `#engineering`  
+     Set on Railway API: `JIRA_STATUS_SLACK_CHANNEL=#engineering`  
+     (change to another channel name/ID anytime)
+
+5. **Discover custom field IDs (SEV / Environment / Deploy risk)**  
+   After Jira is connected, call (while logged in):
+
+   `GET https://nexora-api.up.railway.app/integrations/jira/fields`
+
+   Response includes `suggested.JIRA_CUSTOM_SEV_FIELD`, `JIRA_CUSTOM_ENV_FIELD`, `JIRA_CUSTOM_DEPLOY_RISK_FIELD`.  
+   Paste those into Railway env vars, then redeploy/restart the API.
+
+   If no matching fields exist yet, create them in Jira project **KAN** first (Select List / Text), then call the endpoint again.
+
 
 ## Env checklist (Railway API)
 
