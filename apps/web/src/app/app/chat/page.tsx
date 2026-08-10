@@ -53,6 +53,7 @@ export default function ChatPage() {
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   const [conversationId, setConversationId] = useState<string | undefined>();
   const [history, setHistory] = useState<{ id: string; title: string; pinned?: boolean }[]>([]);
+  const [approvingTurn, setApprovingTurn] = useState<number | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
   async function refreshHistory() {
@@ -66,7 +67,61 @@ export default function ChatPage() {
 
   useEffect(() => {
     refreshHistory();
+    try {
+      const flash = window.sessionStorage.getItem('nexora:approvalFlash');
+      if (flash) {
+        window.sessionStorage.removeItem('nexora:approvalFlash');
+        const now = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+        setTurns((t) => [
+          ...t,
+          { role: 'assistant', content: flash, timestamp: now },
+        ]);
+      }
+    } catch {
+      // ignore
+    }
   }, []);
+
+  async function approveAndRunFromChat(turnIndex: number, ids: string[]) {
+    if (!ids.length || approvingTurn !== null) return;
+    setApprovingTurn(turnIndex);
+    setError(null);
+    try {
+      const results: string[] = [];
+      for (const id of ids) {
+        const res = await api.decideApproval(id, 'approved');
+        const out = res.executionResult;
+        if (out?.ok) {
+          const key = (out.output as any)?.key;
+          const url = (out.output as any)?.url;
+          results.push(key ? `Created **${key}**${url ? ` — ${url}` : ''}` : `Ran ${res.approval.tool}.${res.approval.action}`);
+        } else {
+          results.push(out?.error || `Failed to run approval ${id}`);
+        }
+      }
+      const now = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      setTurns((prev) => {
+        const next = [...prev];
+        const turn = next[turnIndex];
+        if (turn?.detail) {
+          next[turnIndex] = {
+            ...turn,
+            detail: { ...turn.detail, pendingApprovalIds: [] },
+          };
+        }
+        next.push({
+          role: 'assistant',
+          content: results.join('\n') || 'Approved and executed.',
+          timestamp: now,
+        });
+        return next;
+      });
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setApprovingTurn(null);
+    }
+  }
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -289,16 +344,30 @@ export default function ChatPage() {
                                       Approval required · {level} risk
                                     </div>
                                     <p className="mt-2 text-sm leading-6 text-neutral-300">
-                                      This action is paused for human review. Open Approvals to inspect the preview,
-                                      then Approve &amp; run.
+                                      This action is paused for human review. Approve here to create it now, or open
+                                      Approvals for a full preview.
                                     </p>
-                                    <Link
-                                      href={APP_ROUTES.approvals}
-                                      className="mt-3 inline-flex items-center gap-2 rounded-full bg-accent px-4 py-2 text-xs font-semibold text-[#04101f] transition hover:bg-[#7db6ff]"
-                                    >
-                                      <ShieldAlert size={12} />
-                                      Approve &amp; run ({turn.detail.pendingApprovalIds.length})
-                                    </Link>
+                                    <div className="mt-3 flex flex-wrap gap-2">
+                                      <button
+                                        type="button"
+                                        disabled={approvingTurn === i}
+                                        onClick={() =>
+                                          approveAndRunFromChat(i, turn.detail!.pendingApprovalIds || [])
+                                        }
+                                        className="inline-flex items-center gap-2 rounded-full bg-accent px-4 py-2 text-xs font-semibold text-[#04101f] transition hover:bg-[#7db6ff] disabled:cursor-not-allowed disabled:opacity-50"
+                                      >
+                                        <ShieldAlert size={12} />
+                                        {approvingTurn === i
+                                          ? 'Running…'
+                                          : `Approve & run (${turn.detail.pendingApprovalIds.length})`}
+                                      </button>
+                                      <Link
+                                        href={APP_ROUTES.approvals}
+                                        className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/5 px-4 py-2 text-xs font-medium text-neutral-200 hover:bg-white/10"
+                                      >
+                                        Open Approvals
+                                      </Link>
+                                    </div>
                                   </div>
                                   <div className="relative mx-auto h-24 w-24">
                                     <RiskRadial value={score} color={color} />

@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { AnimatePresence, motion } from 'framer-motion';
 import { ArrowLeft, CheckCircle2, Clock, ShieldAlert, XCircle } from 'lucide-react';
 import { api, type ApprovalRequest } from '@/lib/api';
-import { GlassCard, Reveal, StaggerGroup } from '@/components/motion';
+import { GlassCard, Reveal } from '@/components/motion';
 import { RiskRadial } from '@/components/charts';
 import { cn } from '@/lib/utils';
 
@@ -36,9 +36,26 @@ export default function ApprovalsPage() {
 
   async function decide(id: string, decision: 'approved' | 'rejected') {
     setDecidingId(id);
+    setError(null);
     try {
-      await api.decideApproval(id, decision);
+      const res = await api.decideApproval(id, decision);
       load();
+      if (decision === 'approved') {
+        const out = res.executionResult;
+        if (out?.ok) {
+          const key = (out.output as any)?.key;
+          const url = (out.output as any)?.url;
+          const msg = key
+            ? `Approved and created ${key}${url ? ` — ${url}` : ''}`
+            : 'Approved and executed successfully.';
+          window.sessionStorage.setItem('nexora:approvalFlash', msg);
+          window.location.href = '/app/chat';
+          return;
+        }
+        if (out && !out.ok) {
+          setError(out.error || 'Approved, but execution failed.');
+        }
+      }
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -85,7 +102,7 @@ export default function ApprovalsPage() {
           </GlassCard>
         )}
 
-        <StaggerGroup className="grid gap-5">
+        <div className="grid gap-5">
           <AnimatePresence>
             {pending.map((a) => {
               const score = riskScore[a.riskLevel] ?? 40;
@@ -98,7 +115,7 @@ export default function ApprovalsPage() {
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, scale: 0.97, transition: { duration: 0.25 } }}
                 >
-                  <GlassCard className="p-6" hoverLift={false}>
+                  <div className="glass rounded-[28px] p-6">
                     <div className="grid gap-6 lg:grid-cols-[1fr_180px]">
                       <div>
                         <div className="flex flex-wrap items-start justify-between gap-3">
@@ -108,30 +125,36 @@ export default function ApprovalsPage() {
                             </div>
                             <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-neutral-500">
                               <span className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-2.5 py-1">
-                                <Clock size={11} /> {new Date(a.createdAt).toLocaleString()}
+                                <Clock size={11} />{' '}
+                                {a.createdAt ? new Date(a.createdAt).toLocaleString() : 'Just now'}
                               </span>
-                              <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1">Pending review</span>
+                              <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1">
+                                Pending review
+                              </span>
                             </div>
                           </div>
                           <span
                             className="rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-wide"
                             style={{ borderColor: `${color}55`, color, background: `${color}18` }}
                           >
-                            {a.riskLevel} risk
+                            {a.riskLevel || 'high'} risk
                           </span>
                         </div>
 
-                        <p className="mt-3 text-sm leading-6 text-neutral-400">{riskCopy[a.riskLevel]}</p>
+                        <p className="mt-3 text-sm leading-6 text-neutral-400">
+                          {riskCopy[a.riskLevel] || riskCopy.high}
+                        </p>
 
                         <div className="mt-4">
                           <div className="mb-2 text-xs uppercase tracking-[0.2em] text-neutral-500">Preview</div>
                           <pre className="code thin-scroll max-h-40 overflow-auto rounded-2xl border border-white/10 bg-black/40 p-4 text-xs leading-6 text-neutral-300">
-                            {JSON.stringify(a.input, null, 2)}
+                            {JSON.stringify(a.input ?? {}, null, 2)}
                           </pre>
                         </div>
 
                         <div className="mt-5 flex flex-wrap gap-3">
                           <button
+                            type="button"
                             onClick={() => decide(a.id, 'approved')}
                             disabled={decidingId === a.id}
                             className="inline-flex items-center gap-2 rounded-full bg-accent px-5 py-2.5 text-sm font-semibold text-[#04101f] transition hover:bg-[#7db6ff] disabled:cursor-not-allowed disabled:opacity-50"
@@ -139,6 +162,7 @@ export default function ApprovalsPage() {
                             <CheckCircle2 size={14} /> Approve &amp; run
                           </button>
                           <button
+                            type="button"
                             onClick={() => decide(a.id, 'rejected')}
                             disabled={decidingId === a.id}
                             className="inline-flex items-center gap-2 rounded-full border border-white/12 bg-white/5 px-5 py-2.5 text-sm text-neutral-300 transition hover:text-white"
@@ -158,12 +182,12 @@ export default function ApprovalsPage() {
                         </div>
                       </div>
                     </div>
-                  </GlassCard>
+                  </div>
                 </motion.div>
               );
             })}
           </AnimatePresence>
-        </StaggerGroup>
+        </div>
 
         {decided.length > 0 && (
           <div>
