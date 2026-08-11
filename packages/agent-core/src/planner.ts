@@ -268,6 +268,8 @@ const TOOL_RULES: ToolRule[] = [
       if (/\bfind where we (?:discussed|talked)\b/.test(lower)) return true;
       if (/\b(who owns|find owner|what did we decide)\b/.test(lower)) return true;
       if (/\b(set\s+topic|bookmark|show history|get history|invite)\b/.test(lower)) return true;
+      if (/\b(edit|update|delete)\b/.test(lower) && /\b(message|msg|post)\b/.test(lower)) return true;
+      if (/\b(permalink|join\s+(?:the\s+)?channel|open\s+dm|direct message)\b/.test(lower)) return true;
       return false;
     },
   },
@@ -342,6 +344,41 @@ function parseSlackActionQuery(query: string): Record<string, unknown> {
       const searchQ = [project, 'delayed', 'delay', 'because'].filter(Boolean).join(' ');
       return { action: 'semanticSearch', query: searchQ || query };
     }
+  }
+
+  // Edit / delete / permalink / join / DM
+  if (/\b(edit|update)\b/.test(lower) && /\b(message|msg|post)\b/.test(lower)) {
+    const ts = query.match(/\b(\d{10}\.\d+)\b/)?.[1];
+    return {
+      action: 'updateMessage',
+      channel,
+      ts,
+      text: quoted ?? query.replace(/^.*?to\s+/i, '').slice(0, 3000),
+    };
+  }
+
+  if (/\b(delete|remove)\b/.test(lower) && /\b(message|msg|post)\b/.test(lower)) {
+    const ts = query.match(/\b(\d{10}\.\d+)\b/)?.[1];
+    return { action: 'deleteMessage', channel, ts };
+  }
+
+  if (/\b(permalink|message link|link to (?:the )?message)\b/.test(lower)) {
+    const ts = query.match(/\b(\d{10}\.\d+)\b/)?.[1];
+    return { action: 'getPermalink', channel, ts };
+  }
+
+  if (/\b(join)\b/.test(lower) && /\b(channel|#)/.test(lower)) {
+    return { action: 'joinChannel', channel };
+  }
+
+  if (/\b(dm|direct message|message privately)\b/.test(lower) || (/\b(open)\b/.test(lower) && /\bdm\b/.test(lower))) {
+    const users = userMention ? [userMention] : [];
+    const extra = [...query.matchAll(/@([a-z0-9._-]+)/gi)].map((m) => m[1]);
+    return {
+      action: 'openDm',
+      users: users.length ? users : extra,
+      text: quoted,
+    };
   }
 
   if (/\b(bookmark|pin (?:this )?link)\b/.test(lower)) {

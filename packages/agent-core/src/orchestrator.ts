@@ -209,7 +209,11 @@ export async function runAgentTurn(
 
   const approvalNote =
     pendingApprovalIds.length > 0
-      ? `\n\nNote: ${pendingApprovalIds.length} action(s) need your approval before they run — check Approvals.`
+      ? `\n\nNote: ${pendingApprovalIds.length} action(s) need your approval before they run — check Approvals${
+          process.env.SLACK_APPROVALS_CHANNEL?.trim()
+            ? ` (or Approve & Run in Slack #${process.env.SLACK_APPROVALS_CHANNEL.replace(/^#/, '')})`
+            : ''
+        }.`
       : '';
 
   let reply: string;

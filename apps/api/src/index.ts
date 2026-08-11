@@ -11,7 +11,7 @@ import { chatRouter } from './routes/chat';
 import { approvalsRouter } from './routes/approvals';
 import { integrationsRouter } from './routes/integrations';
 import { webhooksRouter } from './routes/webhooks';
-import { slackRouter, slackEventsRouter } from './routes/slack';
+import { slackRouter, slackEventsRouter, slackCommandsRouter, slackInteractionsRouter } from './routes/slack';
 import { authRouter } from './routes/auth';
 import { adminRouter } from './routes/admin';
 import { oauthNotionRouter } from './routes/oauth-notion';
@@ -80,6 +80,15 @@ app.use(
     },
   })
 );
+// Slack slash commands + interactive buttons post form-urlencoded
+app.use(
+  express.urlencoded({
+    extended: true,
+    verify: (req, _res, buf) => {
+      (req as any).rawBody = buf;
+    },
+  })
+);
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -93,6 +102,8 @@ const authLimiter = rateLimit({
 // Public webhooks / events
 app.use('/webhooks', webhooksRouter);
 app.use('/integrations/slack/events', slackEventsRouter);
+app.use('/integrations/slack/commands', slackCommandsRouter);
+app.use('/integrations/slack/interactions', slackInteractionsRouter);
 
 // Auth (rate-limited)
 app.use('/auth', authLimiter, authRouter);

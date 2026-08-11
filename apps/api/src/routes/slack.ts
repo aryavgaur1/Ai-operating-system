@@ -1,6 +1,6 @@
 import { Router, type Request, type Response, type NextFunction } from 'express';
-import { isLiveMode, slackService, SlackServiceError, runWithConnectorContext } from '@enterprise-ai-os/connectors';
-import { runAgentTurn } from '@enterprise-ai-os/agent-core';
+import { isLiveMode, slackService, SlackServiceError, runWithConnectorContext, replyApprovalOutcome } from '@enterprise-ai-os/connectors';
+import { runAgentTurn, getApprovalStore, executeApprovedAction } from '@enterprise-ai-os/agent-core';
 import {
   getSlackInstallation,
   upsertSlackInstallation,
@@ -12,10 +12,14 @@ import { handleWebhookEvent, getStores } from '../ingestion/pipeline';
 import { getDemoOrgId } from '../middleware/auth';
 import { asyncHandler, ok, fail, AppError } from '../lib/errors';
 import { logger } from '../lib/logger';
+import { withUserConnectorContext } from '../lib/withUserConnectors';
 
 export const slackRouter = Router();
 /** Unauthenticated Events API endpoint (mounted before RBAC). */
 export const slackEventsRouter = Router();
+/** Slash commands + interactive components (Approve & Run buttons). */
+export const slackCommandsRouter = Router();
+export const slackInteractionsRouter = Router();
 
 type AuthedRequest = Request & { rawBody?: Buffer | string };
 
@@ -427,6 +431,202 @@ slackEventsRouter.post(
     }
 
     return res.status(200).json({ ok: true });
+  })
+);
+
+function verifySlackRequest(req: AuthedRequest): boolean {
+  const signingSecret = process.env.SLACK_SIGNING_SECRET?.trim();
+  if (!signingSecret) {
+    logger.warn('slack.signature.missing_signing_secret', {});
+    return true; // allow in misconfigured demo; prefer secret in prod
+  }
+  const signature = req.header('x-slack-signature') ?? undefined;
+  const timestamp = req.header('x-slack-request-timestamp') ?? undefined;
+  const rawBody = req.rawBody ?? (typeof req.body === 'string' ? req.body : JSON.stringify(req.body ?? {}));
+  return slackService.verifySlackSignature(signingSecret, signature, timestamp, String(rawBody));
+}
+
+/** Slash command: /nexora <natural language> */
+slackCommandsRouter.post(
+  '/',
+  asyncHandler(async (req: AuthedRequest, res: Response) => {
+    if (!verifySlackRequest(req)) {
+      return fail(res, 'Invalid Slack request signature', 401, 'invalid_signature');
+    }
+
+    const text = String(req.body?.text ?? '').trim();
+    const channelId = String(req.body?.channel_id ?? '');
+    const userId = String(req.body?.user_id ?? '');
+    const responseUrl = String(req.body?.response_url ?? '');
+
+    // Acknowledge immediately (Slack requires < 3s)
+    res.status(200).json({
+      response_type: 'ephemeral',
+      text: text
+        ? `Working on: ${text.slice(0, 200)}…`
+        : 'Usage: `/nexora create war room for Atlas` or `/nexora what blocked engineering?`',
+    });
+
+    if (!text) return;
+
+    void (async () => {
+      const started = Date.now();
+      const orgId = getDemoOrgId();
+      try {
+        if (isLiveMode('slack') && process.env.SLACK_BOT_TOKEN?.trim()) {
+          slackService.initializeClient();
+        }
+        const { vectorStore, graphStore } = getStores();
+        const result = await runWithConnectorContext({ organizationId: orgId }, () =>
+          runAgentTurn(text, orgId, vectorStore, graphStore)
+        );
+        const reply = (result.reply || 'Done.').slice(0, 3500);
+        if (responseUrl) {
+          await fetch(responseUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ response_type: 'in_channel', text: reply }),
+          }).catch(() => undefined);
+        } else if (channelId) {
+          await slackService.postMessage({ channel: channelId, text: reply });
+        }
+        await logSlackAction({
+          organizationId: orgId,
+          action: 'slash_nexora',
+          payload: { text, userId, executed: result.executedCalls.map((c) => ({ action: c.action, ok: c.ok })) },
+          status: 'ok',
+          executionTimeMs: Date.now() - started,
+        });
+      } catch (err) {
+        logger.error('slack.slash_nexora_failed', {
+          message: err instanceof Error ? err.message : String(err),
+        });
+        if (responseUrl) {
+          await fetch(responseUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              response_type: 'ephemeral',
+              text: `Error: ${err instanceof Error ? err.message : String(err)}`,
+            }),
+          }).catch(() => undefined);
+        }
+      }
+    })();
+  })
+);
+
+/** Interactive components: Approve & Run / Reject buttons */
+slackInteractionsRouter.post(
+  '/',
+  asyncHandler(async (req: AuthedRequest, res: Response) => {
+    if (!verifySlackRequest(req)) {
+      return fail(res, 'Invalid Slack request signature', 401, 'invalid_signature');
+    }
+
+    let payload: any = req.body?.payload ?? req.body;
+    if (typeof payload === 'string') {
+      try {
+        payload = JSON.parse(payload);
+      } catch {
+        return fail(res, 'Invalid interaction payload', 400);
+      }
+    }
+
+    const action = payload?.actions?.[0];
+    const actionId = String(action?.action_id ?? '');
+    const approvalId = String(action?.value ?? '').trim();
+    const channelId = String(payload?.channel?.id ?? payload?.container?.channel_id ?? '');
+    const messageTs = String(payload?.message?.ts ?? payload?.container?.message_ts ?? '');
+    const slackUser = String(payload?.user?.id ?? 'slack-user');
+
+    // Ack immediately (empty 200 — follow-up via chat.postMessage)
+    res.status(200).send();
+
+    if (!approvalId || (actionId !== 'nexora_approve_run' && actionId !== 'nexora_reject')) {
+      return;
+    }
+
+    void (async () => {
+      const store = getApprovalStore();
+      const orgId = getDemoOrgId();
+      try {
+        if (actionId === 'nexora_reject') {
+          const updated = await store.decide(approvalId, 'rejected', `slack:${slackUser}`);
+          await replyApprovalOutcome({
+            channel: channelId,
+            threadTs: messageTs,
+            text: updated
+              ? `Rejected \`${updated.tool}.${updated.action}\` (\`${approvalId}\`) by <@${slackUser}>.`
+              : `Could not reject \`${approvalId}\` — already decided or missing.`,
+          });
+          return;
+        }
+
+        const existing = await store.get(approvalId);
+        if (!existing) {
+          await replyApprovalOutcome({
+            channel: channelId,
+            threadTs: messageTs,
+            text: `Approval \`${approvalId}\` not found.`,
+          });
+          return;
+        }
+
+        if (
+          existing.status === 'approved' &&
+          existing.executionResult &&
+          (existing.executionStatus === 'completed' || existing.executionStatus === 'failed')
+        ) {
+          const okRun = existing.executionResult.ok;
+          await replyApprovalOutcome({
+            channel: channelId,
+            threadTs: messageTs,
+            text: `Already ${okRun ? 'completed' : 'failed'}: \`${existing.tool}.${existing.action}\` (idempotent).`,
+          });
+          return;
+        }
+
+        const claimed = await store.claimForExecution(approvalId, `slack:${slackUser}`);
+        if (!claimed) {
+          await replyApprovalOutcome({
+            channel: channelId,
+            threadTs: messageTs,
+            text: `Could not claim \`${approvalId}\` — already decided or executing.`,
+          });
+          return;
+        }
+
+        const executionResult = await withUserConnectorContext(
+          { id: `slack:${slackUser}`, organizationId: existing.organizationId || orgId },
+          () => executeApprovedAction(approvalId)
+        );
+
+        const final = (await store.get(approvalId)) ?? claimed;
+        const okRun = Boolean(executionResult?.ok && !executionResult?.mocked);
+        await replyApprovalOutcome({
+          channel: channelId,
+          threadTs: messageTs,
+          text: okRun
+            ? `Approved & ran \`${final.tool}.${final.action}\` by <@${slackUser}>${
+                final.executionVerified ? ' · verified externally' : ''
+              }.`
+            : `Approve & run failed for \`${final.tool}.${final.action}\`: ${
+                executionResult?.error ?? 'unknown error'
+              }`,
+        });
+      } catch (err) {
+        logger.error('slack.interaction_approve_failed', {
+          message: err instanceof Error ? err.message : String(err),
+          approvalId,
+        });
+        await replyApprovalOutcome({
+          channel: channelId,
+          threadTs: messageTs,
+          text: `Approve & run error: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      }
+    })();
   })
 );
 

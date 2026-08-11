@@ -1044,6 +1044,82 @@ export async function searchFiles(query: string, count = 20) {
   }
 }
 
+export async function updateMessage(input: { channel: string; ts: string; text: string }) {
+  const client = getClient();
+  const channel = await resolveChannelId(input.channel);
+  const ts = String(input.ts ?? '').trim();
+  if (!ts) throw new SlackServiceError('message ts is required', 'ts_required', 400);
+  const res = await callSlack(() =>
+    client.chat.update({
+      channel,
+      ts,
+      text: String(input.text ?? ''),
+    })
+  );
+  return { ok: true, channel: res.channel ?? channel, ts: res.ts ?? ts, text: input.text, verified: true };
+}
+
+export async function deleteMessage(input: { channel: string; ts: string }) {
+  const client = getClient();
+  const channel = await resolveChannelId(input.channel);
+  const ts = String(input.ts ?? '').trim();
+  if (!ts) throw new SlackServiceError('message ts is required', 'ts_required', 400);
+  await callSlack(() => client.chat.delete({ channel, ts }));
+  return { ok: true, channel, ts, deleted: true };
+}
+
+export async function getPermalink(input: { channel: string; ts: string }) {
+  const client = getClient();
+  const channel = await resolveChannelId(input.channel);
+  const ts = String(input.ts ?? '').trim();
+  if (!ts) throw new SlackServiceError('message ts is required', 'ts_required', 400);
+  const res = await callSlack(() => client.chat.getPermalink({ channel, message_ts: ts }));
+  return { ok: true, channel, ts, permalink: (res as any).permalink as string };
+}
+
+export async function joinChannel(input: { channel: string }) {
+  const client = getClient();
+  const channel = await resolveChannelId(input.channel);
+  const res = await callSlack(() => client.conversations.join({ channel }));
+  const joined = (res as any).channel ?? {};
+  return { ok: true, id: joined.id ?? channel, name: joined.name, channel: joined.id ?? channel };
+}
+
+export async function openDm(input: { users: string | string[]; text?: string }) {
+  const client = getClient();
+  const refs = Array.isArray(input.users) ? input.users : String(input.users ?? '').split(/[,\s]+/).filter(Boolean);
+  const userIds = await resolveUserRefs(refs);
+  if (!userIds.length) throw new SlackServiceError('No users found for DM', 'users_required', 400);
+  const open = await callSlack(() => client.conversations.open({ users: userIds.join(',') }));
+  const channel = String((open as any).channel?.id ?? '');
+  if (!channel) throw new SlackServiceError('Could not open DM', 'dm_open_failed', 502);
+  if (input.text) {
+    const posted = await postMessage({ channel, text: String(input.text) });
+    return { ok: true, channel, users: userIds, ts: posted.ts, posted: true };
+  }
+  return { ok: true, channel, users: userIds, posted: false };
+}
+
+/** Post Block Kit (used for in-Slack Approve & Run cards). */
+export async function postBlocks(input: {
+  channel: string;
+  text: string;
+  blocks: unknown[];
+  threadTs?: string;
+}) {
+  const client = getClient();
+  const channel = await resolveChannelId(input.channel);
+  const res = await callSlack(() =>
+    client.chat.postMessage({
+      channel,
+      text: String(input.text ?? ''),
+      blocks: input.blocks as any,
+      thread_ts: input.threadTs,
+    })
+  );
+  return { ok: true, channel: res.channel, ts: res.ts };
+}
+
 export const slackService = {
   initializeClient,
   initializeUserClient,
@@ -1058,6 +1134,12 @@ export const slackService = {
   resolveChannelId,
   postMessage,
   postExternalMessage,
+  postBlocks,
+  updateMessage,
+  deleteMessage,
+  getPermalink,
+  joinChannel,
+  openDm,
   listChannels,
   listUsers,
   findUsersByRole,

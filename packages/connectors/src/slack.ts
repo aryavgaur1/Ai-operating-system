@@ -24,6 +24,11 @@ import {
   listPins,
   searchFiles,
   findUsersByRole,
+  updateMessage,
+  deleteMessage,
+  getPermalink,
+  joinChannel,
+  openDm,
 } from './slackService';
 import * as intelligence from './slackIntelligence';
 
@@ -96,6 +101,11 @@ const LIVE_ACTIONS = [
   'findDecision',
   'findOwner',
   'generateMeetingNotes',
+  'updateMessage',
+  'deleteMessage',
+  'getPermalink',
+  'joinChannel',
+  'openDm',
 ];
 
 function workspaceUrl(channelId: string, ts?: string): string {
@@ -565,6 +575,41 @@ class SlackConnector implements ToolConnector {
               await intelligence.generateMeetingNotes({
                 channel: String(input.channel ?? 'general'),
                 limit: Number(input.limit ?? 50),
+              })
+            );
+          case 'updateMessage':
+            return okResult(
+              action,
+              await updateMessage({
+                channel: String(input.channel ?? ''),
+                ts: String(input.ts ?? input.timestamp ?? ''),
+                text: String(input.text ?? ''),
+              })
+            );
+          case 'deleteMessage':
+            return okResult(
+              action,
+              await deleteMessage({
+                channel: String(input.channel ?? ''),
+                ts: String(input.ts ?? input.timestamp ?? ''),
+              })
+            );
+          case 'getPermalink':
+            return okResult(
+              action,
+              await getPermalink({
+                channel: String(input.channel ?? ''),
+                ts: String(input.ts ?? input.timestamp ?? ''),
+              })
+            );
+          case 'joinChannel':
+            return okResult(action, await joinChannel({ channel: String(input.channel ?? '') }));
+          case 'openDm':
+            return okResult(
+              action,
+              await openDm({
+                users: (input.users as string | string[]) ?? (input.user as string) ?? '',
+                text: input.text as string | undefined,
               })
             );
           default:

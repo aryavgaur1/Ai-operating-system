@@ -216,11 +216,34 @@ export async function verifyToolResult(call: ToolCall, result: ToolCallResult): 
     }
     if (call.tool === 'slack' && call.action === 'createWarRoom') {
       const channel = (output.channel || {}) as { id?: string };
-      return Boolean(channel.id);
+      const id = String(channel.id ?? output.id ?? '').trim();
+      if (!id) return false;
+      try {
+        const info = await slackService.getClient().conversations.info({ channel: id });
+        return Boolean((info as any).ok && (info as any).channel?.id);
+      } catch {
+        return Boolean(id);
+      }
     }
     if (call.tool === 'slack' && call.action === 'createIncident') {
       const channel = (output.channel || {}) as { id?: string };
-      return Boolean(channel.id);
+      const id = String(channel.id ?? output.id ?? '').trim();
+      if (!id) return false;
+      try {
+        const info = await slackService.getClient().conversations.info({ channel: id });
+        return Boolean((info as any).ok && (info as any).channel?.id);
+      } catch {
+        return Boolean(id);
+      }
+    }
+    if (call.tool === 'slack' && (call.action === 'updateMessage' || call.action === 'deleteMessage')) {
+      return Boolean(output.ts || call.input?.ts);
+    }
+    if (call.tool === 'slack' && call.action === 'openDm') {
+      return Boolean(output.channel);
+    }
+    if (call.tool === 'slack' && call.action === 'joinChannel') {
+      return Boolean(output.id || output.channel);
     }
     if (call.tool === 'jira' && (call.action === 'createIssue' || call.action === 'addComment' || call.action === 'transitionIssue')) {
       return Boolean(output.key || output.id);

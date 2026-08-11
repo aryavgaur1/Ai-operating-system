@@ -4,7 +4,7 @@ import type {
   ToolCallResult,
   WorkflowStepResult,
 } from '@enterprise-ai-os/shared';
-import { getConnector, getConnectorContext } from '@enterprise-ai-os/connectors';
+import { getConnector, getConnectorContext, notifyPendingApproval } from '@enterprise-ai-os/connectors';
 import { logSlackAction } from '@enterprise-ai-os/stores';
 import { getApprovalStore } from '../approvals';
 import {
@@ -266,6 +266,13 @@ export async function executePlanResilient(
     if (raw.requiresApproval) {
       const approval = await approvalStore.create(organizationId, raw, requestedByUserId);
       pendingApprovalIds.push(approval.id);
+      void notifyPendingApproval({
+        approvalId: approval.id,
+        tool: raw.tool,
+        action: raw.action,
+        riskLevel: raw.riskLevel,
+        summary: JSON.stringify(raw.input ?? {}).slice(0, 400),
+      });
       steps.push({
         stepId: `approval.${raw.tool}.${raw.action}`,
         tool: raw.tool,

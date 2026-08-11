@@ -3,6 +3,7 @@ import {
   getConnector,
   getConnectorContext,
   initializeNotionClient,
+  notifyPendingApproval,
   slackService,
 } from '@enterprise-ai-os/connectors';
 import { logSlackAction } from '@enterprise-ai-os/stores';
@@ -52,6 +53,13 @@ export async function executePlan(
     if (call.requiresApproval) {
       const approval = await approvalStore.create(organizationId, call, requestedByUserId);
       pendingApprovalIds.push(approval.id);
+      void notifyPendingApproval({
+        approvalId: approval.id,
+        tool: call.tool,
+        action: call.action,
+        riskLevel: call.riskLevel,
+        summary: JSON.stringify(call.input ?? {}).slice(0, 400),
+      });
       continue;
     }
     const connector = getConnector(call.tool);
@@ -155,6 +163,54 @@ async function confirmExternalObject(call: ToolCall, result: ToolCallResult): Pr
       if (!id) return false;
       const info = await slackService.getClient().conversations.info({ channel: id });
       return Boolean((info as any).ok && (info as any).channel?.id);
+    }
+
+    if (call.tool === 'slack' && (call.action === 'createWarRoom' || call.action === 'createIncident')) {
+      const channelObj = (output.channel || {}) as { id?: string };
+      const id = String(channelObj.id ?? output.id ?? output.channelId ?? '').trim();
+      if (!id) return false;
+      const info = await slackService.getClient().conversations.info({ channel: id });
+      return Boolean((info as any).ok && (info as any).channel?.id);
+    }
+
+    if (call.tool === 'slack' && call.action === 'updateMessage') {
+      const channel = String(output.channel ?? call.input?.channel ?? '').trim();
+      const ts = String(output.ts ?? call.input?.ts ?? '').trim();
+      if (!channel || !ts) return false;
+      const hist = await slackService.getClient().conversations.history({
+        channel,
+        latest: ts,
+        oldest: ts,
+        inclusive: true,
+        limit: 1,
+      });
+      const msg = ((hist as any).messages ?? [])[0];
+      if (!msg) return false;
+      const want = String(call.input?.text ?? '').trim();
+      if (!want) return true;
+      return String(msg.text ?? '').includes(want.slice(0, 40));
+    }
+
+    if (call.tool === 'slack' && call.action === 'deleteMessage') {
+      return output.deleted === true && Boolean(output.ts);
+    }
+
+    if (call.tool === 'slack' && call.action === 'inviteUsers') {
+      return output.ok !== false && Boolean(output.channel || call.input?.channel);
+    }
+
+    if (call.tool === 'slack' && call.action === 'openDm') {
+      const channel = String(output.channel ?? '').trim();
+      if (!channel) return false;
+      const info = await slackService.getClient().conversations.info({ channel });
+      return Boolean((info as any).ok && (info as any).channel?.id);
+    }
+
+    if (call.tool === 'slack' && call.action === 'joinChannel') {
+      const id = String(output.id ?? output.channel ?? '').trim();
+      if (!id) return false;
+      const info = await slackService.getClient().conversations.info({ channel: id });
+      return Boolean((info as any).ok && (info as any).channel?.is_member !== false);
     }
 
     // Fallback: structural verify (ts / id / key present) via shared preflight helper

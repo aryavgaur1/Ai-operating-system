@@ -16,6 +16,12 @@ export { slackService, SlackServiceError, verifySlackSignature } from './slackSe
 export { default as slack_service } from './slackService';
 export * as slackIntelligence from './slackIntelligence';
 export {
+  notifyPendingApproval,
+  buildApprovalBlocks,
+  replyApprovalOutcome,
+  getApprovalsChannel,
+} from './slackApprovals';
+export {
   connectorContext,
   runWithConnectorContext,
   getConnectorContext,
