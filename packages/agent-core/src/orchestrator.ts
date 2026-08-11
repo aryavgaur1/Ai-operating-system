@@ -147,20 +147,29 @@ function formatReply(executedCalls: AgentTurnResult['executedCalls'], plan: Agen
   return lines.join('\n') + approvalNote;
 }
 
+export interface RunAgentTurnOptions {
+  history?: Array<{ role: string; content: string }>;
+  contextPack?: string;
+}
+
 export async function runAgentTurn(
   query: string,
   organizationId: string,
   vectorStore: VectorStore,
   graphStore: GraphStore,
-  requestedByUserId?: string
+  requestedByUserId?: string,
+  options?: RunAgentTurnOptions
 ): Promise<AgentTurnResult> {
   const started = Date.now();
 
+  // Strip planner context appendix if present (used by AI Service)
+  const userFacingQuery = query.replace(/\n\n\[Context for planner[\s\S]*$/i, '').trim() || query;
+
   // STEP 1 — Intent detection (OS) + legacy classifier for compatibility
-  const osIntent = detectOsIntent(query);
+  const osIntent = detectOsIntent(userFacingQuery);
   const legacyIntent: ClassifiedIntent =
     osIntent.kind === 'read_only'
-      ? classifyIntent(query)
+      ? classifyIntent(userFacingQuery)
       : {
           intent: osIntent.legacyIntent,
           confidence: osIntent.confidence,
@@ -168,11 +177,20 @@ export async function runAgentTurn(
         };
 
   // Retrieval / reasoning context
-  const context = await hybridRetrieve(query, organizationId, vectorStore, graphStore);
+  const context = await hybridRetrieve(userFacingQuery, organizationId, vectorStore, graphStore);
   const llm = createLLMClient();
 
+  const historyNote =
+    options?.history?.length
+      ? `\nRecent conversation:\n${options.history
+          .slice(-8)
+          .map((m) => `${m.role}: ${m.content.slice(0, 400)}`)
+          .join('\n')}`
+      : '';
+  const packNote = options?.contextPack ? `\nContext pack (bounded):\n${options.contextPack.slice(0, 2000)}` : '';
+
   // STEP 2 — Planner: workflow decomposition OR legacy keyword plan
-  const workflow = planWorkflow(query, osIntent);
+  const workflow = planWorkflow(userFacingQuery, osIntent);
   let plan: AgentPlan;
 
   if (workflow.toolCalls.length > 0) {
@@ -184,7 +202,7 @@ export async function runAgentTurn(
       },
       {
         role: 'user',
-        content: `User: ${query}\n\nPlan:\n${workflow.planSteps.map((s, i) => `${i + 1}. ${s}`).join('\n')}\n\nReasoning:\n${workflow.reasoning.join('\n')}`,
+        content: `User: ${userFacingQuery}${historyNote}${packNote}\n\nPlan:\n${workflow.planSteps.map((s, i) => `${i + 1}. ${s}`).join('\n')}\n\nReasoning:\n${workflow.reasoning.join('\n')}`,
       },
     ]);
     plan = {
@@ -195,7 +213,12 @@ export async function runAgentTurn(
     };
   } else {
     // Legacy single-action path (still goes through resilient executor)
-    plan = await buildPlan(query, legacyIntent.intent === 'action' ? legacyIntent : { ...legacyIntent, intent: osIntent.legacyIntent }, context, llm);
+    plan = await buildPlan(
+      userFacingQuery,
+      legacyIntent.intent === 'action' ? legacyIntent : { ...legacyIntent, intent: osIntent.legacyIntent },
+      context,
+      llm
+    );
     workflow.reasoning.push('Legacy planner selected tool calls.');
     workflow.planSteps.push(...plan.toolCalls.map((c) => `${c.tool}.${c.action}`));
   }
@@ -217,14 +240,14 @@ export async function runAgentTurn(
       : '';
 
   let reply: string;
-  const q = query.trim().toLowerCase();
+  const q = userFacingQuery.trim().toLowerCase();
   if (/^(slack|notion)\s*\??$/.test(q) && executedCalls.length === 0) {
     reply =
       q.startsWith('slack')
         ? `Slack is connected (live). Try:\n- create new channel investor-pitch\n- post "kickoff in 10 mins" to #general on slack\n- invite Aryav Gaur to #all-nexora on slack\n- Create a launch war room for Project Atlas\n- What blocked Engineering this week?\n- Find unanswered messages`
         : `Notion is connected (live). Try:\n- create a notion page titled Weekly Update\n- Create a Notion PRD for Atlas\n- Create meeting notes in Notion`;
   } else if (executedCalls.length === 0 && pendingApprovalIds.length === 0) {
-    // No-fallback policy: diagnose instead of "I couldn't"
+    // Leave a marker the AI Service can replace with general intelligence
     reply =
       plan.responseDraft ||
       `I understood this as **${osIntent.kind}** (${osIntent.rationale}). I did not need a tool yet — ask me to launch a project, open an incident, prepare standup, or create a Notion page.`;
@@ -233,14 +256,14 @@ export async function runAgentTurn(
   }
 
   // STEP 8 — Thread memory
-  const memoryKeys = await rememberFromExecution(organizationId, requestedByUserId, query, executedCalls);
+  const memoryKeys = await rememberFromExecution(organizationId, requestedByUserId, userFacingQuery, executedCalls);
 
   // STEP 10 — Workflow log
   const success = executedCalls.length === 0 || executedCalls.some((c) => c.ok);
   await logWorkflow({
     organizationId,
     userId: requestedByUserId,
-    query,
+    query: userFacingQuery,
     intent: osIntent,
     reasoning: workflow.reasoning,
     planSteps: workflow.planSteps,

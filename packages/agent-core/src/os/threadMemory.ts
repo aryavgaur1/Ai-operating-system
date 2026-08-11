@@ -47,9 +47,38 @@ export async function recall(organizationId: string, key: string): Promise<Recor
       `select value from agent_memory where organization_id = $1 and memory_key = $2 limit 1`,
       [organizationId, key]
     );
-    return res.rows[0]?.value ?? null;
+    const value = res.rows[0]?.value ?? null;
+    if (value) memoryCache.set(cacheKey(organizationId, key), value);
+    return value;
   } catch {
     return null;
+  }
+}
+
+/** Recent memory rows for context pack (bounded — never dumps the whole table). */
+export async function listRecentMemory(
+  organizationId: string,
+  limit = 8
+): Promise<Array<{ key: string; value: Record<string, unknown> }>> {
+  try {
+    const res = await query<{ memory_key: string; value: Record<string, unknown> }>(
+      `select memory_key, value from agent_memory
+       where organization_id = $1
+       order by updated_at desc
+       limit $2`,
+      [organizationId, limit]
+    );
+    return res.rows.map((r) => ({ key: r.memory_key, value: r.value }));
+  } catch {
+    // Fallback: in-memory cache for this org
+    const out: Array<{ key: string; value: Record<string, unknown> }> = [];
+    const prefix = `${organizationId}::`;
+    for (const [k, v] of memoryCache.entries()) {
+      if (!k.startsWith(prefix)) continue;
+      out.push({ key: k.slice(prefix.length), value: v });
+      if (out.length >= limit) break;
+    }
+    return out;
   }
 }
 

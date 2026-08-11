@@ -9,11 +9,14 @@ import {
   FileUp,
   Mic,
   Quote,
+  RefreshCw,
   Send,
   ShieldAlert,
   Sparkles,
+  Square,
   Terminal,
   Wand2,
+  X,
 } from 'lucide-react';
 import { api, type AgentTurnResult } from '@/lib/api';
 import { GlassCard, Reveal } from '@/components/motion';
@@ -33,10 +36,10 @@ interface Turn {
 }
 
 const SUGGESTIONS = [
-  'Why is Project Phoenix delayed?',
-  'What is the status of Acme Corp?',
-  'Draft an email to the client about the new timeline',
-  'Create a Jira ticket to track the vendor contract follow-up',
+  'Explain recursion with a short example',
+  'Write a React TypeScript button component',
+  'Create a launch war room for Project Atlas on slack',
+  'What is Nexora and how do Approvals work?',
 ];
 
 const riskBadgeClasses: Record<string, string> = {
@@ -45,16 +48,32 @@ const riskBadgeClasses: Record<string, string> = {
   high: 'bg-rose-500/12 text-rose-300 border-rose-500/25',
 };
 
+const MAX_CLIENT_UPLOAD_BYTES = 12 * 1024 * 1024;
+const ALLOWED_CLIENT_EXT = /\.(pdf|docx|txt|md|markdown|csv|tsv|json|xlsx|xls|png|jpe?g|webp|gif|ts|tsx|js|jsx|py|sql|html|css|ya?ml)$/i;
+
+type MicState = 'idle' | 'listening' | 'unsupported' | 'denied' | 'error';
+
 export default function ChatPage() {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [statusLine, setStatusLine] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   const [conversationId, setConversationId] = useState<string | undefined>();
   const [history, setHistory] = useState<{ id: string; title: string; pinned?: boolean }[]>([]);
   const [approvingTurn, setApprovingTurn] = useState<number | null>(null);
+  const [pendingAttachments, setPendingAttachments] = useState<
+    Array<{ id: string; filename: string; hasText: boolean; error?: string; uploading?: boolean }>
+  >([]);
+  const [uploading, setUploading] = useState(false);
+  const [micState, setMicState] = useState<MicState>('idle');
+  const [micHint, setMicHint] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const lastUserMessageRef = useRef<string>('');
+  const recognitionRef = useRef<any>(null);
 
   async function refreshHistory() {
     try {
@@ -176,25 +195,261 @@ export default function ChatPage() {
     }
   }
 
-  async function send(message: string) {
-    if (!message.trim()) return;
+  async function send(message: string, opts?: { regenerate?: boolean }) {
+    const trimmed = message.trim();
+    const readyAttachments = pendingAttachments.filter((a) => !a.uploading);
+    if ((!trimmed && readyAttachments.length === 0) || loading) return;
+    if (pendingAttachments.some((a) => a.uploading)) {
+      setError('Wait for uploads to finish before sending.');
+      return;
+    }
+    const payload =
+      trimmed ||
+      (readyAttachments.length
+        ? `Please analyze the attached file${readyAttachments.length > 1 ? 's' : ''}: ${readyAttachments
+            .map((a) => a.filename)
+            .join(', ')}.`
+        : '');
+    if (!payload) return;
+
     const now = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
     setInput('');
     setError(null);
-    setTurns((t) => [...t, { role: 'user', content: message, timestamp: now }]);
+    setStatusLine('Understanding request…');
+    lastUserMessageRef.current = payload;
+    if (!opts?.regenerate) {
+      setTurns((t) => [...t, { role: 'user', content: payload, timestamp: now }]);
+    }
     setLoading(true);
+
+    const attachmentIds = readyAttachments.map((a) => a.id);
+    setPendingAttachments([]);
+
+    // Placeholder assistant turn for streaming tokens
+    setTurns((t) => [...t, { role: 'assistant', content: '', timestamp: now }]);
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     try {
-      const result = await api.sendMessage(message, conversationId);
-      if (result.conversationId) setConversationId(result.conversationId);
-      const replyTime = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-      setTurns((t) => [...t, { role: 'assistant', content: result.reply, detail: result, timestamp: replyTime }]);
+      const result = await api.streamMessage(payload, {
+        conversationId,
+        attachmentIds: attachmentIds.length ? attachmentIds : undefined,
+        signal: controller.signal,
+        onEvent: (event) => {
+          if (event.type === 'status') setStatusLine(event.message);
+          if (event.type === 'token') {
+            setTurns((prev) => {
+              const next = [...prev];
+              const last = next[next.length - 1];
+              if (last?.role === 'assistant') {
+                next[next.length - 1] = { ...last, content: last.content + event.text };
+              }
+              return next;
+            });
+          }
+          if (event.type === 'tool_start') {
+            setStatusLine(`Running ${event.tool}.${event.action}…`);
+          }
+          if (event.type === 'tool_result') {
+            setStatusLine(
+              event.ok ? `✓ ${event.tool}.${event.action}` : `✗ ${event.tool}.${event.action}: ${event.error || 'failed'}`
+            );
+          }
+          if (event.type === 'error') setError(event.message);
+          if (event.type === 'conversation') setConversationId(event.conversationId);
+          if (event.type === 'done') {
+            setTurns((prev) => {
+              const next = [...prev];
+              const last = next[next.length - 1];
+              if (last?.role === 'assistant') {
+                next[next.length - 1] = {
+                  ...last,
+                  content: event.result.reply || last.content,
+                  detail: event.result,
+                };
+              }
+              return next;
+            });
+            if (event.result.conversationId) setConversationId(event.result.conversationId);
+          }
+        },
+      });
+      if (result?.conversationId) setConversationId(result.conversationId);
       refreshHistory();
     } catch (err) {
-      setError((err as Error).message);
+      if ((err as Error).name === 'AbortError') {
+        setStatusLine('Stopped');
+      } else {
+        setError((err as Error).message);
+        // Remove empty assistant placeholder on hard failure
+        setTurns((prev) => {
+          const last = prev[prev.length - 1];
+          if (last?.role === 'assistant' && !last.content) return prev.slice(0, -1);
+          return prev;
+        });
+      }
     } finally {
       setLoading(false);
+      setStatusLine(null);
+      abortRef.current = null;
     }
   }
+
+  function stopGeneration() {
+    abortRef.current?.abort();
+  }
+
+  async function regenerateLast() {
+    const msg = lastUserMessageRef.current;
+    if (!msg || loading) return;
+    // Drop last assistant turn then resend
+    setTurns((prev) => {
+      if (prev.length && prev[prev.length - 1]?.role === 'assistant') return prev.slice(0, -1);
+      return prev;
+    });
+    await send(msg, { regenerate: true });
+  }
+
+  async function onPickFile(file: File | null) {
+    if (!file) return;
+    if (file.size > MAX_CLIENT_UPLOAD_BYTES) {
+      setError(`File too large. Max ${Math.round(MAX_CLIENT_UPLOAD_BYTES / (1024 * 1024))}MB.`);
+      return;
+    }
+    if (!ALLOWED_CLIENT_EXT.test(file.name)) {
+      setError('File type not allowed. Use PDF, DOCX, TXT, CSV, JSON, XLSX, images, or common code files.');
+      return;
+    }
+    // Duplicate name in pending — allow but warn
+    if (pendingAttachments.some((a) => a.filename === file.name && !a.uploading)) {
+      setError(`“${file.name}” is already attached. Remove it first or pick another file.`);
+      return;
+    }
+
+    const tempId = `uploading-${Date.now()}`;
+    setUploading(true);
+    setError(null);
+    setPendingAttachments((a) => [
+      ...a,
+      { id: tempId, filename: file.name, hasText: false, uploading: true },
+    ]);
+    try {
+      const attachment = await api.uploadChatFile(file);
+      setPendingAttachments((list) =>
+        list.map((item) =>
+          item.id === tempId
+            ? {
+                id: attachment.id,
+                filename: attachment.filename,
+                hasText: attachment.hasText,
+                error: attachment.error,
+                uploading: false,
+              }
+            : item
+        )
+      );
+      if (attachment.error || !attachment.hasText) {
+        setError(attachment.error || 'File uploaded but no text could be extracted.');
+      }
+    } catch (err) {
+      setPendingAttachments((list) => list.filter((item) => item.id !== tempId));
+      setError((err as Error).message);
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  }
+
+  function getSpeechRecognitionCtor(): any | null {
+    if (typeof window === 'undefined') return null;
+    const w = window as any;
+    return w.SpeechRecognition || w.webkitSpeechRecognition || null;
+  }
+
+  function stopListening() {
+    try {
+      recognitionRef.current?.stop?.();
+    } catch {
+      // ignore
+    }
+    recognitionRef.current = null;
+    setMicState('idle');
+  }
+
+  function toggleMicrophone() {
+    setMicHint(null);
+    setError(null);
+    const Ctor = getSpeechRecognitionCtor();
+    if (!Ctor) {
+      setMicState('unsupported');
+      setMicHint('Voice input is not supported in this browser. Try Chrome or Edge, or type your message.');
+      return;
+    }
+    if (micState === 'listening') {
+      stopListening();
+      return;
+    }
+
+    const recognition = new Ctor();
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    recognition.lang = typeof navigator !== 'undefined' ? navigator.language || 'en-US' : 'en-US';
+
+    recognition.onstart = () => setMicState('listening');
+    recognition.onerror = (event: any) => {
+      const code = String(event?.error || '');
+      if (code === 'not-allowed' || code === 'service-not-allowed') {
+        setMicState('denied');
+        setMicHint('Microphone permission is required for voice input. Allow mic access and retry.');
+      } else if (code === 'no-speech') {
+        setMicState('idle');
+        setMicHint('No speech detected. Click the mic and try again.');
+      } else {
+        setMicState('error');
+        setMicHint(`Voice input failed: ${code || 'unknown error'}`);
+      }
+      recognitionRef.current = null;
+    };
+    recognition.onend = () => {
+      recognitionRef.current = null;
+      setMicState((s) => (s === 'listening' ? 'idle' : s));
+    };
+    recognition.onresult = (event: any) => {
+      let transcript = '';
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        transcript += event.results[i][0]?.transcript || '';
+      }
+      transcript = transcript.trim();
+      if (!transcript) return;
+      setInput((prev) => {
+        const base = prev.trim();
+        return base ? `${base} ${transcript}` : transcript;
+      });
+      if (event.results[event.results.length - 1]?.isFinal) {
+        setMicState('idle');
+      }
+    };
+
+    recognitionRef.current = recognition;
+    try {
+      recognition.start();
+    } catch (err) {
+      setMicState('error');
+      setMicHint(err instanceof Error ? err.message : 'Could not start microphone.');
+      recognitionRef.current = null;
+    }
+  }
+
+  useEffect(() => {
+    return () => {
+      try {
+        recognitionRef.current?.stop?.();
+      } catch {
+        // ignore
+      }
+    };
+  }, []);
 
   async function copyAssistantMessage(index: number, text: string) {
     try {
@@ -210,6 +465,8 @@ export default function ChatPage() {
     setConversationId(undefined);
     setTurns([]);
     setError(null);
+    setPendingAttachments([]);
+    lastUserMessageRef.current = '';
   }
 
   async function deleteConversation(id: string) {
@@ -427,47 +684,126 @@ export default function ChatPage() {
                   <span className="h-1.5 w-1.5 animate-dots rounded-full bg-accent" style={{ animationDelay: '160ms' }} />
                   <span className="h-1.5 w-1.5 animate-dots rounded-full bg-accent" style={{ animationDelay: '320ms' }} />
                 </span>
-                thinking
+                {statusLine || 'thinking'}
               </div>
             )}
             {error && <div className="rounded-2xl border border-red-500/25 bg-red-500/10 p-3.5 text-sm text-red-300">{error}</div>}
             <div ref={bottomRef} />
           </div>
 
+          {pendingAttachments.length > 0 && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {pendingAttachments.map((a) => (
+                <span
+                  key={a.id}
+                  className="inline-flex items-center gap-2 rounded-full border border-white/12 bg-white/5 px-3 py-1 text-xs text-neutral-300"
+                >
+                  <FileUp size={12} className="text-neutral-500" />
+                  {a.uploading ? (
+                    <span className="text-neutral-400">Uploading {a.filename}…</span>
+                  ) : (
+                    <>
+                      <span className={a.hasText ? 'text-emerald-300' : 'text-amber-300'}>
+                        {a.hasText ? '✓' : '!'} {a.filename}
+                      </span>
+                    </>
+                  )}
+                  {!a.uploading && (
+                    <button
+                      type="button"
+                      onClick={() => setPendingAttachments((list) => list.filter((x) => x.id !== a.id))}
+                      className="text-neutral-500 hover:text-white"
+                      title="Remove attachment"
+                    >
+                      <X size={12} />
+                    </button>
+                  )}
+                </span>
+              ))}
+            </div>
+          )}
+          {(micHint || micState === 'listening') && (
+            <div className="mt-2 text-xs text-neutral-400">
+              {micState === 'listening' ? 'Listening… speak now (click mic again to stop).' : micHint}
+            </div>
+          )}
+
           <form
             onSubmit={(e) => {
               e.preventDefault();
+              if (pendingAttachments.some((a) => a.uploading)) {
+                setError('Wait for uploads to finish before sending.');
+                return;
+              }
               send(input);
             }}
             className="mt-5 flex items-center gap-2 rounded-[26px] border border-white/10 bg-black/25 p-2 pl-4 transition focus-within:border-accent/50 focus-within:ring-2 focus-within:ring-accent/15"
           >
+            <input
+              ref={fileRef}
+              type="file"
+              className="hidden"
+              accept=".pdf,.docx,.txt,.md,.markdown,.csv,.tsv,.json,.xlsx,.xls,.png,.jpg,.jpeg,.webp,.gif,.ts,.tsx,.js,.jsx,.py,.sql,.html,.css,.yaml,.yml,text/*,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,image/*"
+              onChange={(e) => onPickFile(e.target.files?.[0] ?? null)}
+            />
             <button
               type="button"
-              title="Attach a file (coming soon)"
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-neutral-500 transition hover:bg-white/5 hover:text-white"
+              title="Attach a file"
+              disabled={uploading || loading}
+              onClick={() => fileRef.current?.click()}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-neutral-500 transition hover:bg-white/5 hover:text-white disabled:opacity-40"
             >
               <FileUp size={16} />
             </button>
             <button
               type="button"
-              title="Voice input (coming soon)"
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-neutral-500 transition hover:bg-white/5 hover:text-white"
+              title={micState === 'listening' ? 'Stop listening' : 'Voice input'}
+              disabled={loading}
+              onClick={toggleMicrophone}
+              className={cn(
+                'flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition hover:bg-white/5 disabled:opacity-40',
+                micState === 'listening' ? 'bg-rose-500/20 text-rose-300' : 'text-neutral-500 hover:text-white',
+                (micState === 'denied' || micState === 'unsupported' || micState === 'error') && 'text-amber-300'
+              )}
             >
               <Mic size={16} />
             </button>
             <input
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="Ask the agent something…"
+              placeholder="Ask anything — coding, planning, Slack, Notion…"
               className="min-h-[44px] flex-1 bg-transparent text-sm text-white outline-none placeholder:text-neutral-500"
             />
-            <button
-              type="submit"
-              disabled={loading}
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-accent text-[#04101f] transition hover:bg-[#7db6ff] disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <Send size={15} />
-            </button>
+            {loading ? (
+              <button
+                type="button"
+                onClick={stopGeneration}
+                title="Stop"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/15 bg-white/5 text-white transition hover:bg-white/10"
+              >
+                <Square size={14} />
+              </button>
+            ) : (
+              <>
+                {lastUserMessageRef.current && turns.length > 0 && (
+                  <button
+                    type="button"
+                    title="Regenerate"
+                    onClick={() => regenerateLast()}
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-neutral-400 transition hover:bg-white/5 hover:text-white"
+                  >
+                    <RefreshCw size={15} />
+                  </button>
+                )}
+                <button
+                  type="submit"
+                  disabled={loading || uploading || (!input.trim() && pendingAttachments.length === 0)}
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-accent text-[#04101f] transition hover:bg-[#7db6ff] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <Send size={15} />
+                </button>
+              </>
+            )}
           </form>
         </GlassCard>
 

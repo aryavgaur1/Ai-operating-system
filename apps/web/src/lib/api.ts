@@ -115,6 +115,59 @@ export interface AgentTurnResult {
   };
   executedCalls: ToolCallResult[];
   pendingApprovalIds: string[];
+  sources?: string[];
+}
+
+export type ChatStreamEvent =
+  | { type: 'token'; text: string }
+  | { type: 'status'; message: string }
+  | { type: 'tool_start'; tool: string; action: string }
+  | { type: 'tool_result'; tool: string; action: string; ok: boolean; error?: string }
+  | { type: 'approval'; ids: string[] }
+  | { type: 'done'; result: AgentTurnResult }
+  | { type: 'conversation'; conversationId: string }
+  | { type: 'error'; message: string }
+  | { type: 'end' };
+
+async function readChatStream(
+  res: Response,
+  opts: {
+    conversationId?: string;
+    onEvent: (event: ChatStreamEvent) => void;
+  }
+): Promise<AgentTurnResult | null> {
+  const reader = res.body?.getReader();
+  if (!reader) throw new Error('No response stream');
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let finalResult: AgentTurnResult | null = null;
+  let conversationId = opts.conversationId;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split('\n\n');
+    buffer = parts.pop() ?? '';
+    for (const part of parts) {
+      const line = part
+        .split('\n')
+        .map((l) => l.trim())
+        .find((l) => l.startsWith('data:'));
+      if (!line) continue;
+      try {
+        const event = JSON.parse(line.slice(5).trim()) as ChatStreamEvent;
+        if (event.type === 'done') finalResult = event.result;
+        if (event.type === 'conversation') conversationId = event.conversationId;
+        opts.onEvent(event);
+      } catch {
+        // ignore malformed chunk
+      }
+    }
+  }
+
+  if (finalResult && conversationId) finalResult.conversationId = conversationId;
+  return finalResult;
 }
 
 export interface ApprovalRequest {
@@ -219,11 +272,100 @@ export const api = {
   loginHistory: () => request<{ history: any[] }>('/auth/login-history'),
   sessions: () => request<{ sessions: any[] }>('/auth/sessions'),
 
-  sendMessage: (message: string, conversationId?: string) =>
+  sendMessage: (message: string, conversationId?: string, attachmentIds?: string[]) =>
     request<AgentTurnResult>('/chat', {
       method: 'POST',
-      body: JSON.stringify({ message, conversationId }),
+      body: JSON.stringify({ message, conversationId, attachmentIds }),
     }),
+
+  /** Streaming chat via SSE. Calls onEvent for each server event. */
+  streamMessage: async (
+    message: string,
+    opts: {
+      conversationId?: string;
+      attachmentIds?: string[];
+      signal?: AbortSignal;
+      onEvent: (event: ChatStreamEvent) => void;
+    }
+  ): Promise<AgentTurnResult | null> => {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      Accept: 'text/event-stream',
+    };
+    const token = getAccessToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+
+    const res = await fetch(`${API_URL}/chat`, {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+      signal: opts.signal,
+      body: JSON.stringify({
+        message,
+        conversationId: opts.conversationId,
+        attachmentIds: opts.attachmentIds,
+        stream: true,
+      }),
+    });
+
+    if (res.status === 401) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        redirectToLogin();
+        throw new Error('Unauthorized');
+      }
+      headers.Authorization = `Bearer ${refreshed}`;
+      const retry = await fetch(`${API_URL}/chat`, {
+        method: 'POST',
+        headers,
+        credentials: 'include',
+        signal: opts.signal,
+        body: JSON.stringify({
+          message,
+          conversationId: opts.conversationId,
+          attachmentIds: opts.attachmentIds,
+          stream: true,
+        }),
+      });
+      if (!retry.ok) {
+        const body = await retry.json().catch(() => ({}));
+        throw new Error(body.message || body.error || `Chat stream failed (${retry.status})`);
+      }
+      return readChatStream(retry, opts);
+    }
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.message || body.error || `Chat stream failed (${res.status})`);
+    }
+
+    return readChatStream(res, opts);
+  },
+
+  uploadChatFile: async (file: File) => {
+    const headers: Record<string, string> = {};
+    const token = getAccessToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const form = new FormData();
+    form.append('file', file);
+    const res = await fetch(`${API_URL}/chat/upload`, {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+      body: form,
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.message || body.error || 'Upload failed');
+    const data = body?.data ?? body;
+    return data.attachment as {
+      id: string;
+      filename: string;
+      mimeType?: string;
+      hasText: boolean;
+      error?: string;
+    };
+  },
+
   listConversations: () => request<{ conversations: any[] }>('/conversations'),
   getConversation: (id: string) => request<{ conversation: any; messages: any[] }>(`/conversations/${id}`),
   updateConversation: (id: string, payload: Record<string, unknown>) =>

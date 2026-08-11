@@ -19,6 +19,7 @@ import { oauthSlackRouter } from './routes/oauth-slack';
 import { oauthJiraRouter } from './routes/oauth-jira';
 import { conversationsRouter } from './routes/conversations';
 import { dashboardRouter } from './routes/dashboard';
+import { marketingChatbotRouter, adminChatbotRouter } from './routes/marketing-chatbot';
 import { errorMiddleware } from './lib/errors';
 import { isLiveMode } from '@enterprise-ai-os/connectors';
 
@@ -113,6 +114,9 @@ app.use('/oauth/jira', oauthJiraRouter);
 
 app.get('/health', (_req, res) => res.json({ ok: true, service: 'enterprise-ai-os-api', saas: SAAS_MODE }));
 
+// Public marketing assistant (same AI Service, tools disabled)
+app.use('/marketing-chatbot', marketingChatbotRouter);
+
 /**
  * One-shot founder bootstrap: attach platform NOTION_API_KEY to founder user rows.
  * Requires header x-bootstrap-secret == NOTION_BOOTSTRAP_SECRET. Remove the secret after use.
@@ -182,6 +186,7 @@ app.use('/integrations/slack', slackRouter);
 app.use('/integrations', integrationsRouter);
 app.use('/conversations', conversationsRouter);
 app.use('/dashboard', dashboardRouter);
+app.use('/admin/chatbot', adminChatbotRouter);
 app.use('/admin', adminRouter);
 
 app.use(errorMiddleware);

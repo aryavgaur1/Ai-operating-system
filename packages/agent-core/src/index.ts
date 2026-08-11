@@ -8,3 +8,4 @@ export * from './planner';
 export * from './toolExecutionEngine';
 export * from './orchestrator';
 export * from './os';
+export * from './aiService';
