@@ -194,9 +194,21 @@ const RULES: IntentRule[] = [
 
 /**
  * Explicit "create/open a Jira ticket|issue|task" — must never become Slack war room / follow-up.
+ * Meta modes (cancel / clarify / dry-run / delete) are excluded.
  */
 export function isExplicitJiraCreate(q: string): boolean {
   const text = q.toLowerCase();
+
+  // Meta / non-create modes — never force createIssue
+  if (/\b(cancel|never\s*mind|scratch\s+that|abort)\b/.test(text)) return false;
+  if (/\b(don'?t|do\s+not)\s+(create|execute|submit)\b/.test(text)) return false;
+  if (/\btell\s+me\s+what\s+(information|info|details?|fields?)\b/.test(text)) return false;
+  if (/\bwhat\s+(information|info|details?|fields?)\s+(do\s+you\s+need|are\s+required|needed)\b/.test(text))
+    return false;
+  if (/\b(show|preview)\s+me\s+what\s+you\s+would\b/.test(text)) return false;
+  if (/\bdon'?t\s+execute\b/.test(text) || /\bdry[- ]?run\b/.test(text)) return false;
+  if (/\b(delete|remove|close)\b/.test(text) && /\b(ticket|issue)\b/.test(text)) return false;
+
   if (/\b(slack|notion|gmail|email)\b/.test(text) && !/\bjira\b/.test(text)) {
     // "create a ticket on slack" is not Jira
     if (!/\b(ticket|issue|bug|task)\b/.test(text)) return false;
@@ -217,6 +229,16 @@ export function isExplicitJiraCreate(q: string): boolean {
     return true;
   }
   return false;
+}
+
+/** Explicit Jira delete — must map to deleteIssue, never createIssue. */
+export function isExplicitJiraDelete(q: string): boolean {
+  const text = q.toLowerCase();
+  return (
+    /\b(delete|remove)\b/.test(text) &&
+    (/\bjira\b/.test(text) || /\b(ticket|issue)\b/.test(text)) &&
+    !/\b(don'?t|do\s+not)\b/.test(text)
+  );
 }
 
 export function detectOsIntent(query: string): OsIntent {

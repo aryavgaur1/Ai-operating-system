@@ -1,4 +1,4 @@
-import type { AgentPlan, AgentTurnResult, ClassifiedIntent } from '@enterprise-ai-os/shared';
+import type { AgentPlan, AgentTurnResult, ClassifiedIntent, ToolName } from '@enterprise-ai-os/shared';
 import type { VectorStore, GraphStore } from '@enterprise-ai-os/stores';
 import { classifyIntent } from './intentClassifier';
 import { hybridRetrieve } from './retriever';
@@ -11,16 +11,20 @@ import {
   rememberFromExecution,
   logWorkflow,
   isExplicitJiraCreate,
+  detectRequestMode,
+  resolveIntentFamily,
+  filterToolCallsByFamily,
+  buildDecisionRecord,
+  clarifyReplyForJira,
+  cancelReply,
+  dryRunReplyForPlan,
 } from './os';
 
 // ============================================================
 // Agent Orchestrator — Enterprise AI OS execution loop
 //
-//   Prompt → Intent → Planner → Reasoning → Execution Plan
-//        → Preflight → Execute → Verify → Heal/Retry → Reply
-//
-// Preserves legacy keyword planner for simple_action / read_only
-// while multi-step workflows use the OS planner.
+//   Prompt → Intent → Planner → Policy filter → Execute/Approve
+//        → Verify → Heal/Retry → Reply + Decision record
 // ============================================================
 
 function formatReply(executedCalls: AgentTurnResult['executedCalls'], plan: AgentPlan, approvalNote: string): string {
@@ -157,8 +161,9 @@ export async function runAgentTurn(
 ): Promise<AgentTurnResult> {
   const started = Date.now();
 
-  // STEP 1 — Intent detection (OS) + legacy classifier for compatibility
   const osIntent = detectOsIntent(query);
+  const requestMode = detectRequestMode(query);
+  const intentFamily = resolveIntentFamily(osIntent, query);
   const legacyIntent: ClassifiedIntent =
     osIntent.kind === 'read_only'
       ? classifyIntent(query)
@@ -168,19 +173,89 @@ export async function runAgentTurn(
           rationale: osIntent.rationale,
         };
 
-  // Retrieval / reasoning context
   const context = await hybridRetrieve(query, organizationId, vectorStore, graphStore);
   const llm = createLLMClient();
 
-  // STEP 2 — Planner: workflow decomposition OR legacy keyword plan
+  if (requestMode === 'cancel') {
+    const decision = buildDecisionRecord({
+      query,
+      intent: osIntent,
+      family: intentFamily,
+      mode: requestMode,
+      selected: [],
+      stripped: [],
+      pendingApprovalIds: [],
+      executedCount: 0,
+    });
+    const reply = cancelReply();
+    return {
+      reply,
+      plan: { intent: legacyIntent, reasoning: 'Cancelled by user request.', toolCalls: [], responseDraft: reply },
+      executedCalls: [],
+      pendingApprovalIds: [],
+      workflow: {
+        intent: osIntent,
+        reasoning: ['Request mode: cancel — no tools executed.'],
+        planSteps: [],
+        steps: [],
+        retries: 0,
+        durationMs: Date.now() - started,
+        decision,
+      },
+    };
+  }
+
+  if (requestMode === 'clarify') {
+    const reply = /\b(jira|ticket|vendor)\b/i.test(query)
+      ? clarifyReplyForJira(query)
+      : `I can help — tell me which system (Jira / Slack / Notion) and what you want done. I will not execute until you confirm.`;
+    const decision = buildDecisionRecord({
+      query,
+      intent: osIntent,
+      family: 'meta',
+      mode: requestMode,
+      selected: [],
+      stripped: [],
+      pendingApprovalIds: [],
+      executedCount: 0,
+    });
+    return {
+      reply,
+      plan: {
+        intent: legacyIntent,
+        reasoning: 'Clarify mode — gathering required fields.',
+        toolCalls: [],
+        responseDraft: reply,
+      },
+      executedCalls: [],
+      pendingApprovalIds: [],
+      workflow: {
+        intent: osIntent,
+        reasoning: ['Request mode: clarify — no tools executed.'],
+        planSteps: [],
+        steps: [],
+        retries: 0,
+        durationMs: Date.now() - started,
+        decision,
+      },
+    };
+  }
+
   const workflow = planWorkflow(query, osIntent);
   let plan: AgentPlan;
+  let strippedTools: Array<{ tool: ToolName; action: string; reason: string }> = [];
 
-  // HARD RULE: explicit Jira ticket create never runs Slack war-room / incident / follow-up workflows
   const looksLikeJiraCreate = isExplicitJiraCreate(query);
   if (looksLikeJiraCreate && workflow.toolCalls.length > 0) {
     workflow.reasoning.push(
       'Override: explicit Jira ticket create — discarding multi-step Slack workflow (war room / follow-up / incident).'
+    );
+    strippedTools.push(
+      ...workflow.toolCalls.map((c) => ({
+        tool: c.tool,
+        action: c.action,
+        reason: 'explicit_jira_create_clears_workflow',
+      }))
     );
     workflow.toolCalls = [];
     workflow.planSteps = [];
@@ -205,26 +280,106 @@ export async function runAgentTurn(
       responseDraft: draft,
     };
   } else {
-    // Legacy single-action path (still goes through resilient executor)
-    plan = await buildPlan(query, legacyIntent.intent === 'action' ? legacyIntent : { ...legacyIntent, intent: osIntent.legacyIntent }, context, llm);
-    // Belt-and-suspenders: if somehow Slack war room slipped in, strip it for Jira creates
+    plan = await buildPlan(
+      query,
+      legacyIntent.intent === 'action' ? legacyIntent : { ...legacyIntent, intent: osIntent.legacyIntent },
+      context,
+      llm
+    );
     if (looksLikeJiraCreate) {
+      const before = plan.toolCalls;
       plan.toolCalls = plan.toolCalls.filter(
-        (c) => !(c.tool === 'slack' && (c.action === 'createWarRoom' || c.action === 'createIncident' || c.action === 'followUpPendingReplies'))
+        (c) =>
+          !(
+            c.tool === 'slack' &&
+            (c.action === 'createWarRoom' || c.action === 'createIncident' || c.action === 'followUpPendingReplies')
+          )
       );
+      for (const c of before) {
+        if (!plan.toolCalls.includes(c)) {
+          strippedTools.push({ tool: c.tool, action: c.action, reason: 'jira_create_strips_slack_workflow' });
+        }
+      }
       if (plan.toolCalls.length === 0 || !plan.toolCalls.some((c) => c.tool === 'jira' && c.action === 'createIssue')) {
-        plan = await buildPlan(query, { intent: 'action', confidence: 0.99, rationale: 'Forced Jira createIssue' }, context, llm);
+        plan = await buildPlan(
+          query,
+          { intent: 'action', confidence: 0.99, rationale: 'Forced Jira createIssue' },
+          context,
+          llm
+        );
       }
     }
     workflow.reasoning.push('Legacy planner selected tool calls.');
     workflow.planSteps.push(...plan.toolCalls.map((c) => `${c.tool}.${c.action}`));
   }
 
-  // STEPS 4–7 — Preflight + execute + verify + heal
+  const filtered = filterToolCallsByFamily(plan.toolCalls, intentFamily);
+  if (filtered.stripped.length) {
+    strippedTools = [...strippedTools, ...filtered.stripped];
+    workflow.reasoning.push(
+      `Policy: stripped ${filtered.stripped.length} out-of-family tool(s) for intent family “${intentFamily}”.`
+    );
+  }
+  plan.toolCalls = filtered.kept;
+  workflow.planSteps = plan.toolCalls.map((c) => `${c.tool}.${c.action}`);
+
+  if (requestMode === 'dry_run') {
+    let previewCalls = plan.toolCalls;
+    if (previewCalls.length === 0 && /\b(jira|ticket|issue)\b/i.test(query)) {
+      const preview = await buildPlan(
+        'create a vendor jira ticket',
+        { intent: 'action', confidence: 0.99, rationale: 'Dry-run Jira preview' },
+        context,
+        llm
+      );
+      previewCalls = filterToolCallsByFamily(preview.toolCalls, 'jira').kept;
+    }
+    const reply = dryRunReplyForPlan(previewCalls);
+    const decision = buildDecisionRecord({
+      query,
+      intent: osIntent,
+      family: intentFamily,
+      mode: requestMode,
+      selected: previewCalls,
+      stripped: strippedTools,
+      pendingApprovalIds: [],
+      executedCount: 0,
+    });
+    return {
+      reply,
+      plan: { ...plan, toolCalls: [], responseDraft: reply, reasoning: 'Dry-run — execution skipped.' },
+      executedCalls: [],
+      pendingApprovalIds: [],
+      workflow: {
+        intent: osIntent,
+        reasoning: [...workflow.reasoning, 'Request mode: dry_run — no execution.'],
+        planSteps: previewCalls.map((c) => `${c.tool}.${c.action}`),
+        steps: [],
+        retries: 0,
+        durationMs: Date.now() - started,
+        decision,
+      },
+    };
+  }
+
   const { executedCalls, pendingApprovalIds, steps, retries } = await executePlanResilient(
     organizationId,
     plan,
     requestedByUserId
+  );
+
+  const decision = buildDecisionRecord({
+    query,
+    intent: osIntent,
+    family: intentFamily,
+    mode: requestMode,
+    selected: plan.toolCalls,
+    stripped: strippedTools,
+    pendingApprovalIds,
+    executedCount: executedCalls.filter((c) => c.ok).length,
+  });
+  workflow.reasoning.push(
+    `Decision: family=${decision.intentFamily} mode=${decision.requestMode} validation=${decision.validation} execution=${decision.execution}`
   );
 
   const approvalNote =
@@ -235,12 +390,10 @@ export async function runAgentTurn(
   let reply: string;
   const q = query.trim().toLowerCase();
   if (/^(slack|notion)\s*\??$/.test(q) && executedCalls.length === 0) {
-    reply =
-      q.startsWith('slack')
-        ? `Slack is connected (live). Try:\n- create new channel investor-pitch\n- post "kickoff in 10 mins" to #general on slack\n- invite Aryav Gaur to #all-nexora on slack\n- Create a launch war room for Project Atlas\n- What blocked Engineering this week?\n- Find unanswered messages`
-        : `Notion is connected (live). Try:\n- create a notion page titled Weekly Update\n- Create a Notion PRD for Atlas\n- Create meeting notes in Notion`;
+    reply = q.startsWith('slack')
+      ? `Slack is connected (live). Try:\n- create new channel investor-pitch\n- post "kickoff in 10 mins" to #general on slack\n- invite Aryav Gaur to #all-nexora on slack\n- Create a launch war room for Project Atlas\n- What blocked Engineering this week?\n- Find unanswered messages`
+      : `Notion is connected (live). Try:\n- create a notion page titled Weekly Update\n- Create a Notion PRD for Atlas\n- Create meeting notes in Notion`;
   } else if (executedCalls.length === 0 && pendingApprovalIds.length === 0) {
-    // No-fallback policy: diagnose instead of "I couldn't"
     reply =
       plan.responseDraft ||
       `I understood this as **${osIntent.kind}** (${osIntent.rationale}). I did not need a tool yet — ask me to launch a project, open an incident, prepare standup, or create a Notion page.`;
@@ -248,10 +401,8 @@ export async function runAgentTurn(
     reply = formatReply(executedCalls, plan, approvalNote);
   }
 
-  // STEP 8 — Thread memory
   const memoryKeys = await rememberFromExecution(organizationId, requestedByUserId, query, executedCalls);
 
-  // STEP 10 — Workflow log
   const success = executedCalls.length === 0 || executedCalls.some((c) => c.ok);
   await logWorkflow({
     organizationId,
@@ -280,6 +431,7 @@ export async function runAgentTurn(
       retries,
       durationMs: Date.now() - started,
       memoryKeys,
+      decision,
     },
   };
 }

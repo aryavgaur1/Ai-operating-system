@@ -5,7 +5,8 @@ import {
   DEFAULT_APPROVAL_POLICY,
 } from '@enterprise-ai-os/shared';
 import type { LLMClient } from './llmClient';
-import { isExplicitNotionCommand, isExplicitSlackCommand, isExplicitJiraCreate } from './os/intentDetector';
+import { isExplicitNotionCommand, isExplicitSlackCommand, isExplicitJiraCreate, isExplicitJiraDelete } from './os/intentDetector';
+import { detectRequestMode } from './os/routingPolicy';
 
 // ============================================================
 // LLM Planner — the "reasoning engine" box in the architecture
@@ -162,10 +163,22 @@ const TOOL_RULES: ToolRule[] = [
   },
   {
     tool: 'jira',
+    action: 'deleteIssue',
+    keywords: ['delete', 'remove'],
+    match: (query: string) => isExplicitJiraDelete(query),
+    buildInput: (query) => {
+      const key = query.match(/\b([A-Z][A-Z0-9]+-\d+)\b/)?.[1] || '';
+      return { key };
+    },
+  },
+  {
+    tool: 'jira',
     action: 'createIssue',
     keywords: ['jira', 'ticket', 'issue', 'task', 'risk'],
     match: (query: string) => {
       const lower = query.toLowerCase();
+      if (isExplicitJiraDelete(query)) return false;
+      if (detectRequestMode(query) !== 'execute') return false;
       if (/\b(create|open|file|log|track)\b/.test(lower) && /\b(ticket|issue|task|risk|bug)\b/.test(lower)) {
         // Prefer Jira when named, or when no other tool destination is named
         if (/\bjira\b/.test(lower)) return true;
@@ -720,6 +733,29 @@ function parseNotionActionQuery(query: string) {
 
 function proposeToolCalls(query: string): ToolCall[] {
   const lower = query.toLowerCase();
+  const mode = detectRequestMode(query);
+
+  // Meta modes never propose writes
+  if (mode === 'cancel' || mode === 'clarify' || mode === 'dry_run') {
+    return [];
+  }
+
+  // Explicit Jira delete → deleteIssue only (never createIssue)
+  if (isExplicitJiraDelete(query)) {
+    const key = query.match(/\b([A-Z][A-Z0-9]+-\d+)\b/)?.[1] || '';
+    const requiresApproval =
+      isHighConsequence('jira', 'deleteIssue') &&
+      !policyAllowsAutoRun(DEFAULT_APPROVAL_POLICY, 'jira', 'deleteIssue');
+    return [
+      {
+        tool: 'jira',
+        action: 'deleteIssue',
+        input: { key },
+        riskLevel: requiresApproval ? 'high' : 'low',
+        requiresApproval,
+      },
+    ];
+  }
 
   // HARD RULE: explicit Jira ticket create never stacks Slack war-room / follow-up tools
   if (isExplicitJiraCreate(query)) {

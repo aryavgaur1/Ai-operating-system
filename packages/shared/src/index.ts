@@ -142,6 +142,20 @@ export interface WorkflowStepResult {
   output?: unknown;
 }
 
+/** Structured operational decision metadata (not model chain-of-thought). */
+export interface RoutingDecisionRecord {
+  requestMode: 'execute' | 'clarify' | 'cancel' | 'dry_run' | 'question';
+  intentKind: WorkflowKind;
+  intentFamily: string;
+  allowedTools: ToolName[];
+  selectedTools: Array<{ tool: ToolName; action: string }>;
+  strippedTools: Array<{ tool: ToolName; action: string; reason: string }>;
+  missingFields: string[];
+  validation: 'passed' | 'needs_info' | 'blocked' | 'cancelled' | 'dry_run';
+  execution: 'queued_approval' | 'executed' | 'skipped' | 'not_started';
+  rationale: string;
+}
+
 export interface WorkflowTrace {
   intent: OsIntent;
   reasoning: string[];
@@ -150,6 +164,7 @@ export interface WorkflowTrace {
   retries: number;
   durationMs: number;
   memoryKeys?: string[];
+  decision?: RoutingDecisionRecord;
 }
 
 // ---------- Approvals ----------
@@ -188,8 +203,27 @@ export interface ApprovalRequest {
 
 export const HIGH_CONSEQUENCE_ACTIONS: Record<ToolName, string[]> = {
   gmail: ['sendEmail', 'deleteEmail'],
-  // Slack writes pause for human review (channel posts are visible to the whole channel).
-  slack: ['postMessage', 'postMessageExternalChannel', 'deleteMessage', 'createChannel'],
+  // Slack writes that mutate shared workspaces must pause for human review.
+  // createWarRoom / createIncident create channels + invites + posts — never auto-run.
+  slack: [
+    'postMessage',
+    'postMessageExternalChannel',
+    'deleteMessage',
+    'updateMessage',
+    'createChannel',
+    'inviteUsers',
+    'createWarRoom',
+    'createIncident',
+    'uploadFile',
+    'createCanvas',
+    'openDm',
+    'followUpPendingReplies',
+    'scheduleReminder',
+    'setChannelTopic',
+    'setChannelPurpose',
+    'pinMessage',
+    'createBookmark',
+  ],
   // Ticket creates/changes pause for human review (Approvals risk dial + Approve & run).
   jira: [
     'createIssue',

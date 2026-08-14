@@ -1,4 +1,10 @@
-export { detectOsIntent, isExplicitSlackCommand, isExplicitNotionCommand, isExplicitJiraCreate } from './intentDetector';
+export {
+  detectOsIntent,
+  isExplicitSlackCommand,
+  isExplicitNotionCommand,
+  isExplicitJiraCreate,
+  isExplicitJiraDelete,
+} from './intentDetector';
 export { planWorkflow } from './workflowPlanner';
 export type { WorkflowPlan } from './workflowPlanner';
 export { executePlanResilient } from './resilientExecutor';
@@ -11,3 +17,16 @@ export {
   humanizeError,
   classifyFailure,
 } from './preflight';
+export {
+  detectRequestMode,
+  resolveIntentFamily,
+  filterToolCallsByFamily,
+  buildDecisionRecord,
+  clarifyReplyForJira,
+  cancelReply,
+  dryRunReplyForPlan,
+  isCancelRequest,
+  isClarifyRequest,
+  isDryRunRequest,
+} from './routingPolicy';
+export type { IntentFamily, RequestMode } from './routingPolicy';
