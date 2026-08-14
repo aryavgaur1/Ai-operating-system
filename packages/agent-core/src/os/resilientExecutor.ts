@@ -1,3 +1,4 @@
+import { isHighConsequence } from '@enterprise-ai-os/shared';
 import type {
   AgentPlan,
   ToolCall,
@@ -264,23 +265,46 @@ export async function executePlanResilient(
 
   for (const raw of plan.toolCalls) {
     if (raw.requiresApproval) {
-      const approval = await approvalStore.create(organizationId, raw, requestedByUserId);
+      // Serious OS: preflight BEFORE queue so Approvals never holds invalid actions
+      const pf = await preflightToolCall(raw);
+      if (!pf.ok) {
+        executedCalls.push({
+          tool: raw.tool,
+          action: raw.action,
+          ok: false,
+          mocked: false,
+          error: pf.fatal || `Preflight failed for ${raw.tool}.${raw.action}`,
+        });
+        steps.push({
+          stepId: `preflight.${raw.tool}.${raw.action}`,
+          tool: raw.tool,
+          action: raw.action,
+          status: 'fatal_failure',
+          attempts: 1,
+          durationMs: 0,
+          healActions: pf.healActions,
+          error: pf.fatal,
+        });
+        continue;
+      }
+      const gated: ToolCall = { ...raw, input: pf.input };
+      const approval = await approvalStore.create(organizationId, gated, requestedByUserId);
       pendingApprovalIds.push(approval.id);
       void notifyPendingApproval({
         approvalId: approval.id,
-        tool: raw.tool,
-        action: raw.action,
-        riskLevel: raw.riskLevel,
-        summary: JSON.stringify(raw.input ?? {}).slice(0, 400),
+        tool: gated.tool,
+        action: gated.action,
+        riskLevel: gated.riskLevel,
+        summary: JSON.stringify(gated.input ?? {}).slice(0, 400),
       });
       steps.push({
-        stepId: `approval.${raw.tool}.${raw.action}`,
-        tool: raw.tool,
-        action: raw.action,
+        stepId: `approval.${gated.tool}.${gated.action}`,
+        tool: gated.tool,
+        action: gated.action,
         status: 'skipped',
         attempts: 0,
         durationMs: 0,
-        healActions: ['queued_for_approval'],
+        healActions: [...pf.healActions, 'queued_for_approval'],
       });
       continue;
     }
@@ -335,6 +359,7 @@ export async function executePlanResilient(
     if (plan.toolCalls.some((t) => t.action === 'dailyDigest') && plan.toolCalls.some((t) => t.tool === 'notion')) {
       let posted = false;
       for (const channel of targets) {
+        const requiresApproval = isHighConsequence('slack', 'postMessage');
         const broadcast: ToolCall = {
           tool: 'slack',
           action: 'postMessage',
@@ -342,9 +367,30 @@ export async function executePlanResilient(
             channel,
             text: `📋 *Nexora standup prep*\n${String(ctx.digestSummary).slice(0, 2500)}${ctx.notionUrl ? `\nNotion: ${ctx.notionUrl}` : ''}`,
           },
-          riskLevel: 'low',
-          requiresApproval: false,
+          riskLevel: requiresApproval ? 'high' : 'low',
+          requiresApproval,
         };
+        if (requiresApproval) {
+          const pf = await preflightToolCall(broadcast);
+          if (!pf.ok) continue;
+          const approval = await approvalStore.create(
+            organizationId,
+            { ...broadcast, input: pf.input },
+            requestedByUserId
+          );
+          pendingApprovalIds.push(approval.id);
+          steps.push({
+            stepId: `approval.slack.postMessage`,
+            tool: 'slack',
+            action: 'postMessage',
+            status: 'skipped',
+            attempts: 0,
+            durationMs: 0,
+            healActions: [...pf.healActions, 'queued_for_approval'],
+          });
+          posted = true;
+          break;
+        }
         const { result, step } = await executeOne(broadcast);
         executedCalls.push(result);
         steps.push(step);

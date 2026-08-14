@@ -364,6 +364,31 @@ export async function postExternalMessage(input: { channel: string; text: string
   return postMessage(input);
 }
 
+/** Block Kit posts for Approve & Run cards in Slack. */
+export async function postBlocks(input: {
+  channel: string;
+  text: string;
+  blocks: unknown[];
+  threadTs?: string;
+}) {
+  const client = getClient();
+  const channel = await resolveChannelId(input.channel);
+  const res = await callSlack(() =>
+    client.chat.postMessage({
+      channel,
+      text: String(input.text ?? ''),
+      blocks: input.blocks as any,
+      thread_ts: input.threadTs,
+    })
+  );
+  return {
+    ok: true,
+    channel: res.channel,
+    ts: res.ts,
+    message: res.message,
+  };
+}
+
 export async function listChannels(limit = 200) {
   const client = getClient();
   const channels: Array<{
@@ -1091,6 +1116,7 @@ export const slackService = {
   resolveChannelId,
   postMessage,
   postExternalMessage,
+  postBlocks,
   listChannels,
   listUsers,
   findUsersByRole,

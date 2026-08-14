@@ -295,8 +295,7 @@ export async function runNexoraTurn(input: NexoraTurnInput): Promise<AgentTurnRe
       input.organizationId,
       input.vectorStore!,
       input.graphStore!,
-      input.userId,
-      { history: input.history, contextPack: pack.text }
+      input.userId
     );
 
     // If planner produced no tools and no approvals, fall through to general AI
@@ -351,8 +350,7 @@ export async function* streamNexoraTurn(input: NexoraTurnInput): AsyncGenerator<
         input.organizationId,
         input.vectorStore!,
         input.graphStore!,
-        input.userId,
-        { history: input.history, contextPack: pack.text }
+        input.userId
       );
 
       for (const call of result.plan.toolCalls) {

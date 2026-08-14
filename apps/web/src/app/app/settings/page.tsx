@@ -7,6 +7,24 @@ import { GlassCard, Reveal, StaggerGroup } from '@/components/motion';
 import { cn } from '@/lib/utils';
 import { api, setAccessToken } from '@/lib/api';
 
+const POLICY_CARDS = [
+  {
+    id: 'strict_human_gate',
+    name: 'Strict human gate',
+    description: 'Every Slack / Notion / Jira write waits for Approve & run. Default for serious teams.',
+  },
+  {
+    id: 'ops_fast_lane',
+    name: 'Ops fast lane',
+    description: 'Still gates deletes and external posts; Notion page creates can auto-run for trusted ops.',
+  },
+  {
+    id: 'read_mostly',
+    name: 'Read-mostly',
+    description: 'Maximum caution — no auto-approve exceptions on high-consequence writes.',
+  },
+] as const;
+
 export default function SettingsPage() {
   const router = useRouter();
   const [notifEmail, setNotifEmail] = useState(true);
@@ -20,6 +38,7 @@ export default function SettingsPage() {
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [history, setHistory] = useState<any[]>([]);
+  const [approvalPolicy, setApprovalPolicy] = useState<(typeof POLICY_CARDS)[number]['id']>('strict_human_gate');
 
   useEffect(() => {
     api
@@ -33,6 +52,13 @@ export default function SettingsPage() {
         if (typeof prefs.notifEmail === 'boolean') setNotifEmail(prefs.notifEmail);
         if (typeof prefs.notifPush === 'boolean') setNotifPush(prefs.notifPush);
         if (typeof prefs.compactMode === 'boolean') setCompactMode(prefs.compactMode);
+        if (
+          prefs.approvalPolicy === 'strict_human_gate' ||
+          prefs.approvalPolicy === 'ops_fast_lane' ||
+          prefs.approvalPolicy === 'read_mostly'
+        ) {
+          setApprovalPolicy(prefs.approvalPolicy);
+        }
       })
       .catch(() => undefined);
     api.loginHistory().then((r) => setHistory(r.history || [])).catch(() => undefined);
@@ -41,9 +67,18 @@ export default function SettingsPage() {
   async function saveProfile() {
     await api.updateMe({
       displayName,
-      preferences: { notifEmail, notifPush, compactMode },
+      preferences: { notifEmail, notifPush, compactMode, approvalPolicy },
     });
     setMessage('Profile saved');
+  }
+
+  async function savePolicy(id: (typeof POLICY_CARDS)[number]['id']) {
+    setApprovalPolicy(id);
+    await api.updateMe({
+      displayName,
+      preferences: { notifEmail, notifPush, compactMode, approvalPolicy: id },
+    });
+    setMessage(`Approval policy set to ${POLICY_CARDS.find((p) => p.id === id)?.name}`);
   }
 
   async function changePassword() {
@@ -86,6 +121,36 @@ export default function SettingsPage() {
       </Reveal>
 
       <StaggerGroup className="grid gap-5 lg:grid-cols-2">
+        <GlassCard className="p-6 lg:col-span-2">
+          <div className="flex items-center gap-2 text-xs uppercase tracking-[0.24em] text-neutral-500">
+            <ShieldCheck size={13} /> Trust layer · approval policy
+          </div>
+          <p className="mt-2 max-w-3xl text-sm text-neutral-400">
+            This is the product edge vs ChatGPT: writes pause for a human gate. Pick how strict your workspace is.
+          </p>
+          <div className="mt-5 grid gap-3 md:grid-cols-3">
+            {POLICY_CARDS.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => savePolicy(p.id)}
+                className={cn(
+                  'rounded-2xl border px-4 py-4 text-left transition',
+                  approvalPolicy === p.id
+                    ? 'border-accent/50 bg-accent/10'
+                    : 'border-white/10 bg-black/20 hover:border-white/20'
+                )}
+              >
+                <div className="text-sm font-semibold text-white">{p.name}</div>
+                <div className="mt-2 text-xs leading-5 text-neutral-400">{p.description}</div>
+                {approvalPolicy === p.id && (
+                  <div className="mt-3 text-[10px] uppercase tracking-[0.18em] text-accent">Active</div>
+                )}
+              </button>
+            ))}
+          </div>
+        </GlassCard>
+
         <GlassCard className="p-6">
           <div className="flex items-center gap-2 text-xs uppercase tracking-[0.24em] text-neutral-500">
             <User size={13} /> Profile

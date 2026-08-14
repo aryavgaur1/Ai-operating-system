@@ -218,3 +218,47 @@ export const HIGH_CONSEQUENCE_ACTIONS: Record<ToolName, string[]> = {
 export function isHighConsequence(tool: ToolName, action: string): boolean {
   return HIGH_CONSEQUENCE_ACTIONS[tool]?.includes(action) ?? false;
 }
+
+/** Org policy templates — Work Action OS trust layer (not chatbot free-for-all). */
+export type ApprovalPolicyId = 'strict_human_gate' | 'ops_fast_lane' | 'read_mostly';
+
+export interface ApprovalPolicyTemplate {
+  id: ApprovalPolicyId;
+  name: string;
+  description: string;
+  /** Extra actions to always gate beyond HIGH_CONSEQUENCE_ACTIONS */
+  alwaysGate?: Array<{ tool: ToolName; action: string }>;
+  /** Actions that may auto-run even if listed high (ops fast lane only) */
+  autoApprove?: Array<{ tool: ToolName; action: string }>;
+}
+
+export const APPROVAL_POLICY_TEMPLATES: ApprovalPolicyTemplate[] = [
+  {
+    id: 'strict_human_gate',
+    name: 'Strict human gate',
+    description: 'Every write to Slack, Notion, or Jira waits for Approve & run. Default for serious teams.',
+  },
+  {
+    id: 'ops_fast_lane',
+    name: 'Ops fast lane',
+    description: 'Still gates deletes and external posts; Notion page creates can auto-run for trusted ops.',
+    autoApprove: [{ tool: 'notion', action: 'createPage' }],
+  },
+  {
+    id: 'read_mostly',
+    name: 'Read-mostly',
+    description: 'Maximum caution — gates all HIGH_CONSEQUENCE actions with no auto-approve exceptions.',
+  },
+];
+
+export const DEFAULT_APPROVAL_POLICY: ApprovalPolicyId = 'strict_human_gate';
+
+export function policyAllowsAutoRun(
+  policyId: ApprovalPolicyId,
+  tool: ToolName,
+  action: string
+): boolean {
+  const policy = APPROVAL_POLICY_TEMPLATES.find((p) => p.id === policyId);
+  if (!policy?.autoApprove?.length) return false;
+  return policy.autoApprove.some((a) => a.tool === tool && a.action === action);
+}

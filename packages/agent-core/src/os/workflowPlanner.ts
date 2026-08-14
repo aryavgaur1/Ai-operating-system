@@ -1,5 +1,9 @@
 import type { OsIntent, ToolCall } from '@enterprise-ai-os/shared';
-import { isHighConsequence } from '@enterprise-ai-os/shared';
+import {
+  isHighConsequence,
+  policyAllowsAutoRun,
+  DEFAULT_APPROVAL_POLICY,
+} from '@enterprise-ai-os/shared';
 
 // ============================================================
 // STEP 2 — Workflow Planner
@@ -15,7 +19,8 @@ export interface WorkflowPlan {
 }
 
 function call(tool: ToolCall['tool'], action: string, input: Record<string, unknown>): ToolCall {
-  const requiresApproval = isHighConsequence(tool, action);
+  const requiresApproval =
+    isHighConsequence(tool, action) && !policyAllowsAutoRun(DEFAULT_APPROVAL_POLICY, tool, action);
   return {
     tool,
     action,

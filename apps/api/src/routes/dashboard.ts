@@ -11,8 +11,9 @@ dashboardRouter.get(
     const orgId = req.user!.organizationId;
     const userId = req.user!.id;
 
-    const [pending, conversations, connections, activity, org] = await Promise.all([
+    const [pending, decided, conversations, connections, activity, org] = await Promise.all([
       getApprovalStore().list(orgId, 'pending', userId),
+      getApprovalStore().list(orgId, undefined, userId),
       query(
         `select id, title, updated_at from conversations
          where organization_id = $1 and user_id = $2
@@ -28,6 +29,26 @@ dashboardRouter.get(
       ).catch(() => ({ rows: [] as any[] })),
       query(`select name from organizations where id = $1`, [orgId]),
     ]);
+
+    const actionTimeline = decided
+      .filter((a) => a.status !== 'pending')
+      .slice(0, 12)
+      .map((a) => {
+        const out = (a.executionResult?.output || {}) as Record<string, unknown>;
+        const key = out.key || out.id || out.ts;
+        const failed =
+          a.status === 'approved' && (a.executionStatus === 'failed' || a.executionResult?.ok === false);
+        return {
+          id: a.id,
+          tool: a.tool,
+          action: a.action,
+          status: a.status === 'rejected' ? 'rejected' : failed ? 'failed' : 'done',
+          title: `${a.tool}.${a.action}`,
+          outcome: a.executionResult?.error || (key ? String(key) : a.status),
+          url: typeof out.url === 'string' ? out.url : undefined,
+          at: a.executedAt || a.createdAt,
+        };
+      });
 
     const demoMode = (process.env.SAAS_MODE ?? 'true') !== 'true';
     const slackLive = Boolean(process.env.SLACK_BOT_TOKEN?.trim());
@@ -58,6 +79,7 @@ dashboardRouter.get(
         liveAgents: liveCount,
       },
       pendingApprovals: pending.slice(0, 5),
+      actionTimeline,
       recentConversations: conversations.rows,
       integrations: connected.length ? connected : demoMode ? ['slack', 'jira', 'gmail', 'salesforce', 'notion'] : connected,
       activity: activity.rows,

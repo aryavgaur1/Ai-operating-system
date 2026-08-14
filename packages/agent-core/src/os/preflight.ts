@@ -63,9 +63,34 @@ export async function preflightToolCall(call: ToolCall): Promise<PreflightResult
       };
     }
 
-    // Infer missing channel → general
+    const isWritePost =
+      call.action === 'postMessage' || call.action === 'postMessageExternalChannel';
+
+    if (isWritePost) {
+      const text = String(input.text ?? '').trim();
+      if (!text) {
+        return {
+          ok: false,
+          input,
+          healActions,
+          fatal: 'Slack post needs message text. Re-ask with the exact words to post.',
+        };
+      }
+      input.text = text;
+      if (!String(input.channel ?? '').trim()) {
+        return {
+          ok: false,
+          input,
+          healActions,
+          fatal:
+            'Slack post needs a channel (e.g. #ops). Re-ask with the channel — Nexora will not invent #general for gated posts.',
+        };
+      }
+    }
+
+    // Infer missing channel → general (reads / soft writes only — never invent for gated posts)
     if (
-      ['postMessage', 'getChannelHistory', 'summarizeChannel', 'uploadFile', 'setChannelTopic', 'createBookmark', 'pinMessage'].includes(
+      ['getChannelHistory', 'summarizeChannel', 'uploadFile', 'setChannelTopic', 'createBookmark', 'pinMessage'].includes(
         call.action
       )
     ) {
@@ -73,6 +98,20 @@ export async function preflightToolCall(call: ToolCall): Promise<PreflightResult
         input.channel = process.env.SLACK_DEFAULT_CHANNEL_ID || 'general';
         healActions.push('inferred_channel_general');
       }
+    }
+
+    if (
+      [
+        'postMessage',
+        'postMessageExternalChannel',
+        'getChannelHistory',
+        'summarizeChannel',
+        'uploadFile',
+        'setChannelTopic',
+        'createBookmark',
+        'pinMessage',
+      ].includes(call.action)
+    ) {
       // Try resolve / auto-join public channels
       try {
         const id = await slackService.resolveChannelId(String(input.channel));
@@ -84,6 +123,9 @@ export async function preflightToolCall(call: ToolCall): Promise<PreflightResult
         } catch (joinErr: any) {
           if (/already_in_channel/i.test(String(joinErr?.message || joinErr?.code || ''))) {
             healActions.push('already_in_channel');
+          } else if (isWritePost) {
+            // For gated posts, soft-fail membership so Approve & run can still attempt + return a clear Slack error
+            healActions.push('join_failed_will_retry_on_execute');
           }
           // private / missing scope — continue
         }
@@ -107,6 +149,13 @@ export async function preflightToolCall(call: ToolCall): Promise<PreflightResult
               return { ok: false, input, healActions, fatal: err?.message ?? String(err) };
             }
           }
+        } else if (isWritePost) {
+          return {
+            ok: false,
+            input,
+            healActions,
+            fatal: `Slack channel #${name} not found or bot cannot access it. Invite @Nexora to that channel, then ask again.`,
+          };
         } else if (/not found|channel_not_found/i.test(String(err?.message))) {
           try {
             const created = await slackService.createChannel({ name });
@@ -153,8 +202,42 @@ export async function preflightToolCall(call: ToolCall): Promise<PreflightResult
     }
     try {
       const { initializeNotionClient } = await import('@enterprise-ai-os/connectors');
-      initializeNotionClient(ctx.notionToken);
+      const client = initializeNotionClient(ctx.notionToken);
       healActions.push('notion_client_ready');
+
+      const writeActions = [
+        'createPage',
+        'createDatabase',
+        'createProject',
+        'createMeetingNotes',
+        'createPRD',
+        'createWiki',
+        'createRoadmap',
+      ];
+      if (writeActions.includes(call.action)) {
+        if (!input.title) {
+          input.title = `Nexora Note ${new Date().toISOString().slice(0, 10)}`;
+          healActions.push('inferred_notion_title');
+        }
+        // Prove a shared parent exists before we queue Approve & run
+        if (!input.parentPageId) {
+          const pageSearch = await client.search({
+            filter: { property: 'object', value: 'page' },
+            page_size: 5,
+          });
+          const pages = (pageSearch.results as any[]) ?? [];
+          if (!pages.length) {
+            return {
+              ok: false,
+              input,
+              healActions,
+              fatal:
+                'Notion has no shared parent page for Nexora yet. In Notion: open a page → ··· → Connections → add Nexora, then reconnect under Integrations.',
+            };
+          }
+          healActions.push('notion_parent_available');
+        }
+      }
     } catch (err: any) {
       return {
         ok: false,
@@ -162,10 +245,6 @@ export async function preflightToolCall(call: ToolCall): Promise<PreflightResult
         healActions,
         fatal: err?.message ?? 'Connect your Notion workspace to continue.',
       };
-    }
-    if (!input.title && (call.action.startsWith('create') || call.action === 'createPage')) {
-      input.title = `Nexora Note ${new Date().toISOString().slice(0, 10)}`;
-      healActions.push('inferred_notion_title');
     }
   }
 
@@ -178,7 +257,65 @@ export async function preflightToolCall(call: ToolCall): Promise<PreflightResult
         fatal: 'Jira is not connected for this workspace. Open Integrations → Connect Jira, then ask again.',
       };
     }
-    if (!input.summary && (call.action === 'createIssue' || call.action.startsWith('create'))) {
+    if (call.action === 'createIssue') {
+      const summary = String(input.summary ?? input.title ?? '').trim();
+      if (!summary) {
+        return {
+          ok: false,
+          input,
+          healActions,
+          fatal: 'Jira create needs a summary/title. Re-ask with a clear ticket title.',
+        };
+      }
+      input.summary = summary.slice(0, 255);
+
+      const project = String(
+        input.project ?? input.projectKey ?? process.env.JIRA_DEFAULT_PROJECT ?? ''
+      )
+        .trim()
+        .toUpperCase();
+      if (!project) {
+        return {
+          ok: false,
+          input,
+          healActions,
+          fatal:
+            'Jira create needs a project key. Say e.g. “create a Jira ticket in PROJ …” or set JIRA_DEFAULT_PROJECT.',
+        };
+      }
+
+      const token = ctx.jiraToken?.trim();
+      const cloudId = ctx.jiraCloudId?.trim();
+      if (token && cloudId) {
+        try {
+          const res = await fetch(
+            `https://api.atlassian.com/ex/jira/${cloudId}/rest/api/3/project/${encodeURIComponent(project)}`,
+            {
+              headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+            }
+          );
+          if (!res.ok) {
+            const body = await res.text();
+            return {
+              ok: false,
+              input,
+              healActions,
+              fatal: `Jira project “${project}” was not found or you cannot access it (${res.status}). ${body.slice(0, 120)}`,
+            };
+          }
+          healActions.push('validated_jira_project');
+        } catch (err: any) {
+          return {
+            ok: false,
+            input,
+            healActions,
+            fatal: `Could not validate Jira project “${project}”: ${err?.message ?? err}`,
+          };
+        }
+      }
+      input.project = project;
+      input.projectKey = project;
+    } else if (!input.summary && call.action.startsWith('create')) {
       input.summary = `Nexora task ${new Date().toISOString().slice(0, 10)}`;
       healActions.push('inferred_jira_summary');
     }

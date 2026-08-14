@@ -1,5 +1,9 @@
 import type { AgentPlan, ClassifiedIntent, RetrievedContext, ToolCall, ToolName } from '@enterprise-ai-os/shared';
-import { isHighConsequence } from '@enterprise-ai-os/shared';
+import {
+  isHighConsequence,
+  policyAllowsAutoRun,
+  DEFAULT_APPROVAL_POLICY,
+} from '@enterprise-ai-os/shared';
 import type { LLMClient } from './llmClient';
 import { isExplicitNotionCommand, isExplicitSlackCommand } from './os/intentDetector';
 
@@ -178,8 +182,12 @@ const TOOL_RULES: ToolRule[] = [
       const summary = (titled || query.replace(/\bjira\b/gi, '').trim() || query).slice(0, 100);
       const priority = query.match(/\bpriority\s+(Highest|High|Medium|Low|Lowest)\b/i)?.[1];
       const labels = query.match(/\blabels?\s+([a-z0-9,_-]+)/i)?.[1];
+      const projectFromQuery =
+        query.match(/\b(?:in|for)\s+project\s+([A-Z][A-Z0-9_]{1,10})\b/i)?.[1] ||
+        query.match(/\bproject\s+([A-Z][A-Z0-9_]{1,10})\b/i)?.[1];
+      const project = (projectFromQuery || process.env.JIRA_DEFAULT_PROJECT || '').trim().toUpperCase();
       return {
-        project: process.env.JIRA_DEFAULT_PROJECT || 'KAN',
+        ...(project ? { project } : {}),
         summary: wantsRisk && !/\brisk\b/i.test(summary) ? `Risk: ${summary}`.slice(0, 255) : summary,
         description: query,
         issueType: wantsRisk ? 'Risk' : 'Task',
@@ -718,7 +726,8 @@ function proposeToolCalls(query: string): ToolCall[] {
     const channelName = `incident-${Date.now().toString(36).slice(-5)}`;
     const project = process.env.JIRA_DEFAULT_PROJECT || 'KAN';
     const mk = (tool: ToolName, action: string, input: Record<string, unknown>): ToolCall => {
-      const requiresApproval = isHighConsequence(tool, action);
+      const requiresApproval =
+        isHighConsequence(tool, action) && !policyAllowsAutoRun(DEFAULT_APPROVAL_POLICY, tool, action);
       return {
         tool,
         action,
@@ -774,7 +783,9 @@ function proposeToolCalls(query: string): ToolCall[] {
 
     const input = rule.buildInput(query);
     const action = typeof rule.action === 'function' ? rule.action(query) : (input.action as string | undefined) ?? rule.action;
-    const requiresApproval = isHighConsequence(rule.tool, action);
+    const requiresApproval =
+      isHighConsequence(rule.tool, action) &&
+      !policyAllowsAutoRun(DEFAULT_APPROVAL_POLICY, rule.tool, action);
     const sanitizedInput = { ...input };
     delete (sanitizedInput as any).action;
 

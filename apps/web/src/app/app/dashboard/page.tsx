@@ -60,13 +60,6 @@ const teamMembers = [
   { name: 'Ritika Malhotra', role: 'Revenue', initials: 'RM' },
 ];
 
-const eventFeed = [
-  { label: 'Jira ticket priority updated', time: '3m', tone: 'accent' },
-  { label: 'Slack digest sent to #ops', time: '22m', tone: 'accent2' },
-  { label: 'Approval requested — Salesforce update', time: '41m', tone: 'amber' },
-  { label: 'Notion sync completed', time: '1h', tone: 'accent2' },
-];
-
 export default function DashboardPage() {
   const [integrations, setIntegrations] = useState<IntegrationStatus[]>([]);
   const [pending, setPending] = useState<ApprovalRequest[]>([]);
@@ -80,12 +73,25 @@ export default function DashboardPage() {
   const [connectedCount, setConnectedCount] = useState(0);
   const [liveAgents, setLiveAgents] = useState(0);
   const [pendingCount, setPendingCount] = useState(0);
+  const [actionTimeline, setActionTimeline] = useState<
+    Array<{
+      id: string;
+      tool: string;
+      action: string;
+      status: string;
+      title: string;
+      outcome: string;
+      url?: string;
+      at?: string;
+    }>
+  >([]);
 
   useEffect(() => {
     const load = async () => {
       try {
         const [dash, me] = await Promise.all([api.getDashboard(), api.me().catch(() => null)]);
         setPending(dash.pendingApprovals || []);
+        setActionTimeline(Array.isArray(dash.actionTimeline) ? dash.actionTimeline : []);
         const tools: string[] = Array.isArray(dash.integrations)
           ? dash.integrations.map((t: string | { tool: string }) => (typeof t === 'string' ? t : t.tool))
           : [];
@@ -95,7 +101,7 @@ export default function DashboardPage() {
           list.map((tool) => ({
             tool,
             status: 'active' as const,
-            mode: tool === 'slack' || tool === 'notion' ? ('live' as const) : ('mock' as const),
+            mode: tool === 'slack' || tool === 'notion' || tool === 'jira' ? ('live' as const) : ('mock' as const),
             availableActions: [],
           }))
         );
@@ -103,7 +109,7 @@ export default function DashboardPage() {
         setGreetingName(me?.user?.displayName || me?.user?.email || dash.workspaceName || 'there');
         setRecentChats(dash.recentConversations || []);
         const connected = dash.metrics?.connectedIntegrations ?? list.length;
-        const live = dash.metrics?.liveAgents ?? list.filter((t) => t === 'slack' || t === 'notion').length;
+        const live = dash.metrics?.liveAgents ?? list.filter((t) => t === 'slack' || t === 'notion' || t === 'jira').length;
         setConnectedCount(connected);
         setLiveAgents(live);
         setPendingCount(dash.metrics?.pendingApprovals ?? 0);
@@ -115,12 +121,12 @@ export default function DashboardPage() {
           ['slack', 'jira', 'gmail', 'salesforce', 'notion'].map((tool) => ({
             tool,
             status: 'active' as const,
-            mode: tool === 'slack' || tool === 'notion' ? ('live' as const) : ('mock' as const),
+            mode: tool === 'slack' || tool === 'notion' || tool === 'jira' ? ('live' as const) : ('mock' as const),
             availableActions: [],
           }))
         );
         setConnectedCount(5);
-        setLiveAgents(2);
+        setLiveAgents(3);
       } finally {
         setLoading(false);
       }
@@ -411,29 +417,51 @@ export default function DashboardPage() {
           </div>
         </GlassCard>
 
-        {/* Recent events / activity timeline */}
+        {/* Real Action Timeline — decided Approve & run outcomes */}
         <GlassCard className="col-span-1 p-6 sm:col-span-2 xl:col-span-3">
           <div className="flex items-center justify-between">
-            <div className="text-xs uppercase tracking-[0.24em] text-neutral-500">Activity timeline</div>
-            <span className="text-[11px] text-neutral-500">Live</span>
+            <div className="text-xs uppercase tracking-[0.24em] text-neutral-500">Action Timeline</div>
+            <Link href="/app/approvals" className="text-[11px] text-accent hover:underline">
+              Open Approvals
+            </Link>
           </div>
           <div className="mt-5 space-y-0">
-            {eventFeed.map((e, i) => (
-              <div key={e.label} className="relative flex gap-4 pb-5 last:pb-0">
-                {i !== eventFeed.length - 1 && (
+            {actionTimeline.length === 0 && !loading && (
+              <div className="rounded-2xl border border-white/8 bg-black/20 px-4 py-5 text-sm text-neutral-400">
+                No decided actions yet. Propose work in Chat → Approve &amp; run — outcomes land here (not a fake feed).
+              </div>
+            )}
+            {actionTimeline.map((e, i) => (
+              <div key={e.id} className="relative flex gap-4 pb-5 last:pb-0">
+                {i !== actionTimeline.length - 1 && (
                   <span className="absolute left-[5px] top-3 h-full w-px bg-white/10" />
                 )}
                 <span
                   className={cn(
                     'relative z-10 mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full',
-                    e.tone === 'accent' && 'bg-accent',
-                    e.tone === 'accent2' && 'bg-accent2',
-                    e.tone === 'amber' && 'bg-amber'
+                    e.status === 'done' && 'bg-accent2',
+                    e.status === 'failed' && 'bg-amber',
+                    e.status === 'rejected' && 'bg-rose-400'
                   )}
                 />
-                <div className="flex-1">
-                  <div className="text-sm text-neutral-200">{e.label}</div>
-                  <div className="text-[11px] uppercase tracking-wide text-neutral-500">{e.time} ago</div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm text-neutral-200">
+                    {e.tool}.{e.action}
+                    {e.url ? (
+                      <>
+                        {' · '}
+                        <a href={e.url} target="_blank" rel="noreferrer" className="text-accent hover:underline">
+                          {e.outcome}
+                        </a>
+                      </>
+                    ) : (
+                      <span className="text-neutral-400"> · {e.outcome}</span>
+                    )}
+                  </div>
+                  <div className="text-[11px] uppercase tracking-wide text-neutral-500">
+                    {e.status}
+                    {e.at ? ` · ${new Date(e.at).toLocaleString()}` : ''}
+                  </div>
                 </div>
               </div>
             ))}

@@ -8,7 +8,7 @@ import {
 } from '@enterprise-ai-os/connectors';
 import { logSlackAction } from '@enterprise-ai-os/stores';
 import { getApprovalStore } from './approvals';
-import { verifyToolResult } from './os/preflight';
+import { verifyToolResult, preflightToolCall } from './os/preflight';
 
 // ============================================================
 // Tool Execution Engine — executes planned tool calls with
@@ -266,11 +266,27 @@ export async function executeApprovedAction(approvalId: string): Promise<ToolCal
     requiresApproval: false,
   };
 
+  // Re-validate connection / project / channel / parent right before live execute
+  const pf = await preflightToolCall(call);
+  if (!pf.ok) {
+    const failed: ToolCallResult = {
+      tool: call.tool,
+      action: call.action,
+      ok: false,
+      mocked: false,
+      error: pf.fatal || `Preflight failed for ${call.tool}.${call.action}`,
+    };
+    await auditSlack(approval.action, approval.input ?? {}, failed, Date.now(), 'approved_action_preflight');
+    await approvalStore.completeExecution(approvalId, failed, false);
+    return failed;
+  }
+  call.input = pf.input;
+
   const connector = getConnector(approval.tool);
   const started = Date.now();
   let result: ToolCallResult;
   try {
-    result = await connector.execute(approval.action, approval.input ?? {});
+    result = await connector.execute(approval.action, call.input);
   } catch (err) {
     result = {
       tool: approval.tool,
