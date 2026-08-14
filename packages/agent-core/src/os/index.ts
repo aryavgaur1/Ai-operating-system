@@ -18,9 +18,11 @@ export {
   classifyFailure,
 } from './preflight';
 export {
+  resolveAuthoritativeRoute,
   detectRequestMode,
   resolveIntentFamily,
   filterToolCallsByFamily,
+  toolCallFromRoute,
   buildDecisionRecord,
   clarifyReplyForJira,
   cancelReply,
@@ -29,4 +31,4 @@ export {
   isClarifyRequest,
   isDryRunRequest,
 } from './routingPolicy';
-export type { IntentFamily, RequestMode } from './routingPolicy';
+export type { IntentFamily, RequestMode, AuthoritativeRoute, RouteAction } from './routingPolicy';

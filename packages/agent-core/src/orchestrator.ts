@@ -5,15 +5,13 @@ import { hybridRetrieve } from './retriever';
 import { buildPlan } from './planner';
 import { createLLMClient } from './llmClient';
 import {
-  detectOsIntent,
   planWorkflow,
   executePlanResilient,
   rememberFromExecution,
   logWorkflow,
-  isExplicitJiraCreate,
-  detectRequestMode,
-  resolveIntentFamily,
+  resolveAuthoritativeRoute,
   filterToolCallsByFamily,
+  toolCallFromRoute,
   buildDecisionRecord,
   clarifyReplyForJira,
   cancelReply,
@@ -165,32 +163,41 @@ export async function runAgentTurn(
 ): Promise<AgentTurnResult> {
   const started = Date.now();
 
-  const osIntent = detectOsIntent(query);
-  const requestMode = detectRequestMode(query);
-  const intentFamily = resolveIntentFamily(osIntent, query);
+  // ONE authoritative decision for the entire turn
+  const route = resolveAuthoritativeRoute(query);
+  const osIntent = route.osIntent;
+  const requestMode = route.mode;
+  const intentFamily = route.family;
   const legacyIntent: ClassifiedIntent =
-    osIntent.kind === 'read_only'
+    osIntent.kind === 'read_only' && !route.lockedTool
       ? classifyIntent(query)
       : {
-          intent: osIntent.legacyIntent,
-          confidence: osIntent.confidence,
-          rationale: osIntent.rationale,
+          intent: osIntent.legacyIntent === 'read' && route.lockedTool ? 'action' : osIntent.legacyIntent,
+          confidence: route.confidence,
+          rationale: route.rationale,
         };
 
   const context = await hybridRetrieve(query, organizationId, vectorStore, graphStore);
   const llm = createLLMClient();
+  const reasoning: string[] = [
+    `Authoritative route: family=${route.family} mode=${route.mode} tool=${route.lockedTool ?? '—'} action=${route.lockedAction ?? '—'} ambiguous=${route.ambiguous}`,
+    route.rationale,
+  ];
 
-  if (requestMode === 'cancel') {
-    const decision = buildDecisionRecord({
+  const emptyDecision = (selected: AgentPlan['toolCalls'] = [], stripped: Array<{ tool: ToolName; action: string; reason: string }> = []) =>
+    buildDecisionRecord({
       query,
       intent: osIntent,
       family: intentFamily,
       mode: requestMode,
-      selected: [],
-      stripped: [],
+      selected,
+      stripped,
       pendingApprovalIds: [],
       executedCount: 0,
+      route,
     });
+
+  if (requestMode === 'cancel') {
     const reply = cancelReply();
     return {
       reply,
@@ -199,35 +206,27 @@ export async function runAgentTurn(
       pendingApprovalIds: [],
       workflow: {
         intent: osIntent,
-        reasoning: ['Request mode: cancel — no tools executed.'],
+        reasoning: [...reasoning, 'Cancel — no tools.'],
         planSteps: [],
         steps: [],
         retries: 0,
         durationMs: Date.now() - started,
-        decision,
+        decision: emptyDecision(),
       },
     };
   }
 
-  if (requestMode === 'clarify') {
-    const reply = /\b(jira|ticket|vendor)\b/i.test(query)
-      ? clarifyReplyForJira(query)
-      : `I can help — tell me which system (Jira / Slack / Notion) and what you want done. I will not execute until you confirm.`;
-    const decision = buildDecisionRecord({
-      query,
-      intent: osIntent,
-      family: 'meta',
-      mode: requestMode,
-      selected: [],
-      stripped: [],
-      pendingApprovalIds: [],
-      executedCount: 0,
-    });
+  if (requestMode === 'clarify' || route.ambiguous) {
+    const reply =
+      route.clarifyMessage ||
+      (/\b(jira|ticket|vendor)\b/i.test(query)
+        ? clarifyReplyForJira(query)
+        : `I’m not executing anything yet. Tell me the system (Jira / Slack / Notion) and the exact action.`);
     return {
       reply,
       plan: {
         intent: legacyIntent,
-        reasoning: 'Clarify mode — gathering required fields.',
+        reasoning: 'Clarify / ambiguous — no tools.',
         toolCalls: [],
         responseDraft: reply,
       },
@@ -235,37 +234,30 @@ export async function runAgentTurn(
       pendingApprovalIds: [],
       workflow: {
         intent: osIntent,
-        reasoning: ['Request mode: clarify — no tools executed.'],
+        reasoning: [...reasoning, 'Clarify — no tools.'],
         planSteps: [],
         steps: [],
         retries: 0,
         durationMs: Date.now() - started,
-        decision,
+        decision: emptyDecision(),
       },
     };
   }
 
-  const workflow = planWorkflow(query, osIntent);
   let plan: AgentPlan;
   let strippedTools: Array<{ tool: ToolName; action: string; reason: string }> = [];
+  const planSteps: string[] = [];
 
-  const looksLikeJiraCreate = isExplicitJiraCreate(query);
-  if (looksLikeJiraCreate && workflow.toolCalls.length > 0) {
-    workflow.reasoning.push(
-      'Override: explicit Jira ticket create — discarding multi-step Slack workflow (war room / follow-up / incident).'
-    );
-    strippedTools.push(
-      ...workflow.toolCalls.map((c) => ({
-        tool: c.tool,
-        action: c.action,
-        reason: 'explicit_jira_create_clears_workflow',
-      }))
-    );
-    workflow.toolCalls = [];
-    workflow.planSteps = [];
+  // Workflows only when route.allowWorkflow
+  const workflow = route.allowWorkflow
+    ? planWorkflow(query, osIntent)
+    : { reasoning: ['Workflow planner skipped — authoritative route forbids multi-step workflow.'], planSteps: [] as string[], toolCalls: [] as AgentPlan['toolCalls'] };
+
+  if (!route.allowWorkflow && workflow.toolCalls.length === 0) {
+    reasoning.push('Workflow skipped by authoritative route.');
   }
 
-  if (workflow.toolCalls.length > 0) {
+  if (route.allowWorkflow && workflow.toolCalls.length > 0) {
     const draft = await llm.complete([
       {
         role: 'system',
@@ -283,72 +275,51 @@ export async function runAgentTurn(
       toolCalls: workflow.toolCalls,
       responseDraft: draft,
     };
+    reasoning.push(...workflow.reasoning);
   } else {
-    plan = await buildPlan(
-      query,
-      legacyIntent.intent === 'action' ? legacyIntent : { ...legacyIntent, intent: osIntent.legacyIntent },
-      context,
-      llm
-    );
-    if (looksLikeJiraCreate) {
-      const before = plan.toolCalls;
-      plan.toolCalls = plan.toolCalls.filter(
-        (c) =>
-          !(
-            c.tool === 'slack' &&
-            (c.action === 'createWarRoom' || c.action === 'createIncident' || c.action === 'followUpPendingReplies')
-          )
+    // Prefer locked tool call from route; planner only fills within family
+    const locked = toolCallFromRoute(route, query);
+    if (locked && route.lockedAction) {
+      plan = {
+        intent: { ...legacyIntent, intent: 'action' },
+        reasoning: `Locked by authoritative route: ${locked.tool}.${locked.action}`,
+        toolCalls: [locked],
+        responseDraft: `Prepared ${locked.tool}.${locked.action} for review.`,
+      };
+    } else {
+      plan = await buildPlan(
+        query,
+        legacyIntent.intent === 'action' ? legacyIntent : { ...legacyIntent, intent: 'action' },
+        context,
+        llm,
+        route
       );
-      for (const c of before) {
-        if (!plan.toolCalls.includes(c)) {
-          strippedTools.push({ tool: c.tool, action: c.action, reason: 'jira_create_strips_slack_workflow' });
-        }
-      }
-      if (plan.toolCalls.length === 0 || !plan.toolCalls.some((c) => c.tool === 'jira' && c.action === 'createIssue')) {
-        plan = await buildPlan(
-          query,
-          { intent: 'action', confidence: 0.99, rationale: 'Forced Jira createIssue' },
-          context,
-          llm
-        );
-      }
     }
-    workflow.reasoning.push('Legacy planner selected tool calls.');
-    workflow.planSteps.push(...plan.toolCalls.map((c) => `${c.tool}.${c.action}`));
+    reasoning.push('Single-tool path under authoritative route.');
   }
 
-  const filtered = filterToolCallsByFamily(plan.toolCalls, intentFamily);
+  const filtered = filterToolCallsByFamily(plan.toolCalls, intentFamily, route);
   if (filtered.stripped.length) {
     strippedTools = [...strippedTools, ...filtered.stripped];
-    workflow.reasoning.push(
-      `Policy: stripped ${filtered.stripped.length} out-of-family tool(s) for intent family “${intentFamily}”.`
-    );
+    reasoning.push(`Policy stripped ${filtered.stripped.length} tool(s).`);
   }
   plan.toolCalls = filtered.kept;
-  workflow.planSteps = plan.toolCalls.map((c) => `${c.tool}.${c.action}`);
+
+  // If lock exists but filter emptied, rebuild from lock
+  if (route.lockedTool && route.lockedAction && plan.toolCalls.length === 0) {
+    const rebuilt = toolCallFromRoute(route, query);
+    if (rebuilt) plan.toolCalls = [rebuilt];
+  }
+
+  planSteps.push(...plan.toolCalls.map((c) => `${c.tool}.${c.action}`));
 
   if (requestMode === 'dry_run') {
     let previewCalls = plan.toolCalls;
-    if (previewCalls.length === 0 && /\b(jira|ticket|issue)\b/i.test(query)) {
-      const preview = await buildPlan(
-        'create a vendor jira ticket',
-        { intent: 'action', confidence: 0.99, rationale: 'Dry-run Jira preview' },
-        context,
-        llm
-      );
-      previewCalls = filterToolCallsByFamily(preview.toolCalls, 'jira').kept;
+    if (previewCalls.length === 0 && route.lockedTool && route.lockedAction) {
+      const rebuilt = toolCallFromRoute({ ...route, mode: 'dry_run' }, query);
+      if (rebuilt) previewCalls = [rebuilt];
     }
     const reply = dryRunReplyForPlan(previewCalls);
-    const decision = buildDecisionRecord({
-      query,
-      intent: osIntent,
-      family: intentFamily,
-      mode: requestMode,
-      selected: previewCalls,
-      stripped: strippedTools,
-      pendingApprovalIds: [],
-      executedCount: 0,
-    });
     return {
       reply,
       plan: { ...plan, toolCalls: [], responseDraft: reply, reasoning: 'Dry-run — execution skipped.' },
@@ -356,12 +327,12 @@ export async function runAgentTurn(
       pendingApprovalIds: [],
       workflow: {
         intent: osIntent,
-        reasoning: [...workflow.reasoning, 'Request mode: dry_run — no execution.'],
+        reasoning: [...reasoning, 'Dry-run — no execution.'],
         planSteps: previewCalls.map((c) => `${c.tool}.${c.action}`),
         steps: [],
         retries: 0,
         durationMs: Date.now() - started,
-        decision,
+        decision: emptyDecision(previewCalls, strippedTools),
       },
     };
   }
@@ -381,9 +352,10 @@ export async function runAgentTurn(
     stripped: strippedTools,
     pendingApprovalIds,
     executedCount: executedCalls.filter((c) => c.ok).length,
+    route,
   });
-  workflow.reasoning.push(
-    `Decision: family=${decision.intentFamily} mode=${decision.requestMode} validation=${decision.validation} execution=${decision.execution}`
+  reasoning.push(
+    `Decision: family=${decision.intentFamily} locked=${decision.lockedTool}.${decision.lockedAction} validation=${decision.validation} execution=${decision.execution}`
   );
 
   const approvalNote =
@@ -395,26 +367,25 @@ export async function runAgentTurn(
   const q = query.trim().toLowerCase();
   if (/^(slack|notion)\s*\??$/.test(q) && executedCalls.length === 0) {
     reply = q.startsWith('slack')
-      ? `Slack is connected (live). Try:\n- create new channel investor-pitch\n- post "kickoff in 10 mins" to #general on slack\n- invite Aryav Gaur to #all-nexora on slack\n- Create a launch war room for Project Atlas\n- What blocked Engineering this week?\n- Find unanswered messages`
-      : `Notion is connected (live). Try:\n- create a notion page titled Weekly Update\n- Create a Notion PRD for Atlas\n- Create meeting notes in Notion`;
+      ? `Slack is connected (live). Try:\n- create new channel investor-pitch\n- post "kickoff in 10 mins" to #general on slack\n- Create a launch war room for Project Atlas`
+      : `Notion is connected (live). Try:\n- create a notion page titled Weekly Update`;
   } else if (executedCalls.length === 0 && pendingApprovalIds.length === 0) {
     reply =
       plan.responseDraft ||
-      `I understood this as **${osIntent.kind}** (${osIntent.rationale}). I did not need a tool yet — ask me to launch a project, open an incident, prepare standup, or create a Notion page.`;
+      `I understood this as **${osIntent.kind}** (${route.rationale}). No tool ran.`;
   } else {
     reply = formatReply(executedCalls, plan, approvalNote);
   }
 
   const memoryKeys = await rememberFromExecution(organizationId, requestedByUserId, query, executedCalls);
-
   const success = executedCalls.length === 0 || executedCalls.some((c) => c.ok);
   await logWorkflow({
     organizationId,
     userId: requestedByUserId,
     query,
     intent: osIntent,
-    reasoning: workflow.reasoning,
-    planSteps: workflow.planSteps,
+    reasoning,
+    planSteps,
     steps,
     retries,
     durationMs: Date.now() - started,
@@ -429,8 +400,8 @@ export async function runAgentTurn(
     pendingApprovalIds,
     workflow: {
       intent: osIntent,
-      reasoning: workflow.reasoning,
-      planSteps: workflow.planSteps,
+      reasoning,
+      planSteps,
       steps,
       retries,
       durationMs: Date.now() - started,

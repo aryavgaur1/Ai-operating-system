@@ -147,6 +147,13 @@ export interface RoutingDecisionRecord {
   requestMode: 'execute' | 'clarify' | 'cancel' | 'dry_run' | 'question';
   intentKind: WorkflowKind;
   intentFamily: string;
+  /** Locked primary tool when routing is authoritative */
+  lockedTool?: ToolName | null;
+  /** Locked action when routing is authoritative */
+  lockedAction?: string | null;
+  /** Extracted entities (project, summary, issueKey, vendor, …) */
+  entities?: Record<string, string>;
+  ambiguous?: boolean;
   allowedTools: ToolName[];
   selectedTools: Array<{ tool: ToolName; action: string }>;
   strippedTools: Array<{ tool: ToolName; action: string; reason: string }>;

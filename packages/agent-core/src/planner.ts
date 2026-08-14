@@ -6,7 +6,7 @@ import {
 } from '@enterprise-ai-os/shared';
 import type { LLMClient } from './llmClient';
 import { isExplicitNotionCommand, isExplicitSlackCommand, isExplicitJiraCreate, isExplicitJiraDelete } from './os/intentDetector';
-import { detectRequestMode } from './os/routingPolicy';
+import { detectRequestMode, type AuthoritativeRoute, toolCallFromRoute } from './os/routingPolicy';
 
 // ============================================================
 // LLM Planner — the "reasoning engine" box in the architecture
@@ -731,75 +731,83 @@ function parseNotionActionQuery(query: string) {
   };
 }
 
-function proposeToolCalls(query: string): ToolCall[] {
-  const lower = query.toLowerCase();
-  const mode = detectRequestMode(query);
+function proposeToolCalls(query: string, route?: AuthoritativeRoute): ToolCall[] {
+  // Authoritative route wins — no cross-tool keyword race
+  if (route) {
+    if (route.mode === 'cancel' || route.mode === 'clarify' || route.ambiguous) {
+      return [];
+    }
+    if (route.lockedTool && route.lockedAction) {
+      const locked = toolCallFromRoute(route, query);
+      return locked ? [locked] : [];
+    }
+    if (
+      route.family === 'launch' ||
+      route.family === 'incident' ||
+      route.family === 'reminder' ||
+      route.family === 'standup'
+    ) {
+      return [];
+    }
+    if (!route.lockedTool && route.family !== 'slack_write' && route.family !== 'slack_read' && route.family !== 'notion' && route.family !== 'jira') {
+      return [];
+    }
+  }
 
-  // Meta modes never propose writes
+  const lower = query.toLowerCase();
+  const mode = route?.mode ?? detectRequestMode(query);
   if (mode === 'cancel' || mode === 'clarify' || mode === 'dry_run') {
     return [];
   }
 
-  // Never propose tools that are not implemented (no fake queues)
-  if (/\b(gmail|salesforce|crm)\b/.test(lower) && !/\b(jira|slack|notion)\b/.test(lower)) {
-    // Let buildPlan responseDraft explain — zero tool calls
-    if (/\b(email|e-mail|mail|opportunity|salesforce)\b/.test(lower)) {
-      // fall through to empty if only gmail/sf keywords match below — we skip those rules
-    }
+  if (isExplicitJiraDelete(query) || (route?.lockedTool === 'jira' && route?.lockedAction === 'deleteIssue')) {
+    const locked = toolCallFromRoute(
+      route?.lockedAction === 'deleteIssue'
+        ? route
+        : {
+            mode: 'execute',
+            family: 'jira',
+            osIntent: { kind: 'simple_action', confidence: 1, rationale: '', legacyIntent: 'action', entities: {} },
+            lockedTool: 'jira',
+            lockedAction: 'deleteIssue',
+            routeAction: 'delete',
+            entities: { issueKey: query.match(/\b([A-Z][A-Z0-9]+-\d+)\b/)?.[1] || '' },
+            confidence: 1,
+            ambiguous: false,
+            allowWorkflow: false,
+            rationale: 'delete',
+          },
+      query
+    );
+    return locked ? [locked] : [];
   }
 
-  // Explicit Jira delete → deleteIssue only (never createIssue)
-  if (isExplicitJiraDelete(query)) {
-    const key = query.match(/\b([A-Z][A-Z0-9]+-\d+)\b/)?.[1] || '';
-    const requiresApproval =
-      isHighConsequence('jira', 'deleteIssue') &&
-      !policyAllowsAutoRun(DEFAULT_APPROVAL_POLICY, 'jira', 'deleteIssue');
-    return [
+  if (isExplicitJiraCreate(query) || (route?.lockedTool === 'jira' && route?.lockedAction === 'createIssue')) {
+    const locked = toolCallFromRoute(
       {
-        tool: 'jira',
-        action: 'deleteIssue',
-        input: { key },
-        riskLevel: requiresApproval ? 'high' : 'low',
-        requiresApproval,
+        mode: 'execute',
+        family: 'jira',
+        osIntent: { kind: 'simple_action', confidence: 1, rationale: '', legacyIntent: 'action', entities: {} },
+        lockedTool: 'jira',
+        lockedAction: 'createIssue',
+        routeAction: 'create',
+        entities: route?.entities ?? {},
+        confidence: 1,
+        ambiguous: false,
+        allowWorkflow: false,
+        rationale: 'create',
       },
-    ];
+      query
+    );
+    return locked ? [locked] : [];
   }
 
-  // HARD RULE: explicit Jira ticket create never stacks Slack war-room / follow-up tools
-  if (isExplicitJiraCreate(query)) {
-    const requiresApproval =
-      isHighConsequence('jira', 'createIssue') &&
-      !policyAllowsAutoRun(DEFAULT_APPROVAL_POLICY, 'jira', 'createIssue');
-    const wantsRisk = /\brisk\b/i.test(query);
-    const titled =
-      query.match(/(?:titled|called|named)\s+["']?([^"'\n.]+)["']?/i)?.[1]?.trim() ||
-      query.match(/create (?:a )?(?:jira )?(?:ticket|issue|task|risk)(?: for| about| to)?\s+(.+)/i)?.[1]?.trim() ||
-      query.match(/\b(?:ticket|issue|task)\s+to\s+(.+)/i)?.[1]?.trim();
-    const summary = (titled || query.replace(/\bjira\b/gi, '').replace(/\b(create|a|ticket|issue|task|to|track)\b/gi, ' ').replace(/\s+/g, ' ').trim() || query).slice(0, 100);
-    const projectFromQuery =
-      query.match(/\b(?:in|for)\s+project\s+([A-Z][A-Z0-9_]{1,10})\b/i)?.[1] ||
-      query.match(/\bproject\s+([A-Z][A-Z0-9_]{1,10})\b/i)?.[1];
-    const project = (projectFromQuery || process.env.JIRA_DEFAULT_PROJECT || '').trim().toUpperCase();
-    return [
-      {
-        tool: 'jira',
-        action: 'createIssue',
-        input: {
-          ...(project ? { project } : {}),
-          summary: wantsRisk && !/\brisk\b/i.test(summary) ? `Risk: ${summary}`.slice(0, 255) : summary.slice(0, 255),
-          description: query,
-          issueType: wantsRisk ? 'Risk' : 'Task',
-        },
-        riskLevel: requiresApproval ? 'high' : 'low',
-        requiresApproval,
-      },
-    ];
-  }
-
-  // Multi-tool playbook: incident workspace → Slack + Jira + Notion (+ notify)
   if (
-    /\b(incident\s+workspace|prepare\s+an?\s+incident|create\s+an?\s+incident\s+workspace)\b/i.test(query) ||
-    (/\bincident\b/i.test(query) && /\b(workspace|slack|jira|notion)\b/i.test(query) && /\b(create|prepare|set\s*up)\b/i.test(query))
+    (!route || route.allowWorkflow) &&
+    (/\b(incident\s+workspace|prepare\s+an?\s+incident|create\s+an?\s+incident\s+workspace)\b/i.test(query) ||
+      (/\bincident\b/i.test(query) &&
+        /\b(workspace|slack|jira|notion)\b/i.test(query) &&
+        /\b(create|prepare|set\s*up)\b/i.test(query)))
   ) {
     const summary = query.match(/["“]([^"”]+)["”]/)?.[1] || query.slice(0, 160);
     const channelName = `incident-${Date.now().toString(36).slice(-5)}`;
@@ -807,13 +815,7 @@ function proposeToolCalls(query: string): ToolCall[] {
     const mk = (tool: ToolName, action: string, input: Record<string, unknown>): ToolCall => {
       const requiresApproval =
         isHighConsequence(tool, action) && !policyAllowsAutoRun(DEFAULT_APPROVAL_POLICY, tool, action);
-      return {
-        tool,
-        action,
-        input,
-        riskLevel: requiresApproval ? 'high' : 'low',
-        requiresApproval,
-      };
+      return { tool, action, input, riskLevel: requiresApproval ? 'high' : 'low', requiresApproval };
     };
     return [
       mk('slack', 'createChannel', { name: channelName, isPrivate: false }),
@@ -840,20 +842,24 @@ function proposeToolCalls(query: string): ToolCall[] {
   }
 
   const calls: ToolCall[] = [];
-  const slackOnly = isExplicitSlackCommand(query);
-  const notionOnly = isExplicitNotionCommand(query) && !slackOnly;
+  const slackOnly =
+    route?.lockedTool === 'slack' ||
+    route?.family === 'slack_write' ||
+    route?.family === 'slack_read' ||
+    isExplicitSlackCommand(query);
+  const notionOnly =
+    route?.lockedTool === 'notion' || route?.family === 'notion' || (isExplicitNotionCommand(query) && !slackOnly);
+  const jiraOnly = route?.lockedTool === 'jira' || route?.family === 'jira';
 
   for (const rule of TOOL_RULES) {
-    // Never propose not-implemented connectors (Gmail / Salesforce)
     if (rule.tool === 'gmail' || rule.tool === 'salesforce') continue;
+    if (jiraOnly && rule.tool !== 'jira') continue;
     if (slackOnly && rule.tool !== 'slack') continue;
     if (notionOnly && rule.tool !== 'notion') continue;
-    // Never let a Notion URL inside a Slack command select Notion
     if (rule.tool === 'notion' && /https?:\/\/[^\s]*notion/i.test(query) && /\bslack\b/.test(lower)) continue;
 
     const hitKeyword = rule.keywords.some((k) => {
       if (rule.tool === 'notion' && k === 'notion') {
-        // Ignore "notion" that only appears inside URLs
         const stripped = query.replace(/https?:\/\/[^\s]+/gi, ' ').toLowerCase();
         return stripped.includes(k);
       }
@@ -864,10 +870,12 @@ function proposeToolCalls(query: string): ToolCall[] {
 
     const input = rule.buildInput(query);
     if ((input as any)._skip) continue;
-    const action = typeof rule.action === 'function' ? rule.action(query) : (input.action as string | undefined) ?? rule.action;
+    const action =
+      typeof rule.action === 'function' ? rule.action(query) : (input.action as string | undefined) ?? rule.action;
+    if (route?.lockedAction && action !== route.lockedAction) continue;
+
     const requiresApproval =
-      isHighConsequence(rule.tool, action) &&
-      !policyAllowsAutoRun(DEFAULT_APPROVAL_POLICY, rule.tool, action);
+      isHighConsequence(rule.tool, action) && !policyAllowsAutoRun(DEFAULT_APPROVAL_POLICY, rule.tool, action);
     const sanitizedInput = { ...input };
     delete (sanitizedInput as any).action;
 
@@ -879,7 +887,6 @@ function proposeToolCalls(query: string): ToolCall[] {
       requiresApproval,
     });
 
-    // Prefer first high-confidence Jira hit alone (avoid stacking Slack follow-ups / digests)
     if (
       rule.tool === 'jira' &&
       (action === 'createIssue' ||
@@ -892,6 +899,8 @@ function proposeToolCalls(query: string): ToolCall[] {
     ) {
       break;
     }
+    if (slackOnly && rule.tool === 'slack') break;
+    if (notionOnly && rule.tool === 'notion') break;
   }
   return calls;
 }
@@ -917,7 +926,8 @@ export async function buildPlan(
   query: string,
   intent: ClassifiedIntent,
   context: RetrievedContext,
-  llm: LLMClient
+  llm: LLMClient,
+  route?: AuthoritativeRoute
 ): Promise<AgentPlan> {
   const lower = query.toLowerCase();
   if (
@@ -935,18 +945,30 @@ export async function buildPlan(
     };
   }
 
+  if (route?.ambiguous || route?.mode === 'clarify') {
+    const responseDraft =
+      route.clarifyMessage ||
+      `I’m not executing anything yet — please clarify the system and action you want.`;
+    return {
+      intent,
+      reasoning: route.rationale || 'Ambiguous — clarify',
+      toolCalls: [],
+      responseDraft,
+    };
+  }
+
   const contextSummary = summarizeContext(context);
 
   const responseDraft = await llm.complete([
     {
       role: 'system',
       content:
-        'You are the reasoning engine of an enterprise AI operating system. Answer using only the provided context, and be explicit when a proposed action needs human approval. Never claim a tool succeeded unless a live connector result is present. If Gmail or Salesforce is requested, say Not implemented.',
+        'You are the reasoning engine of an enterprise AI operating system. Answer using only the provided context, and be explicit when a proposed action needs human approval. Never claim a tool succeeded unless a live connector result is present. If Gmail or Salesforce is requested, say Not implemented. Never invent Slack war rooms for Jira ticket requests.',
     },
     { role: 'user', content: `Question: ${query}\n\n${contextSummary}` },
   ]);
 
-  const toolCalls = intent.intent === 'action' ? proposeToolCalls(query) : [];
+  const toolCalls = intent.intent === 'action' || route?.lockedTool ? proposeToolCalls(query, route) : [];
 
   return {
     intent,
