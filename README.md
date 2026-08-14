@@ -1,4 +1,4 @@
-# Enterprise AI OS — Code Scaffold
+# Enterprise AI OS
 
 A runnable TypeScript scaffold for the architecture in `Architecture Codex: Enterprise AI Operating System`:
 an active intelligence layer across Slack, Jira, Gmail, Salesforce and Notion, combining a hybrid vector +
