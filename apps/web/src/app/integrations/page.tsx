@@ -13,7 +13,7 @@ export default function MarketingIntegrationsPage() {
   return (
     <MarketingShell
       title="Integrations"
-      subtitle="Hover a tool to expand it. Slack and Notion run live today — the rest are ready for your workspace."
+      subtitle="Hover a tool to expand it. Slack, Notion, and Jira run live today — the rest are ready for your workspace."
     >
       <IntegrationAccordion />
       <div className="mt-10 flex flex-wrap gap-3">

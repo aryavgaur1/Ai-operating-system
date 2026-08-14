@@ -2,9 +2,9 @@
 
 import { FormEvent, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { api, getAccessToken } from '@/lib/api';
+import { api } from '@/lib/api';
 
-const STEPS = ['Workspace', 'Profile', 'Notion', 'Slack', 'Finish'] as const;
+const STEPS = ['Workspace', 'Profile', 'Notion', 'Slack', 'Jira', 'Finish'] as const;
 
 export default function OnboardingPage() {
   const router = useRouter();
@@ -14,8 +14,10 @@ export default function OnboardingPage() {
   const [avatarUrl, setAvatarUrl] = useState('');
   const [slackUrl, setSlackUrl] = useState<string | null>(null);
   const [notionUrl, setNotionUrl] = useState<string | null>(null);
+  const [jiraUrl, setJiraUrl] = useState<string | null>(null);
   const [slackConnected, setSlackConnected] = useState(false);
   const [notionConnected, setNotionConnected] = useState(false);
+  const [jiraConnected, setJiraConnected] = useState(false);
   const [notionToken, setNotionToken] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -38,10 +40,13 @@ export default function OnboardingPage() {
       .then((res) => {
         const slack = res.tools.find((t) => t.tool === 'slack');
         const notion = res.tools.find((t) => t.tool === 'notion');
+        const jira = res.tools.find((t) => t.tool === 'jira');
         setSlackConnected(slack?.status === 'active');
         setNotionConnected(notion?.status === 'active');
+        setJiraConnected(jira?.status === 'active');
         setSlackUrl(slack?.connectUrl || null);
         setNotionUrl(notion?.connectUrl || null);
+        setJiraUrl(jira?.connectUrl || null);
       })
       .catch(() => undefined);
   }, [router]);
@@ -71,7 +76,8 @@ export default function OnboardingPage() {
         <div className="text-[11px] uppercase tracking-[0.2em] text-accent2">Setup</div>
         <h1 className="font-display mt-3 text-3xl font-semibold text-white">Welcome to your workspace</h1>
         <p className="mt-2 text-sm text-neutral-400">
-          Every user gets a private workspace. Connect <em>your</em> Slack and Notion — never shared with other accounts.
+          Every user gets a private workspace. Connect <em>your</em> Notion, Slack, and Jira — never shared with other
+          accounts.
         </p>
 
         <div className="mt-6 flex flex-wrap gap-2">
@@ -200,8 +206,6 @@ export default function OnboardingPage() {
                   type="button"
                   className="mt-4 rounded-full bg-white/10 px-4 py-2 text-sm text-white"
                   onClick={() => {
-                    const token = getAccessToken();
-                    const url = slackUrl || (token ? undefined : null);
                     if (slackUrl) window.location.href = slackUrl;
                     else setError('Slack OAuth is not configured on the server yet');
                   }}
@@ -213,12 +217,36 @@ export default function OnboardingPage() {
           )}
 
           {step === 4 && (
+            <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+              <div className="text-sm font-medium text-white">Connect Jira</div>
+              <p className="mt-1 text-xs text-neutral-400">
+                Optional — connect your Atlassian Jira Cloud site so Chat can create and update tickets.
+              </p>
+              {jiraConnected ? (
+                <div className="mt-3 text-sm text-emerald-300">Jira connected</div>
+              ) : (
+                <button
+                  type="button"
+                  className="mt-4 rounded-full bg-white/10 px-4 py-2 text-sm text-white"
+                  onClick={() => {
+                    if (jiraUrl) window.location.href = jiraUrl;
+                    else setError('Jira OAuth is not configured on the server yet');
+                  }}
+                >
+                  Connect Jira
+                </button>
+              )}
+            </div>
+          )}
+
+          {step === 5 && (
             <div className="space-y-2 text-sm text-neutral-300">
               <p>You&apos;re ready. Your chats, approvals, and integrations stay private to this account.</p>
               <ul className="list-disc space-y-1 pl-5 text-neutral-400">
                 <li>Workspace: {workspaceName || 'Personal'}</li>
                 <li>Notion: {notionConnected ? 'Connected' : 'Skipped for now'}</li>
                 <li>Slack: {slackConnected ? 'Connected' : 'Skipped for now'}</li>
+                <li>Jira: {jiraConnected ? 'Connected' : 'Skipped for now'}</li>
               </ul>
             </div>
           )}
@@ -230,9 +258,15 @@ export default function OnboardingPage() {
               </button>
             )}
             <button type="submit" disabled={loading} className="flex-1 rounded-full bg-accent px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60">
-              {loading ? 'Saving…' : step === STEPS.length - 1 ? 'Finish setup' : step === 2 || step === 3 ? 'Continue' : 'Next'}
+              {loading
+                ? 'Saving…'
+                : step === STEPS.length - 1
+                  ? 'Finish setup'
+                  : step === 2 || step === 3 || step === 4
+                    ? 'Continue'
+                    : 'Next'}
             </button>
-            {(step === 2 || step === 3) && (
+            {(step === 2 || step === 3 || step === 4) && (
               <button type="button" onClick={() => setStep((s) => s + 1)} className="rounded-full border border-white/10 px-4 py-2.5 text-sm text-neutral-400">
                 Skip
               </button>

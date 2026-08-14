@@ -152,6 +152,29 @@ export default function DashboardPage() {
         </Reveal>
       )}
 
+      {(pendingCount > 0 || pending.length > 0) && (
+        <Reveal>
+          <Link
+            href="/app/approvals"
+            className="flex flex-wrap items-center justify-between gap-3 rounded-[24px] border border-accent/30 bg-accent/10 px-5 py-4 transition hover:border-accent/50"
+          >
+            <div className="flex items-start gap-3">
+              <ShieldCheck className="mt-0.5 text-accent" size={18} />
+              <div>
+                <div className="text-sm font-semibold text-white">
+                  {pendingCount || pending.length} action{(pendingCount || pending.length) === 1 ? '' : 's'} waiting for
+                  Approve &amp; run
+                </div>
+                <p className="mt-1 text-xs text-neutral-400">
+                  Human gate is your product edge — review risk, then execute live in Jira / Slack / Notion.
+                </p>
+              </div>
+            </div>
+            <span className="rounded-full bg-accent px-4 py-2 text-xs font-semibold text-[#04101f]">Open Approvals</span>
+          </Link>
+        </Reveal>
+      )}
+
       <StaggerGroup className="grid auto-rows-[minmax(0,auto)] grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-4">
         {/* Hero workspace card */}
         <GlassCard variant="glow" className="col-span-1 p-7 sm:col-span-2 xl:col-span-3 xl:row-span-2">
@@ -161,25 +184,25 @@ export default function DashboardPage() {
                 <Sparkles size={12} className="text-accent2" /> System overview
               </span>
               <h2 className="font-display mt-4 text-2xl font-semibold tracking-tight text-white sm:text-3xl">
-                A workplace intelligence brain, always watching.
+                Propose → Approve → Act
               </h2>
               <p className="mt-3 text-sm leading-7 text-neutral-400">
-                Nexora routes requests, retrieves graph-backed evidence, executes tools, and pauses for approval
-                before high-impact actions — across Slack, Jira, Gmail, Salesforce, and Notion.
+                Chat proposes work across your tools. Approvals is the control room — nothing risky ships until a human
+                gates it.
               </p>
               <div className="mt-6 flex flex-wrap gap-3">
                 <Link
-                  href="/app/chat"
+                  href="/app/approvals"
                   className="group inline-flex items-center gap-2 rounded-full bg-accent px-5 py-2.5 text-sm font-semibold text-[#04101f] transition hover:bg-[#7db6ff]"
                 >
-                  Open chat
+                  Review approvals
                   <ArrowUpRight size={14} className="transition group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
                 </Link>
                 <Link
-                  href="/app/approvals"
+                  href="/app/chat"
                   className="inline-flex items-center gap-2 rounded-full border border-white/12 bg-white/5 px-5 py-2.5 text-sm text-neutral-200 transition hover:border-accent/40 hover:text-white"
                 >
-                  Review approvals
+                  Open chat
                 </Link>
               </div>
             </div>

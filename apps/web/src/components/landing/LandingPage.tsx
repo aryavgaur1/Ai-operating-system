@@ -248,7 +248,7 @@ export function LandingPage() {
         <SectionHeading
           eyebrow="Integrations"
           title="Connect the tools you already use."
-          body="Hover a tool to expand it. Slack and Notion run live today."
+          body="Hover a tool to expand it. Slack, Notion, and Jira run live today."
         />
         <div className="mt-12">
           <IntegrationAccordion />

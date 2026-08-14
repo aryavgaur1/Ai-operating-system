@@ -290,8 +290,8 @@ export default function IntegrationsPage() {
           </span>
           <h1 className="font-display mt-4 text-3xl font-semibold text-white sm:text-4xl">Integrations</h1>
           <p className="mt-3 max-w-2xl text-sm leading-7 text-neutral-400">
-            Connect Slack and Notion with OAuth. After Notion Allow, share at least one page with the integration
-            (page ··· → Connections) so Chat can create docs.
+            Connect Slack, Notion, and Jira with OAuth. After Notion Allow, share at least one page with the
+            integration (page ··· → Connections) so Chat can create docs.
           </p>
         </GlassCard>
       </Reveal>

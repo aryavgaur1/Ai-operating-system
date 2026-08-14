@@ -11,8 +11,8 @@ import { api } from '@/lib/api';
 
 const ITEMS = [
   { href: APP_ROUTES.dashboard, label: 'Dashboard', icon: LayoutGrid },
-  { href: APP_ROUTES.chat, label: 'Chat', icon: MessageSquare },
   { href: APP_ROUTES.approvals, label: 'Approvals', icon: ShieldCheck, badgeKey: 'approvals' as const },
+  { href: APP_ROUTES.chat, label: 'Chat', icon: MessageSquare },
   { href: APP_ROUTES.integrations, label: 'Integrations', icon: Plug },
 ];
 

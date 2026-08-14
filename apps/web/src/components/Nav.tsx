@@ -23,8 +23,8 @@ import { isPlatformAdminEmail } from '@/lib/platformAdmin';
 
 const LINKS = [
   { href: APP_ROUTES.dashboard, label: 'Dashboard', icon: LayoutGrid },
-  { href: APP_ROUTES.chat, label: 'Chat', icon: MessageSquare },
   { href: APP_ROUTES.approvals, label: 'Approvals', icon: ShieldCheck },
+  { href: APP_ROUTES.chat, label: 'Chat', icon: MessageSquare },
   { href: APP_ROUTES.integrations, label: 'Integrations', icon: Plug },
 ];
 
