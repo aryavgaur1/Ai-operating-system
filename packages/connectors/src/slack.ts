@@ -164,8 +164,7 @@ class SlackConnector implements ToolConnector {
       }
     }
 
-    await simulateLatency();
-    return { items: MOCK_MESSAGES, nextCursor: undefined };
+    return { items: [], nextCursor: undefined };
   }
 
   async handleWebhook(payload: unknown): Promise<NormalizedDoc[]> {
@@ -604,15 +603,12 @@ class SlackConnector implements ToolConnector {
       }
     }
 
-    await simulateLatency();
-    console.warn(`[MOCK slack.${action}] blocked from reporting fake success — SLACK_MODE is not live`);
     return {
       tool: 'slack',
       action,
       ok: false,
-      error:
-        'Slack is in MOCK mode. Set SLACK_MODE=live and SLACK_BOT_TOKEN in .env — refusing to fake a successful create/post.',
-      mocked: true,
+      error: 'Not connected — Slack is not connected for this user. Connect Slack under Integrations, then retry.',
+      mocked: false,
     };
   }
 }

@@ -47,8 +47,8 @@ const PRICING = [
   {
     name: 'Starter',
     price: '$0',
-    blurb: 'Explore the OS with core chat and demo connectors.',
-    items: ['1 workspace', 'Chat + approvals', 'Slack & Notion demo path'],
+    blurb: 'Explore the OS with core chat and live connectors you connect yourself.',
+    items: ['Connect Slack, Jira & Notion', 'Chat + approvals', 'Live actions only — no fake success'],
   },
   {
     name: 'Pro',

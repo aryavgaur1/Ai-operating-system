@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { query, listConnections } from '@enterprise-ai-os/stores';
+import { query, getConnectionDetails } from '@enterprise-ai-os/stores';
 import { getApprovalStore } from '@enterprise-ai-os/agent-core';
 import { ok, asyncHandler } from '../lib/errors';
 
@@ -11,7 +11,7 @@ dashboardRouter.get(
     const orgId = req.user!.organizationId;
     const userId = req.user!.id;
 
-    const [pending, decided, conversations, connections, activity, org] = await Promise.all([
+    const [pending, decided, conversations, connectionDetails, activity, org] = await Promise.all([
       getApprovalStore().list(orgId, 'pending', userId),
       getApprovalStore().list(orgId, undefined, userId),
       query(
@@ -20,7 +20,7 @@ dashboardRouter.get(
          order by updated_at desc limit 5`,
         [orgId, userId]
       ),
-      listConnections(orgId, userId),
+      getConnectionDetails(orgId, userId),
       query(
         `select id, event_type, tool, detail, created_at from audit_logs
          where organization_id = $1
@@ -50,25 +50,20 @@ dashboardRouter.get(
         };
       });
 
-    const demoMode = (process.env.SAAS_MODE ?? 'true') !== 'true';
-    const slackLive = Boolean(process.env.SLACK_BOT_TOKEN?.trim());
-    const notionLive = Boolean(process.env.NOTION_API_KEY?.trim());
-    // Old demo UX: always show all 5 connectors (Slack + Notion live from .env; others mock)
-    const connected = demoMode
-      ? (['slack', 'jira', 'gmail', 'salesforce', 'notion'] as string[])
-      : connections.filter((c) => c.status === 'active').map((c) => c.tool);
+    const connected = connectionDetails
+      .filter((c) => {
+        if (c.status !== 'active' || !c.hasAccessToken) return false;
+        if (c.tool === 'gmail' || c.tool === 'salesforce') return false;
+        if ((c.metadata as { demo?: boolean } | undefined)?.demo) return false;
+        return true;
+      })
+      .map((c) => c.tool);
 
-    // Guarantee classic shell numbers when tokens exist even if OAuth rows are empty
-    const connectedCount = demoMode
-      ? 5
-      : Math.max(
-          connected.length,
-          [slackLive && 'slack', notionLive && 'notion'].filter(Boolean).length
-        );
-
-    const liveCount = demoMode
-      ? [slackLive, notionLive].filter(Boolean).length || 2
-      : [slackLive, notionLive].filter(Boolean).length || connected.length;
+    const slackLive = connected.includes('slack');
+    const notionLive = connected.includes('notion');
+    const jiraLive = connected.includes('jira');
+    const connectedCount = connected.length;
+    const liveCount = [slackLive, notionLive, jiraLive].filter(Boolean).length;
 
     ok(res, {
       workspaceName: org.rows[0]?.name ?? 'Workspace',
@@ -81,7 +76,7 @@ dashboardRouter.get(
       pendingApprovals: pending.slice(0, 5),
       actionTimeline,
       recentConversations: conversations.rows,
-      integrations: connected.length ? connected : demoMode ? ['slack', 'jira', 'gmail', 'salesforce', 'notion'] : connected,
+      integrations: connected,
       activity: activity.rows,
       health: {
         api: true,
@@ -90,8 +85,9 @@ dashboardRouter.get(
         approvals: true,
       },
       liveTools: {
-        slack: slackLive || demoMode,
-        notion: notionLive || demoMode,
+        slack: slackLive,
+        notion: notionLive,
+        jira: jiraLive,
       },
       os: {
         pipeline: 'intent→plan→preflight→execute→verify→heal→memory→log',

@@ -307,16 +307,7 @@ export async function listAllConnectionDetails(limit = 200): Promise<
   });
 }
 
-// Seeds a demo "active" connection for every tool except Notion
-// (which real users connect for real via /oauth/notion/start), so a
-// brand-new organization's integrations dashboard isn't empty.
-export async function seedDemoConnections(organizationId: string): Promise<void> {
-  const tools: ToolName[] = ['slack', 'jira', 'gmail', 'salesforce'];
-  for (const tool of tools) {
-    await storeConnection(organizationId, tool, `demo-access-token-${tool}`, {
-      refreshToken: `demo-refresh-token-${tool}`,
-      expiresAt: new Date(Date.now() + 1000 * 60 * 60).toISOString(),
-      metadata: { demo: true },
-    });
-  }
+// Demo connection seeding disabled — never invent "active" OAuth rows.
+export async function seedDemoConnections(_organizationId: string): Promise<void> {
+  console.warn('[oauthStore] seedDemoConnections skipped — demo tokens are disabled');
 }

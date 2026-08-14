@@ -48,10 +48,14 @@ function formatReply(executedCalls: AgentTurnResult['executedCalls'], plan: Agen
 
   const lines = executedCalls.map((call, idx) => {
     if (call.mocked) {
-      return `I diagnosed that ${call.tool} is not live yet. ${call.error ?? 'Connect it in Integrations, then ask again.'}`;
+      return `Not connected / not live: ${call.tool}.${call.action}. ${call.error ?? 'Connect a live integration under Integrations, then ask again.'}`;
     }
     if (!call.ok) {
-      return `I tried ${call.tool}.${call.action} and self-healed where possible — ${call.error ?? 'still blocked'}.`;
+      const err = call.error ?? 'still blocked';
+      if (/^Not (connected|implemented)/i.test(err)) {
+        return err;
+      }
+      return `I tried ${call.tool}.${call.action} and self-healed where possible — ${err}.`;
     }
 
     const output = call.output as Record<string, unknown> | undefined;

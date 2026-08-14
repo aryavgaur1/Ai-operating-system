@@ -6,7 +6,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
 import rateLimit from 'express-rate-limit';
-import { authenticate, getDemoOrgId } from './middleware/auth';
+import { authenticate } from './middleware/auth';
 import { chatRouter } from './routes/chat';
 import { approvalsRouter } from './routes/approvals';
 import { integrationsRouter } from './routes/integrations';
@@ -191,19 +191,15 @@ const PORT = Number(process.env.PORT ?? 4000);
 
 async function start() {
   if (!SAAS_MODE) {
-    const { seedDemoConnections } = await import('./auth/oauth');
-    const { bootstrapDemoData, startBatchPolling } = await import('./ingestion/pipeline');
-    const orgId = getDemoOrgId();
-    seedDemoConnections(orgId);
-    await bootstrapDemoData(orgId);
-    startBatchPolling(orgId);
+    console.warn('[api] SAAS_MODE=false — demo connection seeding and mock ingestion are disabled. Connect real tools via OAuth.');
   }
 
   app.listen(PORT, () => {
     console.log(`🚀 Nexora OS API listening on http://localhost:${PORT}`);
     console.log(`   SAAS_MODE=${SAAS_MODE}`);
-    console.log(`   Slack mode: ${isLiveMode('slack') ? 'LIVE' : 'mock'}`);
-    console.log(`   Notion mode: ${isLiveMode('notion') ? 'LIVE' : 'mock'}`);
+    console.log(`   Slack mode: ${isLiveMode('slack') ? 'LIVE' : 'not connected'}`);
+    console.log(`   Notion mode: ${isLiveMode('notion') ? 'LIVE' : 'not connected'}`);
+    console.log(`   Jira mode: ${isLiveMode('jira') ? 'LIVE' : 'not connected'}`);
   });
 }
 

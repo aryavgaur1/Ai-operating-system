@@ -740,6 +740,14 @@ function proposeToolCalls(query: string): ToolCall[] {
     return [];
   }
 
+  // Never propose tools that are not implemented (no fake queues)
+  if (/\b(gmail|salesforce|crm)\b/.test(lower) && !/\b(jira|slack|notion)\b/.test(lower)) {
+    // Let buildPlan responseDraft explain — zero tool calls
+    if (/\b(email|e-mail|mail|opportunity|salesforce)\b/.test(lower)) {
+      // fall through to empty if only gmail/sf keywords match below — we skip those rules
+    }
+  }
+
   // Explicit Jira delete → deleteIssue only (never createIssue)
   if (isExplicitJiraDelete(query)) {
     const key = query.match(/\b([A-Z][A-Z0-9]+-\d+)\b/)?.[1] || '';
@@ -836,6 +844,8 @@ function proposeToolCalls(query: string): ToolCall[] {
   const notionOnly = isExplicitNotionCommand(query) && !slackOnly;
 
   for (const rule of TOOL_RULES) {
+    // Never propose not-implemented connectors (Gmail / Salesforce)
+    if (rule.tool === 'gmail' || rule.tool === 'salesforce') continue;
     if (slackOnly && rule.tool !== 'slack') continue;
     if (notionOnly && rule.tool !== 'notion') continue;
     // Never let a Notion URL inside a Slack command select Notion
@@ -909,13 +919,29 @@ export async function buildPlan(
   context: RetrievedContext,
   llm: LLMClient
 ): Promise<AgentPlan> {
+  const lower = query.toLowerCase();
+  if (
+    (/\b(gmail|salesforce)\b/.test(lower) ||
+      (/\b(send|draft|compose)\b/.test(lower) && /\b(email|e-mail)\b/.test(lower) && !/\b(slack|jira|notion)\b/.test(lower)) ||
+      (/\b(opportunity|crm)\b/.test(lower) && /\b(salesforce|create|update)\b/.test(lower) && !/\b(jira|slack|notion)\b/.test(lower)))
+  ) {
+    const which = /\bsalesforce|opportunity|crm\b/.test(lower) ? 'Salesforce' : 'Gmail';
+    const responseDraft = `Not implemented — **${which}** is not available yet. Live actions today: **Slack**, **Jira**, and **Notion**. Connect those under Integrations.`;
+    return {
+      intent,
+      reasoning: `${which} requested but not implemented — zero tool calls.`,
+      toolCalls: [],
+      responseDraft,
+    };
+  }
+
   const contextSummary = summarizeContext(context);
 
   const responseDraft = await llm.complete([
     {
       role: 'system',
       content:
-        'You are the reasoning engine of an enterprise AI operating system. Answer using only the provided context, and be explicit when a proposed action needs human approval.',
+        'You are the reasoning engine of an enterprise AI operating system. Answer using only the provided context, and be explicit when a proposed action needs human approval. Never claim a tool succeeded unless a live connector result is present. If Gmail or Salesforce is requested, say Not implemented.',
     },
     { role: 'user', content: `Question: ${query}\n\n${contextSummary}` },
   ]);

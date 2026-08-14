@@ -296,8 +296,7 @@ class NotionConnector implements ToolConnector {
       return { items, nextCursor: response.has_more ? response.next_cursor ?? undefined : undefined };
     }
 
-    await simulateLatency();
-    return { items: MOCK_PAGES, nextCursor: undefined };
+    return { items: [], nextCursor: undefined };
   }
 
   async handleWebhook(_payload: unknown): Promise<NormalizedDoc[]> {
@@ -517,15 +516,12 @@ class NotionConnector implements ToolConnector {
       }
     }
 
-    await simulateLatency();
-    console.warn(`[MOCK notion.${action}] blocked from reporting fake success — NOTION_MODE is not live`);
     return {
       tool: 'notion',
       action,
       ok: false,
-      error:
-        'Notion is in MOCK mode. Set NOTION_MODE=live and NOTION_API_KEY in .env — refusing to fake a successful create.',
-      mocked: true,
+      error: 'Not connected — Notion is not connected for this user. Connect Notion under Integrations, then retry.',
+      mocked: false,
     };
   }
 }

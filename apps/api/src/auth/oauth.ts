@@ -92,18 +92,8 @@ export function listConnections(organizationId: string): { tool: ToolName; statu
     .map((c) => ({ tool: c.tool, status: c.status, userId: c.userId }));
 }
 
-// Seed a demo "active" connection for every tool so the
-// integrations dashboard has something to show out of the box.
-export function seedDemoConnections(organizationId: string): void {
-  const tools: ToolName[] = ['slack', 'jira', 'gmail', 'salesforce', 'notion'];
-  for (const tool of tools) {
-    const liveSlackToken =
-      tool === 'slack' && process.env.SLACK_MODE === 'live' && process.env.SLACK_BOT_TOKEN
-        ? process.env.SLACK_BOT_TOKEN.trim()
-        : undefined;
-    storeConnection(organizationId, tool, liveSlackToken ?? `demo-access-token-${tool}`, {
-      refreshToken: `demo-refresh-token-${tool}`,
-      expiresAt: new Date(Date.now() + 1000 * 60 * 60).toISOString(),
-    });
-  }
+// Demo connection seeding disabled — never invent "active" OAuth rows.
+// Real connections come only from OAuth / token paste with live API validation.
+export function seedDemoConnections(_organizationId: string): void {
+  console.warn('[oauth] seedDemoConnections skipped — demo tokens are disabled');
 }

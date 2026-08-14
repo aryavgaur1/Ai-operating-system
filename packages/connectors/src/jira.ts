@@ -202,8 +202,8 @@ function mockOff(action: string): ToolCallResult {
     tool: 'jira',
     action,
     ok: false,
-    error: 'Jira is in MOCK mode. Connect Jira under Integrations and set JIRA_MODE=live.',
-    mocked: true,
+    error: 'Not connected — Jira is not connected for this user. Connect Jira under Integrations, then retry.',
+    mocked: false,
   };
 }
 
@@ -212,8 +212,7 @@ class JiraConnector implements ToolConnector {
 
   async fetchRecent(_sinceCursor?: string): Promise<FetchPage> {
     if (!isLiveMode('jira')) {
-      await simulateLatency();
-      return { items: MOCK_ISSUES };
+      return { items: [] };
     }
     const { token, cloudId, siteUrl } = resolveJiraAuth();
     const legacy = await jiraFetch(
@@ -292,7 +291,6 @@ class JiraConnector implements ToolConnector {
 
   async execute(action: string, input: Record<string, unknown>): Promise<ToolCallResult> {
     if (!isLiveMode('jira')) {
-      await simulateLatency();
       return mockOff(action);
     }
 

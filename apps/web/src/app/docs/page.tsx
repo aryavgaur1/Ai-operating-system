@@ -15,7 +15,7 @@ export default function DocsPage() {
         {[
           ['Getting started', 'Create an account, connect Slack or Notion, run your first command.'],
           ['API overview', 'Authenticated REST endpoints for chat, approvals, integrations, and admin.'],
-          ['Connectors', 'Live Slack and Notion execution; mock connectors for demo fidelity.'],
+          ['Connectors', 'Live Slack, Jira, and Notion execution. Gmail and Salesforce are not implemented.'],
           ['Security', 'JWT sessions, encrypted tokens, RBAC, and approval gates.'],
         ].map(([t, b]) => (
           <div key={t} className="rounded-[22px] border border-white/8 bg-white/[0.03] p-5">

@@ -189,6 +189,7 @@ export interface IntegrationStatus {
   tool: string;
   status: string;
   mode: string;
+  implementation?: string;
   availableActions: string[];
   connectUrl?: string | null;
   canConnect?: boolean;

@@ -95,38 +95,28 @@ export default function DashboardPage() {
         const tools: string[] = Array.isArray(dash.integrations)
           ? dash.integrations.map((t: string | { tool: string }) => (typeof t === 'string' ? t : t.tool))
           : [];
-        const demoFallback = ['slack', 'jira', 'gmail', 'salesforce', 'notion'];
-        const list = tools.length ? tools : demoFallback;
         setIntegrations(
-          list.map((tool) => ({
+          tools.map((tool) => ({
             tool,
             status: 'active' as const,
-            mode: tool === 'slack' || tool === 'notion' || tool === 'jira' ? ('live' as const) : ('mock' as const),
+            mode: 'live' as const,
             availableActions: [],
           }))
         );
         setHealth({ ok: dash.health?.api ?? true, service: 'enterprise-ai-os-api' });
         setGreetingName(me?.user?.displayName || me?.user?.email || dash.workspaceName || 'there');
         setRecentChats(dash.recentConversations || []);
-        const connected = dash.metrics?.connectedIntegrations ?? list.length;
-        const live = dash.metrics?.liveAgents ?? list.filter((t) => t === 'slack' || t === 'notion' || t === 'jira').length;
+        const connected = dash.metrics?.connectedIntegrations ?? tools.length;
+        const live = dash.metrics?.liveAgents ?? tools.length;
         setConnectedCount(connected);
         setLiveAgents(live);
         setPendingCount(dash.metrics?.pendingApprovals ?? 0);
         setError(null);
       } catch (err: any) {
         setError(err.message);
-        // Classic demo shell: 5 sources, Slack + Notion live
-        setIntegrations(
-          ['slack', 'jira', 'gmail', 'salesforce', 'notion'].map((tool) => ({
-            tool,
-            status: 'active' as const,
-            mode: tool === 'slack' || tool === 'notion' || tool === 'jira' ? ('live' as const) : ('mock' as const),
-            availableActions: [],
-          }))
-        );
-        setConnectedCount(5);
-        setLiveAgents(3);
+        setIntegrations([]);
+        setConnectedCount(0);
+        setLiveAgents(0);
       } finally {
         setLoading(false);
       }

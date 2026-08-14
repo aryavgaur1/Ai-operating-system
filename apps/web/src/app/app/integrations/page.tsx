@@ -14,36 +14,42 @@ const CATALOG: Array<{
   label: string;
   description: string;
   actions: string[];
+  implemented: boolean;
 }> = [
   {
     tool: 'slack',
     label: 'Slack',
     description: 'Real-time messages, channels, mentions, and webhook events.',
     actions: ['send_message', 'read_channel', 'create_channel'],
+    implemented: true,
   },
   {
     tool: 'jira',
     label: 'Jira',
     description: 'Issues, epics, sprint status, blockers, ownership, and updates.',
     actions: ['create_ticket', 'update_status'],
-  },
-  {
-    tool: 'gmail',
-    label: 'Gmail',
-    description: 'Email threads, drafts, customer updates, and summaries.',
-    actions: ['send_email', 'read_thread'],
-  },
-  {
-    tool: 'salesforce',
-    label: 'Salesforce',
-    description: 'Accounts, opportunities, contacts, fields, and timeline events.',
-    actions: ['update_record', 'read_account'],
+    implemented: true,
   },
   {
     tool: 'notion',
     label: 'Notion',
     description: 'Docs, launch plans, meeting notes, policies, and knowledge base.',
     actions: ['read_page', 'create_page', 'update_page'],
+    implemented: true,
+  },
+  {
+    tool: 'gmail',
+    label: 'Gmail',
+    description: 'Not implemented — email send/read is not available yet.',
+    actions: [],
+    implemented: false,
+  },
+  {
+    tool: 'salesforce',
+    label: 'Salesforce',
+    description: 'Not implemented — CRM writes are not available yet.',
+    actions: [],
+    implemented: false,
   },
 ];
 
@@ -234,7 +240,7 @@ export default function IntegrationsPage() {
           setEnabled((prev) => ({ ...prev, [tool]: false }));
           return;
         }
-        setError(`${tool} Connect is not live yet — Slack, Notion, and Jira are available now.`);
+        setError(`${tool} is not implemented — Slack, Notion, and Jira are available now.`);
         setEnabled((prev) => ({ ...prev, [tool]: false }));
         return;
       } else {
@@ -468,10 +474,14 @@ export default function IntegrationsPage() {
         <div className="mt-6 grid grid-cols-1 gap-3 md:grid-cols-2">
           {CATALOG.map((item) => {
             const connected = meta[item.tool]?.status === 'active';
-            const active = connected || enabled[item.tool];
+            const notImplemented =
+              !item.implemented ||
+              meta[item.tool]?.status === 'not_implemented' ||
+              meta[item.tool]?.mode === 'not_implemented' ||
+              meta[item.tool]?.implementation === 'not_implemented';
             const Logo = LOGOS[item.tool];
-            const mode = meta[item.tool]?.mode ?? 'mock';
-            const canConnect = Boolean(meta[item.tool]?.canConnect);
+            const mode = meta[item.tool]?.mode ?? (notImplemented ? 'not_implemented' : 'not_connected');
+            const canConnect = Boolean(meta[item.tool]?.canConnect) && item.implemented;
             return (
               <motion.div
                 key={item.tool}
@@ -489,23 +499,29 @@ export default function IntegrationsPage() {
                     <span
                       className={cn(
                         'rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide transition-colors duration-300',
-                        connected ? 'bg-emerald-400/15 text-emerald-300' : 'bg-white/5 text-neutral-500'
+                        notImplemented
+                          ? 'bg-white/5 text-neutral-500'
+                          : connected
+                            ? 'bg-emerald-400/15 text-emerald-300'
+                            : 'bg-white/5 text-neutral-500'
                       )}
                     >
-                      {connected ? 'Online' : 'Offline'}
+                      {notImplemented ? 'Not implemented' : connected ? 'Connected' : 'Not connected'}
                     </span>
-                    <span
-                      className={cn(
-                        'text-[10px] uppercase tracking-wide',
-                        connected && mode === 'live'
-                          ? 'text-emerald-400/90'
-                          : mode === 'live'
-                            ? 'text-amber-300/80'
-                            : 'text-neutral-600'
-                      )}
-                    >
-                      {connected ? mode : mode === 'live' ? 'ready' : mode}
-                    </span>
+                    {!notImplemented && (
+                      <span
+                        className={cn(
+                          'text-[10px] uppercase tracking-wide',
+                          connected && mode === 'live'
+                            ? 'text-emerald-400/90'
+                            : mode === 'live'
+                              ? 'text-amber-300/80'
+                              : 'text-neutral-600'
+                        )}
+                      >
+                        {connected ? mode : mode === 'live' ? 'ready' : mode}
+                      </span>
+                    )}
                   </div>
                   <p className="mt-0.5 line-clamp-2 text-sm text-neutral-400">{item.description}</p>
                   {meta[item.tool]?.workspaceName && connected && (
@@ -522,15 +538,21 @@ export default function IntegrationsPage() {
                   {!connected && canConnect && (
                     <p className="mt-1 text-[11px] text-amber-300/90">Not connected — toggle on or use Connect button</p>
                   )}
-                  {!connected && !canConnect && (item.tool === 'gmail' || item.tool === 'salesforce') && (
-                    <p className="mt-1 text-[11px] text-neutral-500">Coming soon</p>
+                  {notImplemented && (
+                    <p className="mt-1 text-[11px] text-neutral-500">Not implemented — will not fake success</p>
                   )}
                 </div>
-                <SmoothToggle
-                  checked={connected}
-                  busy={busy === item.tool}
-                  onChange={() => toggle(item.tool)}
-                />
+                {!notImplemented ? (
+                  <SmoothToggle
+                    checked={connected}
+                    busy={busy === item.tool}
+                    onChange={() => toggle(item.tool)}
+                  />
+                ) : (
+                  <span className="shrink-0 rounded-full border border-white/10 px-2 py-1 text-[10px] uppercase tracking-wide text-neutral-500">
+                    N/A
+                  </span>
+                )}
               </motion.div>
             );
           })}

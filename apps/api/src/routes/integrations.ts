@@ -1,5 +1,11 @@
 import { Router } from 'express';
-import { allTools, getConnector, isLiveMode } from '@enterprise-ai-os/connectors';
+import {
+  allTools,
+  getConnector,
+  isLiveMode,
+  isNotImplementedTool,
+  isProductionLiveTool,
+} from '@enterprise-ai-os/connectors';
 import { getConnectionDetails, revokeConnection, storeConnection } from '@enterprise-ai-os/stores';
 import { asyncHandler, ok, AppError } from '../lib/errors';
 
@@ -8,7 +14,6 @@ export const integrationsRouter = Router();
 integrationsRouter.get(
   '/',
   asyncHandler(async (req, res) => {
-    const demoMode = (process.env.SAAS_MODE ?? 'true') !== 'true';
     const details = await getConnectionDetails(req.user!.organizationId, req.user!.id);
     const apiBase = (
       process.env.API_PUBLIC_URL ||
@@ -24,6 +29,8 @@ integrationsRouter.get(
       const connector = getConnector(tool);
       const detail = details.find((c) => c.tool === tool && c.status === 'active');
       const meta = detail?.metadata ?? {};
+      // Reject demo seed tokens — they are not real connections
+      const isDemoToken = Boolean((meta as { demo?: boolean }).demo);
       const workspaceName =
         (typeof meta.teamName === 'string' && meta.teamName) ||
         (typeof meta.workspaceName === 'string' && meta.workspaceName) ||
@@ -34,50 +41,52 @@ integrationsRouter.get(
         undefined;
       const workspaceIcon = typeof meta.workspaceIcon === 'string' ? meta.workspaceIcon : undefined;
 
+      const notImplemented = isNotImplementedTool(tool);
       const connectUrl =
-        tool === 'slack'
+        !notImplemented && tool === 'slack'
           ? `${apiBase}/oauth/slack/start?token=${encodeURIComponent(token)}`
-          : tool === 'notion'
+          : !notImplemented && tool === 'notion'
             ? `${apiBase}/oauth/notion/start?token=${encodeURIComponent(token)}`
-            : tool === 'jira'
+            : !notImplemented && tool === 'jira'
               ? `${apiBase}/oauth/jira/start?token=${encodeURIComponent(token)}`
               : null;
 
-      // Demo/admin: all look connected; no Connect buttons (preserve admin UX)
-      // SaaS: active ONLY if this user has a DB connection — never treat .env as theirs
-      const status = demoMode ? 'active' : detail?.status === 'active' ? 'active' : 'not_connected';
+      const reallyConnected =
+        !notImplemented &&
+        !isDemoToken &&
+        detail?.status === 'active' &&
+        Boolean(detail?.hasAccessToken);
+
+      const status = notImplemented
+        ? 'not_implemented'
+        : reallyConnected
+          ? 'active'
+          : 'not_connected';
 
       return {
         tool,
         status,
-        mode: detail?.status === 'active' || isLiveMode(tool) || process.env[`${tool.toUpperCase()}_MODE`] === 'live' || process.env.CONNECTORS_MODE === 'live'
+        implementation: notImplemented ? 'not_implemented' : isProductionLiveTool(tool) ? 'live' : 'unknown',
+        mode: reallyConnected
           ? 'live'
-          : 'mock',
-        availableActions: connector.listActions(),
-        connectUrl: demoMode ? null : connectUrl,
-        canConnect: !demoMode && (tool === 'slack' || tool === 'notion' || tool === 'jira'),
-        workspaceName: demoMode
-          ? tool === 'slack'
-            ? 'Platform (admin .env)'
-            : tool === 'notion'
-              ? 'Platform (admin .env)'
-              : tool === 'jira'
-                ? 'Platform (admin .env)'
-                : undefined
-          : workspaceName,
-        workspaceId: demoMode ? undefined : workspaceId,
-        workspaceIcon: demoMode ? undefined : workspaceIcon,
-        connectedAt: demoMode ? undefined : detail?.connectedAt,
-        lastUsedAt: demoMode ? undefined : detail?.lastUsedAt,
-        lastSync: demoMode ? undefined : detail?.lastUsedAt || detail?.updatedAt,
+          : notImplemented
+            ? 'not_implemented'
+            : isLiveMode(tool)
+              ? 'live'
+              : 'not_connected',
+        availableActions: notImplemented ? [] : connector.listActions(),
+        connectUrl,
+        canConnect: !notImplemented && Boolean(connectUrl),
+        workspaceName: reallyConnected ? workspaceName : undefined,
+        workspaceId: reallyConnected ? workspaceId : undefined,
+        workspaceIcon: reallyConnected ? workspaceIcon : undefined,
+        connectedAt: reallyConnected ? detail?.connectedAt : undefined,
+        lastUsedAt: reallyConnected ? detail?.lastUsedAt : undefined,
+        lastSync: reallyConnected ? detail?.lastUsedAt || detail?.updatedAt : undefined,
         ...(tool === 'slack'
           ? {
-              botToken: demoMode
-                ? Boolean(process.env.SLACK_BOT_TOKEN?.trim())
-                : Boolean(detail?.hasAccessToken),
-              userToken: demoMode
-                ? Boolean(process.env.SLACK_USER_TOKEN?.trim())
-                : Boolean(detail?.hasUserToken),
+              botToken: reallyConnected ? Boolean(detail?.hasAccessToken) : false,
+              userToken: reallyConnected ? Boolean(detail?.hasUserToken) : false,
             }
           : {}),
       };

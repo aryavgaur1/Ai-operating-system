@@ -2,23 +2,25 @@ import type { ToolCallResult, ToolName } from '@enterprise-ai-os/shared';
 import { hasJiraTokenInContext, hasNotionTokenInContext, hasSlackTokenInContext } from './context';
 
 // ============================================================
-// ToolConnector — the common interface every third-party
-// integration implements, so the ingestion pipeline and the tool
-// execution engine never need to know which specific API they're
-// talking to.
-//
-// Every connector in this package starts as a MOCK: it
-// generates plausible fixture data and simulates async latency
-// instead of calling a real API. Each file marks exactly
-// where a real SDK call replaces the mock.
-//
-// isLiveMode(tool) checks a per-tool override first (e.g.
-// NOTION_MODE=live) so you can flip individual connectors to
-// live one at a time, without forcing every other connector
-// (Slack, Jira, Gmail, Salesforce) into live mode as well.
-// Falls back to the global CONNECTORS_MODE if no per-tool
-// override is set.
+// ToolConnector — common interface for third-party integrations.
+// Write actions must hit real APIs or return an explicit failure:
+//   "Not connected" | "Not implemented"
+// Never report fake success from fixtures / latency stubs.
 // ============================================================
+
+/** Tools with real OAuth + execute paths in production. */
+export const PRODUCTION_LIVE_TOOLS: readonly ToolName[] = ['slack', 'jira', 'notion'];
+
+/** Tools that must never be proposed or shown as connectable. */
+export const NOT_IMPLEMENTED_TOOLS: readonly ToolName[] = ['gmail', 'salesforce'];
+
+export function isProductionLiveTool(tool: ToolName): boolean {
+  return (PRODUCTION_LIVE_TOOLS as readonly string[]).includes(tool);
+}
+
+export function isNotImplementedTool(tool: ToolName): boolean {
+  return (NOT_IMPLEMENTED_TOOLS as readonly string[]).includes(tool);
+}
 
 export interface NormalizedDoc {
   externalId: string;
@@ -46,18 +48,40 @@ export interface ToolConnector {
   execute(action: string, input: Record<string, unknown>): Promise<ToolCallResult>;
 }
 
-/** Shared helper: simulate realistic network latency for mocked calls. */
-export function simulateLatency(minMs = 150, maxMs = 500): Promise<void> {
+/** Rare non-success delay helper — do not use to fake successful API calls. */
+export function simulateLatency(minMs = 40, maxMs = 120): Promise<void> {
   const ms = minMs + Math.random() * (maxMs - minMs);
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export function notConnectedResult(tool: ToolName, action: string): ToolCallResult {
+  return {
+    tool,
+    action,
+    ok: false,
+    error: `Not connected — ${tool} is not connected for this user. Connect it under Integrations, then retry.`,
+    mocked: false,
+  };
+}
+
+export function notImplementedResult(tool: ToolName, action: string): ToolCallResult {
+  return {
+    tool,
+    action,
+    ok: false,
+    error: `Not implemented — ${tool}.${action} is not available. Use Slack, Jira, or Notion for live actions.`,
+    mocked: false,
+  };
 }
 
 /**
  * Checks whether a connector should run live.
  * Per-request SaaS OAuth tokens always win (connected ⇒ live).
- * Otherwise per-tool *_MODE / CONNECTORS_MODE / platform tokens apply.
+ * Gmail/Salesforce are never live until implemented.
  */
 export function isLiveMode(tool?: ToolName): boolean {
+  if (tool && isNotImplementedTool(tool)) return false;
+
   if (tool === 'slack' && hasSlackTokenInContext()) return true;
   if (tool === 'notion' && hasNotionTokenInContext()) return true;
   if (tool === 'jira' && hasJiraTokenInContext()) return true;
