@@ -160,14 +160,20 @@ const TOOL_RULES: ToolRule[] = [
     tool: 'jira',
     action: 'createIssue',
     keywords: ['jira', 'ticket', 'issue', 'task', 'risk'],
-    match: (query: string) =>
-      /\bjira\b/i.test(query) &&
-      /\b(create|open|file|log|track)\b/i.test(query) &&
-      /\b(ticket|issue|task|risk|bug)\b/i.test(query),
+    match: (query: string) => {
+      const lower = query.toLowerCase();
+      if (/\b(create|open|file|log|track)\b/.test(lower) && /\b(ticket|issue|task|risk|bug)\b/.test(lower)) {
+        // Prefer Jira when named, or when no other tool destination is named
+        if (/\bjira\b/.test(lower)) return true;
+        if (!/\b(slack|notion|gmail|email|salesforce)\b/.test(lower)) return true;
+      }
+      return false;
+    },
     buildInput: (query) => {
       const titled =
         query.match(/(?:titled|called|named)\s+["']?([^"'\n.]+)["']?/i)?.[1]?.trim() ||
-        query.match(/create (?:a )?(?:jira )?(?:ticket|issue|task|risk)(?: for| about)?\s+(.+)/i)?.[1]?.trim();
+        query.match(/create (?:a )?(?:jira )?(?:ticket|issue|task|risk)(?: for| about| to)?\s+(.+)/i)?.[1]?.trim() ||
+        query.match(/\b(?:ticket|issue|task)\s+to\s+(.+)/i)?.[1]?.trim();
       const wantsRisk = /\brisk\b/i.test(query);
       const summary = (titled || query.replace(/\bjira\b/gi, '').trim() || query).slice(0, 100);
       const priority = query.match(/\bpriority\s+(Highest|High|Medium|Low|Lowest)\b/i)?.[1];
@@ -260,7 +266,9 @@ const TOOL_RULES: ToolRule[] = [
       if (/\b(production\s+)?incident\b/.test(lower) || /\boutage\b/.test(lower)) return true;
       if (/\b(war\s*room|launch\s+war)\b/.test(lower)) return true;
       if (/\b(digest|standup|stand-up)\b/.test(lower)) return true;
-      if (/\b(blocker|blocked|unanswered|complaint|follow[- ]?up)\b/.test(lower)) return true;
+      if (/\b(blocker|blocked|unanswered|complaint)\b/.test(lower)) return true;
+      if (/\b(follow[- ]?up|nudge)\b/.test(lower) && /\b(pending|approvals?|replies?|slack|everyone)\b/.test(lower))
+        return true;
       if (/\b(post|send|notify|message)\b/.test(lower) && /(#\w+|@\w+|\bgeneral\b)/.test(lower)) return true;
       if (/\b(list)\b/.test(lower) && /\b(channels?|users?|members?)\b/.test(lower) && !/\b(jira|notion|gmail)\b/.test(lower))
         return true;
@@ -268,8 +276,6 @@ const TOOL_RULES: ToolRule[] = [
       if (/\bfind where we (?:discussed|talked)\b/.test(lower)) return true;
       if (/\b(who owns|find owner|what did we decide)\b/.test(lower)) return true;
       if (/\b(set\s+topic|bookmark|show history|get history|invite)\b/.test(lower)) return true;
-      if (/\b(edit|update|delete)\b/.test(lower) && /\b(message|msg|post)\b/.test(lower)) return true;
-      if (/\b(permalink|join\s+(?:the\s+)?channel|open\s+dm|direct message)\b/.test(lower)) return true;
       return false;
     },
   },
@@ -344,41 +350,6 @@ function parseSlackActionQuery(query: string): Record<string, unknown> {
       const searchQ = [project, 'delayed', 'delay', 'because'].filter(Boolean).join(' ');
       return { action: 'semanticSearch', query: searchQ || query };
     }
-  }
-
-  // Edit / delete / permalink / join / DM
-  if (/\b(edit|update)\b/.test(lower) && /\b(message|msg|post)\b/.test(lower)) {
-    const ts = query.match(/\b(\d{10}\.\d+)\b/)?.[1];
-    return {
-      action: 'updateMessage',
-      channel,
-      ts,
-      text: quoted ?? query.replace(/^.*?to\s+/i, '').slice(0, 3000),
-    };
-  }
-
-  if (/\b(delete|remove)\b/.test(lower) && /\b(message|msg|post)\b/.test(lower)) {
-    const ts = query.match(/\b(\d{10}\.\d+)\b/)?.[1];
-    return { action: 'deleteMessage', channel, ts };
-  }
-
-  if (/\b(permalink|message link|link to (?:the )?message)\b/.test(lower)) {
-    const ts = query.match(/\b(\d{10}\.\d+)\b/)?.[1];
-    return { action: 'getPermalink', channel, ts };
-  }
-
-  if (/\b(join)\b/.test(lower) && /\b(channel|#)/.test(lower)) {
-    return { action: 'joinChannel', channel };
-  }
-
-  if (/\b(dm|direct message|message privately)\b/.test(lower) || (/\b(open)\b/.test(lower) && /\bdm\b/.test(lower))) {
-    const users = userMention ? [userMention] : [];
-    const extra = [...query.matchAll(/@([a-z0-9._-]+)/gi)].map((m) => m[1]);
-    return {
-      action: 'openDm',
-      users: users.length ? users : extra,
-      text: quoted,
-    };
   }
 
   if (/\b(bookmark|pin (?:this )?link)\b/.test(lower)) {
@@ -815,8 +786,17 @@ function proposeToolCalls(query: string): ToolCall[] {
       requiresApproval,
     });
 
-    // Prefer first high-confidence Jira/read-style hit alone (avoid stacking with Slack createIncident)
-    if (rule.tool === 'jira' && (action === 'searchIssues' || action === 'transitionIssue' || action === 'addComment' || action === 'updateIssue' || action === 'linkIssues')) {
+    // Prefer first high-confidence Jira hit alone (avoid stacking Slack follow-ups / digests)
+    if (
+      rule.tool === 'jira' &&
+      (action === 'createIssue' ||
+        action === 'searchIssues' ||
+        action === 'transitionIssue' ||
+        action === 'addComment' ||
+        action === 'updateIssue' ||
+        action === 'linkIssues' ||
+        action === 'deleteIssue')
+    ) {
       break;
     }
   }

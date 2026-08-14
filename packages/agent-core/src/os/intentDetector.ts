@@ -129,12 +129,26 @@ const RULES: IntentRule[] = [
     kind: 'reminder_workflow',
     confidence: 0.9,
     rationale: 'Follow-ups / pending approvals / nudges',
-    test: (q) =>
+    test: (q) => {
       // Channel "remind #foo in 60 minutes" is a simple scheduleReminder — not this workflow
-      !( /\bremind\b/.test(q) && /#([a-z0-9_-]+)/i.test(q) ) &&
-      (/\b(follow[- ]?up|nudge)\b/.test(q) ||
-        (/\bremind\b/.test(q) && /\b(everyone|team|approv|pending)\b/.test(q)) ||
-        /\bwaiting for approvals?\b/.test(q)),
+      if (/\bremind\b/.test(q) && /#([a-z0-9_-]+)/i.test(q)) return false;
+      // "Create a Jira ticket to track the vendor contract follow-up" is Jira create,
+      // not Slack nudge follow-ups — "follow-up" alone as a noun phrase must not win.
+      if (
+        /\b(create|open|file|log|track)\b/.test(q) &&
+        /\b(jira|ticket|issue|task|bug|risk)\b/.test(q)
+      ) {
+        return false;
+      }
+      if (/\b(create|open|write)\b/.test(q) && /\b(notion|page|prd|wiki)\b/.test(q)) return false;
+      if (/\bwaiting for approvals?\b/.test(q)) return true;
+      if (/\bremind\b/.test(q) && /\b(everyone|team|approv|pending)\b/.test(q)) return true;
+      // Require Slack/pending context with follow-up/nudge (not "contract follow-up")
+      return (
+        /\b(follow[- ]?up|nudge)\b/.test(q) &&
+        /\b(pending|approvals?|replies?|unanswered|slack|everyone|owners?|waiting)\b/.test(q)
+      );
+    },
   },
   {
     kind: 'workspace_intelligence',
@@ -188,6 +202,34 @@ export function detectOsIntent(query: string): OsIntent {
       rationale: 'Slack read/intelligence question — search history for reasons, not write actions',
       legacyIntent: 'read',
       entities: projectEntity(query),
+    };
+  }
+
+  // Explicit Jira create/track beats reminder_workflow (which used to steal "…follow-up")
+  if (
+    /\bjira\b/.test(q) &&
+    /\b(create|open|file|log|track)\b/.test(q) &&
+    /\b(ticket|issue|task|bug|risk)\b/.test(q)
+  ) {
+    return {
+      kind: 'simple_action',
+      confidence: 0.97,
+      rationale: 'Explicit Jira ticket/issue create — queue for Approvals',
+      legacyIntent: 'action',
+      entities: {},
+    };
+  }
+  if (
+    /\b(create|open|file|log)\b/.test(q) &&
+    /\b(ticket|issue)\b/.test(q) &&
+    !/\b(slack|notion|gmail|email)\b/.test(q)
+  ) {
+    return {
+      kind: 'simple_action',
+      confidence: 0.94,
+      rationale: 'Ticket/issue create — treat as Jira action for Approvals',
+      legacyIntent: 'action',
+      entities: {},
     };
   }
 

@@ -188,18 +188,8 @@ export interface ApprovalRequest {
 
 export const HIGH_CONSEQUENCE_ACTIONS: Record<ToolName, string[]> = {
   gmail: ['sendEmail', 'deleteEmail'],
-  slack: [
-    'postMessageExternalChannel',
-    'deleteMessage',
-    'updateMessage',
-    'createChannel',
-    'inviteUsers',
-    'createWarRoom',
-    'createIncident',
-    'uploadFile',
-    'createCanvas',
-    'openDm',
-  ],
+  // Slack writes pause for human review (channel posts are visible to the whole channel).
+  slack: ['postMessage', 'postMessageExternalChannel', 'deleteMessage', 'createChannel'],
   // Ticket creates/changes pause for human review (Approvals risk dial + Approve & run).
   jira: [
     'createIssue',
@@ -211,7 +201,18 @@ export const HIGH_CONSEQUENCE_ACTIONS: Record<ToolName, string[]> = {
     'addAttachment',
   ],
   salesforce: ['deleteRecord', 'updateRecord', 'createOpportunity'],
-  notion: [],
+  // Notion writes pause so a human confirms parent/workspace before create.
+  notion: [
+    'createPage',
+    'createDatabase',
+    'createProject',
+    'createPRD',
+    'createWiki',
+    'createMeetingNotes',
+    'createRoadmap',
+    'deletePage',
+    'publishPage',
+  ],
 };
 
 export function isHighConsequence(tool: ToolName, action: string): boolean {
