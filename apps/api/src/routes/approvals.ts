@@ -44,13 +44,63 @@ approvalsRouter.get(
   })
 );
 
+approvalsRouter.patch(
+  '/:id/input',
+  requireVerified,
+  asyncHandler(async (req, res) => {
+    await ensureApprovalExecutionSchema();
+    const { id } = req.params;
+    const body = req.body ?? {};
+    const patch = body.input;
+    if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
+      return res.status(400).json({ error: 'input object is required.' });
+    }
+
+    const store = getApprovalStore();
+    const existing = await store.get(id);
+    if (!existing) return res.status(404).json({ error: 'Approval not found.' });
+    if (existing.organizationId !== req.user!.organizationId && req.user!.role !== 'super_admin') {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+    const isAdmin = req.user!.role === 'super_admin' || req.user!.role === 'admin';
+    if (
+      !isAdmin &&
+      existing.requestedByUserId &&
+      existing.requestedByUserId !== req.user!.id
+    ) {
+      return res.status(403).json({ error: 'Forbidden — only the requester (or an admin) can edit this approval.' });
+    }
+    if (existing.status !== 'pending') {
+      return res.status(409).json({ error: `Approval is already ${existing.status}.` });
+    }
+
+    // Merge patch into stored input — never replace with empty shell
+    const nextInput = { ...(existing.input || {}), ...(patch as Record<string, unknown>) };
+    // Normalize common aliases
+    if (typeof nextInput.project === 'string') {
+      nextInput.project = String(nextInput.project).trim().toUpperCase();
+      nextInput.projectKey = nextInput.project;
+    }
+    if (typeof nextInput.channel === 'string') {
+      nextInput.channel = String(nextInput.channel).trim();
+    }
+    if (typeof nextInput.summary === 'string') nextInput.summary = String(nextInput.summary).trim();
+    if (typeof nextInput.title === 'string') nextInput.title = String(nextInput.title).trim();
+    if (typeof nextInput.text === 'string') nextInput.text = String(nextInput.text);
+
+    const updated = await store.updateInput(id, nextInput);
+    if (!updated) return res.status(409).json({ error: 'Could not update approval input.' });
+    res.json({ approval: updated });
+  })
+);
+
 approvalsRouter.post(
   '/:id/decide',
   requireVerified,
   asyncHandler(async (req, res) => {
     await ensureApprovalExecutionSchema();
     const { id } = req.params;
-    const { decision } = req.body ?? {};
+    const { decision, input: inputPatch } = req.body ?? {};
 
     if (decision !== 'approved' && decision !== 'rejected') {
       return res.status(400).json({ error: 'decision must be "approved" or "rejected".' });
@@ -99,6 +149,19 @@ approvalsRouter.post(
         error: `Approval is already ${existing.status}.`,
         approval: existing,
       });
+    }
+
+    // Optional last-second payload edit before claim
+    if (inputPatch && typeof inputPatch === 'object' && !Array.isArray(inputPatch)) {
+      const nextInput = { ...(existing.input || {}), ...(inputPatch as Record<string, unknown>) };
+      if (typeof nextInput.project === 'string') {
+        nextInput.project = String(nextInput.project).trim().toUpperCase();
+        nextInput.projectKey = nextInput.project;
+      }
+      const patched = await store.updateInput(id, nextInput);
+      if (!patched) {
+        return res.status(409).json({ error: 'Could not update approval input before decide.' });
+      }
     }
 
     if (decision === 'rejected') {

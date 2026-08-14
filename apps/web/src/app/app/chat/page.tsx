@@ -50,8 +50,27 @@ const riskBadgeClasses: Record<string, string> = {
 
 const MAX_CLIENT_UPLOAD_BYTES = 12 * 1024 * 1024;
 const ALLOWED_CLIENT_EXT = /\.(pdf|docx|txt|md|markdown|csv|tsv|json|xlsx|xls|png|jpe?g|webp|gif|ts|tsx|js|jsx|py|sql|html|css|ya?ml)$/i;
+const ACTIVE_CONVERSATION_KEY = 'nexora:activeConversationId';
 
 type MicState = 'idle' | 'listening' | 'unsupported' | 'denied' | 'error';
+
+function readActiveConversationId(): string | undefined {
+  try {
+    const id = window.sessionStorage.getItem(ACTIVE_CONVERSATION_KEY)?.trim();
+    return id || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function writeActiveConversationId(id: string | undefined) {
+  try {
+    if (id) window.sessionStorage.setItem(ACTIVE_CONVERSATION_KEY, id);
+    else window.sessionStorage.removeItem(ACTIVE_CONVERSATION_KEY);
+  } catch {
+    // ignore
+  }
+}
 
 export default function ChatPage() {
   const [turns, setTurns] = useState<Turn[]>([]);
@@ -60,7 +79,7 @@ export default function ChatPage() {
   const [statusLine, setStatusLine] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
-  const [conversationId, setConversationId] = useState<string | undefined>();
+  const [conversationId, setConversationIdState] = useState<string | undefined>();
   const [history, setHistory] = useState<{ id: string; title: string; pinned?: boolean }[]>([]);
   const [approvingTurn, setApprovingTurn] = useState<number | null>(null);
   const [pendingAttachments, setPendingAttachments] = useState<
@@ -75,6 +94,11 @@ export default function ChatPage() {
   const lastUserMessageRef = useRef<string>('');
   const recognitionRef = useRef<any>(null);
 
+  function setConversationId(id: string | undefined) {
+    setConversationIdState(id);
+    writeActiveConversationId(id);
+  }
+
   async function refreshHistory() {
     try {
       const res = await api.listConversations();
@@ -85,20 +109,70 @@ export default function ChatPage() {
   }
 
   useEffect(() => {
-    refreshHistory();
-    try {
-      const flash = window.sessionStorage.getItem('nexora:approvalFlash');
-      if (flash) {
-        window.sessionStorage.removeItem('nexora:approvalFlash');
-        const now = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-        setTurns((t) => [
-          ...t,
-          { role: 'assistant', content: flash, timestamp: now },
-        ]);
+    let cancelled = false;
+    (async () => {
+      await refreshHistory();
+      const resumeId = readActiveConversationId();
+      let flash: string | null = null;
+      try {
+        flash = window.sessionStorage.getItem('nexora:approvalFlash');
+        if (flash) window.sessionStorage.removeItem('nexora:approvalFlash');
+      } catch {
+        // ignore
       }
-    } catch {
-      // ignore
-    }
+
+      if (resumeId) {
+        try {
+          const data = await api.getConversation(resumeId);
+          if (cancelled) return;
+          setConversationIdState(resumeId);
+          const mapped = (data.messages || []).map((m: any) => {
+            const stored = m.tool_calls;
+            const detail: AgentTurnResult | undefined =
+              stored && typeof stored === 'object' && stored.plan
+                ? {
+                    reply: m.content,
+                    plan: stored.plan,
+                    executedCalls: Array.isArray(stored.executedCalls) ? stored.executedCalls : [],
+                    pendingApprovalIds: Array.isArray(stored.pendingApprovalIds)
+                      ? stored.pendingApprovalIds
+                      : [],
+                  }
+                : undefined;
+            return {
+              role: (m.role === 'assistant' ? 'assistant' : 'user') as 'user' | 'assistant',
+              content: m.content,
+              timestamp: new Date(m.created_at).toLocaleTimeString([], {
+                hour: 'numeric',
+                minute: '2-digit',
+              }),
+              detail,
+            };
+          });
+          if (flash) {
+            const now = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+            mapped.push({
+              role: 'assistant',
+              content: flash,
+              timestamp: now,
+              detail: undefined,
+            });
+          }
+          setTurns(mapped);
+          return;
+        } catch {
+          writeActiveConversationId(undefined);
+        }
+      }
+
+      if (flash && !cancelled) {
+        const now = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+        setTurns([{ role: 'assistant', content: flash, timestamp: now }]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   async function approveAndRunFromChat(turnIndex: number, ids: string[]) {

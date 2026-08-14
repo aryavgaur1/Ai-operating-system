@@ -13,6 +13,8 @@ export interface ApprovalStore {
   get(id: string): Promise<ApprovalRequest | undefined>;
   list(organizationId: string, status?: ApprovalStatus, userId?: string): Promise<ApprovalRequest[]>;
   listAll(status?: ApprovalStatus): Promise<ApprovalRequest[]>;
+  /** Update payload while still pending — used for editable Approve & run. */
+  updateInput(id: string, input: Record<string, unknown>): Promise<ApprovalRequest | undefined>;
   /** Reject or soft-cancel without execution. Only transitions pending → rejected. */
   decide(id: string, decision: 'approved' | 'rejected', decidedByUserId?: string): Promise<ApprovalRequest | undefined>;
   /**
@@ -105,6 +107,16 @@ export class PostgresApprovalStore implements ApprovalStore {
     return rows.map(mapRow);
   }
 
+  async updateInput(id: string, input: Record<string, unknown>): Promise<ApprovalRequest | undefined> {
+    const { rows } = await query(
+      `update approvals set input = $1::jsonb
+       where id = $2 and status = 'pending'
+       returning *`,
+      [JSON.stringify(input), id]
+    );
+    return rows[0] ? mapRow(rows[0]) : undefined;
+  }
+
   async decide(id: string, decision: 'approved' | 'rejected', decidedByUserId?: string): Promise<ApprovalRequest | undefined> {
     // Only pending rows can be decided. Approval+execute uses claimForExecution.
     if (decision === 'approved') {
@@ -182,6 +194,14 @@ export class InMemoryApprovalStore implements ApprovalStore {
 
   async listAll(status?: ApprovalStatus): Promise<ApprovalRequest[]> {
     return [...this.items.values()].filter((a) => !status || a.status === status);
+  }
+
+  async updateInput(id: string, input: Record<string, unknown>): Promise<ApprovalRequest | undefined> {
+    const existing = this.items.get(id);
+    if (!existing || existing.status !== 'pending') return undefined;
+    const updated: ApprovalRequest = { ...existing, input: { ...input } };
+    this.items.set(id, updated);
+    return updated;
   }
 
   async decide(id: string, decision: 'approved' | 'rejected', decidedByUserId?: string): Promise<ApprovalRequest | undefined> {

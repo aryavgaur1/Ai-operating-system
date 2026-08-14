@@ -294,6 +294,95 @@ function blastRadius(a: ApprovalRequest): string {
   return 'May change shared systems outside this chat.';
 }
 
+/** Fields a human can fix on the Approvals card before Approve & run. */
+function editableFieldsFor(a: ApprovalRequest): Array<{ key: string; label: string; multiline?: boolean }> {
+  if (a.tool === 'jira' && a.action === 'createIssue') {
+    return [
+      { key: 'project', label: 'Project key' },
+      { key: 'summary', label: 'Summary / title' },
+      { key: 'description', label: 'Description', multiline: true },
+      { key: 'issueType', label: 'Issue type' },
+    ];
+  }
+  if (a.tool === 'jira') {
+    return [
+      { key: 'issueKey', label: 'Issue key' },
+      { key: 'comment', label: 'Comment', multiline: true },
+      { key: 'status', label: 'Status / transition' },
+    ];
+  }
+  if (a.tool === 'notion') {
+    return [
+      { key: 'title', label: 'Page title' },
+      { key: 'parentPageId', label: 'Parent page id (optional)' },
+    ];
+  }
+  if (a.tool === 'slack' && (a.action === 'postMessage' || a.action === 'postMessageExternalChannel')) {
+    return [
+      { key: 'channel', label: 'Channel' },
+      { key: 'text', label: 'Message', multiline: true },
+    ];
+  }
+  if (a.tool === 'gmail' && a.action === 'sendEmail') {
+    return [
+      { key: 'to', label: 'To' },
+      { key: 'subject', label: 'Subject' },
+      { key: 'body', label: 'Body', multiline: true },
+    ];
+  }
+  return [];
+}
+
+function draftValue(a: ApprovalRequest, drafts: Record<string, Record<string, string>>, key: string): string {
+  const d = drafts[a.id];
+  if (d && key in d) return d[key];
+  const input = a.input || {};
+  if (key === 'project') return String(input.project ?? input.projectKey ?? '');
+  if (key === 'issueType') return String(input.issueType ?? input.type ?? '');
+  if (key === 'issueKey') return String(input.issueKey ?? input.key ?? '');
+  if (key === 'status') return String(input.status ?? input.transition ?? '');
+  const raw = input[key];
+  if (raw == null) return '';
+  return typeof raw === 'string' ? raw : JSON.stringify(raw);
+}
+
+function buildInputPatch(a: ApprovalRequest, drafts: Record<string, Record<string, string>>): Record<string, unknown> | undefined {
+  const fields = editableFieldsFor(a);
+  if (!fields.length) return undefined;
+  const patch: Record<string, unknown> = {};
+  let dirty = false;
+  for (const f of fields) {
+    const next = draftValue(a, drafts, f.key).trim();
+    const prev =
+      f.key === 'project'
+        ? String(a.input?.project ?? a.input?.projectKey ?? '').trim()
+        : f.key === 'issueType'
+          ? String(a.input?.issueType ?? a.input?.type ?? '').trim()
+          : f.key === 'issueKey'
+            ? String(a.input?.issueKey ?? a.input?.key ?? '').trim()
+            : f.key === 'status'
+              ? String(a.input?.status ?? a.input?.transition ?? '').trim()
+              : String(a.input?.[f.key] ?? '').trim();
+    if (next !== prev) dirty = true;
+    if (f.key === 'project') {
+      patch.project = next.toUpperCase();
+      patch.projectKey = next.toUpperCase();
+    } else if (f.key === 'issueType') {
+      patch.issueType = next;
+      patch.type = next;
+    } else if (f.key === 'issueKey') {
+      patch.issueKey = next;
+      patch.key = next;
+    } else if (f.key === 'status') {
+      patch.status = next;
+      patch.transition = next;
+    } else {
+      patch[f.key] = next;
+    }
+  }
+  return dirty ? patch : undefined;
+}
+
 export default function ApprovalsPage() {
   const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
   const [loading, setLoading] = useState(true);
@@ -302,6 +391,14 @@ export default function ApprovalsPage() {
   const [stepResults, setStepResults] = useState<Record<string, string>>({});
   const [showRawId, setShowRawId] = useState<string | null>(null);
   const [tab, setTab] = useState<'pending' | 'audit'>('pending');
+  const [drafts, setDrafts] = useState<Record<string, Record<string, string>>>({});
+
+  function setDraftField(id: string, key: string, value: string) {
+    setDrafts((prev) => ({
+      ...prev,
+      [id]: { ...(prev[id] || {}), [key]: value },
+    }));
+  }
 
   function load() {
     setLoading(true);
@@ -342,7 +439,10 @@ export default function ApprovalsPage() {
     setDecidingId(id);
     setError(null);
     try {
-      const res = await api.decideApproval(id, decision);
+      const target = approvals.find((a) => a.id === id);
+      const patch =
+        decision === 'approved' && target ? buildInputPatch(target, drafts) : undefined;
+      const res = await api.decideApproval(id, decision, patch);
       if (decision === 'approved') {
         const out = res.executionResult;
         if (out?.ok && !out.mocked) {
@@ -354,6 +454,7 @@ export default function ApprovalsPage() {
           const remaining = pending.filter((p) => p.id !== id);
           if (remaining.length === 0) {
             window.sessionStorage.setItem('nexora:approvalFlash', msg);
+            // Soft navigate — chat restores active conversation from sessionStorage
             window.location.href = '/app/chat';
             return;
           }
@@ -581,9 +682,36 @@ export default function ApprovalsPage() {
 
                           <div className="mt-4">
                             <div className="mb-2 flex items-center gap-2 text-xs uppercase tracking-[0.2em] text-neutral-500">
-                              <FileDiff size={12} /> What will change
+                              <FileDiff size={12} /> What will change — edit before Approve &amp; run
                             </div>
-                            {rows.length > 0 ? (
+                            {editableFieldsFor(a).length > 0 ? (
+                              <div className="space-y-3 rounded-2xl border border-white/10 bg-black/40 p-4">
+                                {editableFieldsFor(a).map((field) => (
+                                  <label key={field.key} className="block">
+                                    <span className="mb-1.5 block text-[11px] uppercase tracking-wide text-neutral-500">
+                                      {field.label}
+                                    </span>
+                                    {field.multiline ? (
+                                      <textarea
+                                        value={draftValue(a, drafts, field.key)}
+                                        onChange={(e) => setDraftField(a.id, field.key, e.target.value)}
+                                        rows={4}
+                                        className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-sm text-neutral-100 outline-none focus:border-accent/40"
+                                      />
+                                    ) : (
+                                      <input
+                                        value={draftValue(a, drafts, field.key)}
+                                        onChange={(e) => setDraftField(a.id, field.key, e.target.value)}
+                                        className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-sm text-neutral-100 outline-none focus:border-accent/40"
+                                      />
+                                    )}
+                                  </label>
+                                ))}
+                                <p className="text-[11px] text-neutral-500">
+                                  Edits save into this approval when you Approve &amp; run — no need to re-ask Chat.
+                                </p>
+                              </div>
+                            ) : rows.length > 0 ? (
                               <div className="overflow-hidden rounded-2xl border border-white/10 bg-black/40">
                                 {rows.map((row) => (
                                   <div
@@ -609,7 +737,14 @@ export default function ApprovalsPage() {
                             </button>
                             {showRawId === a.id && (
                               <pre className="code thin-scroll mt-2 max-h-40 overflow-auto rounded-2xl border border-white/10 bg-black/40 p-4 text-xs leading-6 text-neutral-300">
-                                {JSON.stringify(a.input ?? {}, null, 2)}
+                                {JSON.stringify(
+                                  {
+                                    ...(a.input ?? {}),
+                                    ...(buildInputPatch(a, drafts) || {}),
+                                  },
+                                  null,
+                                  2
+                                )}
                               </pre>
                             )}
                           </div>

@@ -374,12 +374,17 @@ export const api = {
 
   listApprovals: (status?: string) =>
     request<{ approvals: ApprovalRequest[] }>(`/approvals${status ? `?status=${status}` : ''}`),
-  decideApproval: (id: string, decision: 'approved' | 'rejected') =>
+  updateApprovalInput: (id: string, input: Record<string, unknown>) =>
+    request<{ approval: ApprovalRequest }>(`/approvals/${id}/input`, {
+      method: 'PATCH',
+      body: JSON.stringify({ input }),
+    }),
+  decideApproval: (id: string, decision: 'approved' | 'rejected', input?: Record<string, unknown>) =>
     request<{ approval: ApprovalRequest; executionResult?: ToolCallResult; idempotent?: boolean }>(
       `/approvals/${id}/decide`,
       {
         method: 'POST',
-        body: JSON.stringify({ decision }),
+        body: JSON.stringify(input ? { decision, input } : { decision }),
       }
     ),
   listIntegrations: () => request<{ tools: IntegrationStatus[] }>('/integrations'),
