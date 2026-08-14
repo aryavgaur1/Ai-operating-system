@@ -1,6 +1,5 @@
 import {
   getAccessToken,
-  getConnectionDetails,
   getSlackUserToken,
   touchConnectionLastUsed,
 } from '@enterprise-ai-os/stores';
@@ -10,6 +9,7 @@ import {
   runWithConnectorContext,
   slackService,
 } from '@enterprise-ai-os/connectors';
+import { resolveFreshJiraAuth } from './jiraAuth';
 
 type AuthUser = {
   id: string;
@@ -26,6 +26,7 @@ export async function withUserConnectorContext<T>(user: AuthUser, fn: () => Prom
   let jiraToken: string | undefined;
   let jiraCloudId: string | undefined;
   let jiraSiteUrl: string | undefined;
+  let jiraAuthError: string | undefined;
 
   if (demoMode) {
     try {
@@ -74,20 +75,20 @@ export async function withUserConnectorContext<T>(user: AuthUser, fn: () => Prom
       // leave disconnected
     }
     try {
-      jiraToken = await getAccessToken(user.organizationId, 'jira', user.id);
-      if (jiraToken) {
-        const details = await getConnectionDetails(user.organizationId, user.id);
-        const jira = details.find((d) => d.tool === 'jira' && d.status === 'active');
-        const meta = jira?.metadata ?? {};
-        jiraCloudId =
-          (typeof meta.cloudId === 'string' && meta.cloudId) ||
-          (typeof meta.workspaceId === 'string' && meta.workspaceId) ||
-          undefined;
-        jiraSiteUrl = typeof meta.siteUrl === 'string' ? meta.siteUrl : undefined;
+      const jira = await resolveFreshJiraAuth(user.organizationId, user.id);
+      if (jira) {
+        jiraToken = jira.token;
+        jiraCloudId = jira.cloudId;
+        jiraSiteUrl = jira.siteUrl;
         void touchConnectionLastUsed(user.organizationId, 'jira', user.id);
       }
-    } catch {
-      // leave disconnected
+    } catch (err: unknown) {
+      jiraAuthError = err instanceof Error ? err.message : String(err);
+      console.warn('[withUserConnectors] jira_auth_error', {
+        organizationId: user.organizationId,
+        userId: user.id,
+        message: jiraAuthError,
+      });
     }
   }
 
@@ -102,6 +103,7 @@ export async function withUserConnectorContext<T>(user: AuthUser, fn: () => Prom
       jiraCloudId,
       jiraSiteUrl,
       saasStrict: !demoMode,
+      jiraAuthError,
     },
     fn
   );

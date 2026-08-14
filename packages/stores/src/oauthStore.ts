@@ -114,13 +114,15 @@ async function selectConnectionRow(
   encrypted_access_token: string;
   encrypted_refresh_token: string | null;
   encrypted_user_token: string | null;
+  expires_at: Date | null;
 } | undefined> {
   const result = await query<{
     encrypted_access_token: string;
     encrypted_refresh_token: string | null;
     encrypted_user_token: string | null;
+    expires_at: Date | null;
   }>(
-    `select encrypted_access_token, encrypted_refresh_token, encrypted_user_token
+    `select encrypted_access_token, encrypted_refresh_token, encrypted_user_token, expires_at
      from oauth_connections
      where organization_id = $1 and tool = $2 and status = 'active'
        and (
@@ -142,6 +144,30 @@ export async function getAccessToken(
   const row = await selectConnectionRow(organizationId, tool, userId);
   if (!row) return undefined;
   return decryptToken(row.encrypted_access_token);
+}
+
+export async function getRefreshToken(
+  organizationId: string,
+  tool: ToolName,
+  userId?: string
+): Promise<string | undefined> {
+  const row = await selectConnectionRow(organizationId, tool, userId);
+  if (!row?.encrypted_refresh_token) return undefined;
+  try {
+    return decryptToken(row.encrypted_refresh_token);
+  } catch {
+    return undefined;
+  }
+}
+
+export async function getConnectionExpiresAt(
+  organizationId: string,
+  tool: ToolName,
+  userId?: string
+): Promise<Date | null> {
+  const row = await selectConnectionRow(organizationId, tool, userId);
+  if (!row?.expires_at) return null;
+  return row.expires_at instanceof Date ? row.expires_at : new Date(row.expires_at);
 }
 
 /** Slack user OAuth token (xoxp-). Prefers encrypted_user_token; falls back to legacy refresh column. */

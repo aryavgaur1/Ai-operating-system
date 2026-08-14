@@ -249,6 +249,15 @@ export async function preflightToolCall(call: ToolCall): Promise<PreflightResult
   }
 
   if (call.tool === 'jira') {
+    const ctxErr = getConnectorContext().jiraAuthError?.trim();
+    if (ctxErr) {
+      return {
+        ok: false,
+        input,
+        healActions,
+        fatal: ctxErr,
+      };
+    }
     if (!hasJiraTokenInContext()) {
       return {
         ok: false,
@@ -269,24 +278,58 @@ export async function preflightToolCall(call: ToolCall): Promise<PreflightResult
       }
       input.summary = summary.slice(0, 255);
 
-      const project = String(
+      let project = String(
         input.project ?? input.projectKey ?? process.env.JIRA_DEFAULT_PROJECT ?? ''
       )
         .trim()
         .toUpperCase();
-      if (!project) {
+
+      const token = ctx.jiraToken?.trim();
+      const cloudId = ctx.jiraCloudId?.trim();
+      if (!token || !cloudId) {
         return {
           ok: false,
           input,
           healActions,
           fatal:
-            'Jira create needs a project key. Say e.g. “create a Jira ticket in PROJ …” or set JIRA_DEFAULT_PROJECT.',
+            'Jira auth is incomplete (missing token or site). Open Integrations → Disconnect Jira → Connect Jira, then retry.',
         };
       }
 
-      const token = ctx.jiraToken?.trim();
-      const cloudId = ctx.jiraCloudId?.trim();
-      if (token && cloudId) {
+      // Auth probe first — distinguish expired token from bad project key
+      try {
+        const me = await fetch(`https://api.atlassian.com/ex/jira/${cloudId}/rest/api/3/myself`, {
+          headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+        });
+        if (me.status === 401) {
+          return {
+            ok: false,
+            input,
+            healActions,
+            fatal:
+              'Jira auth expired or invalid (401). Open Integrations → Disconnect Jira → Connect Jira, then retry Approve & run.',
+          };
+        }
+        if (!me.ok) {
+          const body = await me.text();
+          return {
+            ok: false,
+            input,
+            healActions,
+            fatal: `Jira auth check failed (${me.status}). ${body.slice(0, 120)} Reconnect Jira under Integrations if this persists.`,
+          };
+        }
+        healActions.push('validated_jira_auth');
+      } catch (err: any) {
+        return {
+          ok: false,
+          input,
+          healActions,
+          fatal: `Could not reach Jira auth check: ${err?.message ?? err}`,
+        };
+      }
+
+      if (project) {
         try {
           const res = await fetch(
             `https://api.atlassian.com/ex/jira/${cloudId}/rest/api/3/project/${encodeURIComponent(project)}`,
@@ -294,16 +337,38 @@ export async function preflightToolCall(call: ToolCall): Promise<PreflightResult
               headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
             }
           );
-          if (!res.ok) {
-            const body = await res.text();
+          if (res.status === 401) {
             return {
               ok: false,
               input,
               healActions,
-              fatal: `Jira project “${project}” was not found or you cannot access it (${res.status}). ${body.slice(0, 120)}`,
+              fatal:
+                'Jira auth expired or invalid (401). Open Integrations → Disconnect Jira → Connect Jira, then retry.',
             };
           }
-          healActions.push('validated_jira_project');
+          if (res.status === 403) {
+            return {
+              ok: false,
+              input,
+              healActions,
+              fatal: `You do not have access to Jira project “${project}” (403). Pick another project key in Chat or ask a Jira admin for access.`,
+            };
+          }
+          if (res.status === 404 || !res.ok) {
+            // Wrong default (e.g. stale JIRA_DEFAULT_PROJECT=ATLAS) — clear and let connector discover
+            console.warn('[preflight] jira_project_unavailable', {
+              project,
+              status: res.status,
+            });
+            delete input.project;
+            delete input.projectKey;
+            project = '';
+            healActions.push('cleared_invalid_jira_project');
+          } else {
+            healActions.push('validated_jira_project');
+            input.project = project;
+            input.projectKey = project;
+          }
         } catch (err: any) {
           return {
             ok: false,
@@ -313,8 +378,58 @@ export async function preflightToolCall(call: ToolCall): Promise<PreflightResult
           };
         }
       }
-      input.project = project;
-      input.projectKey = project;
+
+      if (!project) {
+        // Discover a real project via search (no hardcoded keys)
+        try {
+          const list = await fetch(
+            `https://api.atlassian.com/ex/jira/${cloudId}/rest/api/3/project/search?maxResults=20`,
+            { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } }
+          );
+          if (list.status === 401) {
+            return {
+              ok: false,
+              input,
+              healActions,
+              fatal:
+                'Jira auth expired or invalid (401). Open Integrations → Disconnect Jira → Connect Jira, then retry.',
+            };
+          }
+          if (!list.ok) {
+            const body = await list.text();
+            return {
+              ok: false,
+              input,
+              healActions,
+              fatal: `Could not list Jira projects (${list.status}). ${body.slice(0, 120)}`,
+            };
+          }
+          const data = (await list.json()) as { values?: Array<{ key: string }> };
+          const keys = (data.values ?? []).map((p) => p.key).filter(Boolean);
+          if (!keys.length) {
+            return {
+              ok: false,
+              input,
+              healActions,
+              fatal:
+                'No Jira projects found on this site. Create a project in Jira (or get access), then retry with “in project KEY”.',
+            };
+          }
+          // Bind a real project from the live API (never invent keys like ATLAS).
+          project = keys[0].toUpperCase();
+          input.project = project;
+          input.projectKey = project;
+          input._availableProjects = keys.slice(0, 12);
+          healActions.push('resolved_jira_project_from_api');
+        } catch (err: any) {
+          return {
+            ok: false,
+            input,
+            healActions,
+            fatal: `Could not list Jira projects: ${err?.message ?? err}`,
+          };
+        }
+      }
     } else if (!input.summary && call.action.startsWith('create')) {
       input.summary = `Nexora task ${new Date().toISOString().slice(0, 10)}`;
       healActions.push('inferred_jira_summary');

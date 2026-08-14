@@ -12,6 +12,8 @@ export interface ConnectorContext {
   jiraSiteUrl?: string;
   /** When true, never fall back to platform .env tokens. */
   saasStrict?: boolean;
+  /** Set when Jira refresh failed — actionable message, never secrets. */
+  jiraAuthError?: string;
 }
 
 export const connectorContext = new AsyncLocalStorage<ConnectorContext>();
