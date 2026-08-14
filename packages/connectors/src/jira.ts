@@ -63,19 +63,56 @@ async function jiraFetch(
   });
 }
 
+function humanizeJiraError(status: number, body: string, context?: string): string {
+  const raw = body.slice(0, 280);
+  if (status === 401 || /unauthorized|invalid.?token|oauth/i.test(body)) {
+    return 'Jira auth expired or invalid. Open Integrations → Disconnect Jira → Connect Jira, then retry.';
+  }
+  if (status === 403 || /permission|forbidden|does not have permission/i.test(body)) {
+    return 'Jira denied write permission on this project. Reconnect Jira with project write access, or pick a project you can edit.';
+  }
+  if (/project .+ does not exist|valid project|project is required/i.test(body)) {
+    return `Jira project not found${context ? ` (${context})` : ''}. Say a project key in Chat (e.g. "in project KAN") or set JIRA_DEFAULT_PROJECT.`;
+  }
+  if (/issuetype|issue type/i.test(body)) {
+    return 'That Jira issue type is not available in this project. Retry as Task or Bug, or create the type in Jira.';
+  }
+  if (/assignee/i.test(body)) {
+    return 'Jira could not assign that user. Use an Atlassian accountId or skip assignee and set it in Jira after create.';
+  }
+  if (status === 404) {
+    return `Jira resource not found${context ? ` (${context})` : ''}. Check the project/issue key and try again.`;
+  }
+  if (status >= 500) {
+    return 'Jira is unavailable right now (Atlassian 5xx). Wait a minute and Approve & run again, or re-ask in Chat.';
+  }
+  return `Jira create failed (${status}): ${raw || 'unknown error'}`;
+}
+
 async function resolveProjectKey(token: string, cloudId: string, preferred?: string): Promise<string> {
   const want = (preferred || process.env.JIRA_DEFAULT_PROJECT || '').trim().toUpperCase();
   const res = await jiraFetch('/project/search?maxResults=50', { method: 'GET', token, cloudId });
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`Could not list Jira projects (${res.status}): ${body.slice(0, 200)}`);
+    throw new Error(humanizeJiraError(res.status, body, 'listing projects'));
   }
   const data = (await res.json()) as { values?: Array<{ key: string }> };
   const projects = data.values ?? [];
-  if (!projects.length) throw new Error('No Jira projects found on this site.');
+  if (!projects.length) {
+    throw new Error(
+      'No Jira projects found on this site. Create a project in Jira (or get access), then retry.'
+    );
+  }
   if (want) {
     const match = projects.find((p) => p.key.toUpperCase() === want);
     if (match) return match.key;
+    const keys = projects
+      .slice(0, 8)
+      .map((p) => p.key)
+      .join(', ');
+    throw new Error(
+      `Jira project "${want}" was not found. Available: ${keys}${projects.length > 8 ? '…' : ''}. Say one of these in Chat.`
+    );
   }
   return projects[0].key;
 }
@@ -264,12 +301,34 @@ class JiraConnector implements ToolConnector {
 
       switch (action) {
         case 'createIssue': {
-          const summary = String(input.summary ?? input.title ?? 'Untitled issue').slice(0, 255);
-          const projectKey = await resolveProjectKey(token, cloudId, String(input.project ?? input.projectKey ?? ''));
+          const summaryRaw = String(input.summary ?? input.title ?? '').trim();
+          if (!summaryRaw) {
+            return {
+              tool: 'jira',
+              action,
+              ok: false,
+              error: 'Jira create needs a summary. Ask again with a clear title (e.g. “Create a Jira ticket to track vendor follow-up”).',
+              mocked: false,
+            };
+          }
+          const summary = summaryRaw.slice(0, 255);
+          let projectKey: string;
+          try {
+            projectKey = await resolveProjectKey(token, cloudId, String(input.project ?? input.projectKey ?? ''));
+          } catch (err) {
+            return {
+              tool: 'jira',
+              action,
+              ok: false,
+              error: err instanceof Error ? err.message : 'Could not resolve Jira project',
+              mocked: false,
+            };
+          }
           const preferredType = String(input.issueType ?? input.type ?? 'Task');
           const typeCandidates = Array.from(new Set([preferredType, 'Task', 'Bug', 'Story', 'Risk'].filter(Boolean)));
           let created: { id: string; key: string } | null = null;
           let lastError = '';
+          let lastStatus = 0;
           let usedType = preferredType;
           for (const issueType of typeCandidates) {
             const fields = buildIssueFields(
@@ -287,19 +346,26 @@ class JiraConnector implements ToolConnector {
               usedType = issueType;
               break;
             }
+            lastStatus = res.status;
             lastError = await res.text();
             if (!/issuetype|issue type/i.test(lastError)) {
               return {
                 tool: 'jira',
                 action,
                 ok: false,
-                error: `Jira createIssue failed (${res.status}): ${lastError.slice(0, 300)}`,
+                error: humanizeJiraError(res.status, lastError, `project ${projectKey}`),
                 mocked: false,
               };
             }
           }
           if (!created) {
-            return { tool: 'jira', action, ok: false, error: `Jira createIssue failed: ${lastError.slice(0, 300)}`, mocked: false };
+            return {
+              tool: 'jira',
+              action,
+              ok: false,
+              error: humanizeJiraError(lastStatus || 400, lastError, `project ${projectKey}`),
+              mocked: false,
+            };
           }
           const verified = await verifyIssue(token, cloudId, created.key);
           if (!verified.ok) {
@@ -307,7 +373,7 @@ class JiraConnector implements ToolConnector {
               tool: 'jira',
               action,
               ok: false,
-              error: `Jira created ${created.key} but verification fetch failed.`,
+              error: `Jira reported create for ${created.key}, but we could not re-fetch it. Open Jira to confirm, then re-ask if missing.`,
               mocked: false,
             };
           }

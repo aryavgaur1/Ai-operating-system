@@ -121,8 +121,27 @@ async function resolveParentId(client: Client, explicit?: string): Promise<strin
   if (databases[0]?.id) return databases[0].id as string;
 
   throw new Error(
-    'Notion has no shared parent page for Nexora yet. During Connect, select at least one page (or in Notion open a page → ··· → Connections → add Nexora), then try again from Integrations.'
+    'Notion has no shared parent page for Nexora yet. Fix: in Notion open any page → ··· → Connections → connect Nexora (or re-run Connect Notion and select at least one page). Then retry create.'
   );
+}
+
+function humanizeNotionError(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err ?? 'Notion error');
+  if (/not connected|NOTION_API_KEY|Integrations/i.test(message)) return message;
+  if (/no shared parent|Connections →/i.test(message)) return message;
+  if (/object_not_found|Could not find|404/i.test(message)) {
+    return 'Notion could not find the parent page. Share a page with Nexora (page ··· → Connections), or re-Connect Notion and select pages, then retry.';
+  }
+  if (/unauthorized|invalid.?token|401/i.test(message)) {
+    return 'Notion auth expired. Open Integrations → Disconnect Notion → Connect Notion, then retry.';
+  }
+  if (/restricted|permission|403|insufficient/i.test(message)) {
+    return 'Notion denied write access. Share the parent page with the Nexora integration (Connections), then retry.';
+  }
+  if (/validation|property|title/i.test(message)) {
+    return `Notion rejected the page properties: ${message.slice(0, 220)}. Try a simpler title, or create under a normal page (not a locked database).`;
+  }
+  return `Notion write failed: ${message.slice(0, 280)}`;
 }
 
 /** Pulls the plain-text title out of whatever property type Notion gives us. */
@@ -309,9 +328,14 @@ class NotionConnector implements ToolConnector {
       try {
         switch (action) {
           case 'createPage': {
-            const parentId = await resolveParentId(client, input.parentPageId as string | undefined);
+            const title = String(input.title ?? '').trim() || 'Untitled';
+            let parentId: string;
+            try {
+              parentId = await resolveParentId(client, input.parentPageId as string | undefined);
+            } catch (err) {
+              return { tool: 'notion', action, ok: false, error: humanizeNotionError(err), mocked: false };
+            }
 
-            const title = String(input.title ?? 'Untitled');
             const propsResult = await buildCreateProperties(client, parentId, title);
             const properties = propsResult.properties;
             const children = buildChildrenBlocks(input);
@@ -327,13 +351,17 @@ class NotionConnector implements ToolConnector {
             } catch (err: any) {
               const message = String(err?.message ?? err?.code ?? '');
               if (message.includes('not a database') || message.includes('Use the pages API') || message.includes('database_id')) {
-                page = await (client.pages.create as any)({
-                  parent: { page_id: parentId },
-                  properties: { title: { title: [{ text: { content: title } }] } },
-                  children,
-                });
+                try {
+                  page = await (client.pages.create as any)({
+                    parent: { page_id: parentId },
+                    properties: { title: { title: [{ text: { content: title } }] } },
+                    children,
+                  });
+                } catch (err2) {
+                  return { tool: 'notion', action, ok: false, error: humanizeNotionError(err2), mocked: false };
+                }
               } else {
-                throw err;
+                return { tool: 'notion', action, ok: false, error: humanizeNotionError(err), mocked: false };
               }
             }
 
@@ -342,12 +370,18 @@ class NotionConnector implements ToolConnector {
                 tool: 'notion',
                 action,
                 ok: false,
-                error: 'Notion createPage returned no page id — refusing fake success',
+                error: 'Notion createPage returned no page id — refusing fake success. Re-share a parent page with Nexora and retry.',
                 mocked: false,
               };
             }
             console.log(`[notion.createPage] REAL ok id=${page.id} url=${(page as any).url ?? ''}`);
-            return { tool: 'notion', action, ok: true, output: { id: page.id, url: (page as any).url }, mocked: false };
+            return {
+              tool: 'notion',
+              action,
+              ok: true,
+              output: { id: page.id, url: (page as any).url, title, parentId },
+              mocked: false,
+            };
           }
 
           case 'createDatabase': {
@@ -479,7 +513,7 @@ class NotionConnector implements ToolConnector {
             return { tool: 'notion', action, ok: false, error: `Unknown action: ${action}`, mocked: false };
         }
       } catch (err: any) {
-        return { tool: 'notion', action, ok: false, error: err?.message ?? String(err), mocked: false };
+        return { tool: 'notion', action, ok: false, error: humanizeNotionError(err), mocked: false };
       }
     }
 

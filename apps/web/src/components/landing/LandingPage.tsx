@@ -30,16 +30,16 @@ import { cn } from '@/lib/utils';
 
 const INTEGRATIONS = LANDING_TOOLS.map((t) => t.name);
 
-const FLOW = ['Understand', 'Reason', 'Plan', 'Execute', 'Learn', 'Remember'];
+const FLOW = ['Propose', 'Approve', 'Act', 'Verify', 'Remember'];
 
 const COMMANDS = [
   'Create a Notion page called Investor Notes',
+  'Create a Jira ticket to track vendor follow-up in project KAN',
+  'Post "Deployment complete" to #engineering on Slack',
   'Create a Slack channel called Marketing',
   'Summarize yesterday\'s Slack discussion',
-  'Post "Deployment complete" to #engineering on slack',
-  'List channels on slack',
-  'Create a notion page titled Weekly Report',
-  'Show history for #marketing on slack',
+  'Create a Notion page titled Weekly Report',
+  'Show history for #marketing on Slack',
   'Generate product documentation in Notion',
 ];
 
@@ -72,14 +72,14 @@ const PRICING = [
 ];
 
 const FAQS = [
-  ['What is Nexora?', 'An AI Operating System that connects your tools, reasons over context, and executes real work — not just answers questions.'],
-  ['How does the AI work?', 'Intent classification, retrieval, planning, then tool execution against live APIs like Slack and Notion.'],
-  ['How are integrations connected?', 'In demo mode via secure .env credentials; SaaS mode supports per-user OAuth when you enable it.'],
-  ['Can I use my own Slack?', 'Yes — your workspace bot token powers live channel and message actions.'],
-  ['Can I connect my own Notion?', 'Yes — pages are created in your Notion workspace via your integration token.'],
-  ['How secure is my data?', 'Encrypted tokens, JWT sessions, org isolation, and approval gates for high-impact actions.'],
+  ['What is Nexora?', 'Nexora is a Work Action OS: it proposes real actions in Slack, Jira, and Notion, then pauses for a human gate before it acts.'],
+  ['How does Propose → Approve → Act work?', 'Nexora classifies intent, plans tool calls, and queues high-consequence writes for Approve & run — so nothing posts or creates until you confirm.'],
+  ['How are integrations connected?', 'Connect Slack, Jira, and Notion under Integrations (OAuth or workspace tokens). Demo mode can also use secure .env credentials.'],
+  ['Can I use my own Slack?', 'Yes — your workspace bot powers live channel posts and related actions after you approve them.'],
+  ['Can I connect my own Notion?', 'Yes — pages are created in your Notion workspace after you share a parent page with the Nexora connection.'],
+  ['Does Jira require approval too?', 'Yes — creating or changing issues is treated as high-consequence and waits for Approve & run.'],
+  ['How secure is my data?', 'Encrypted tokens, JWT sessions, org isolation, and human approval gates for high-impact writes.'],
   ['Does Nexora remember conversations?', 'Yes — chat history and workspace preferences persist in Postgres.'],
-  ['Can multiple people collaborate?', 'Multi-user SaaS is built in and can be enabled when you are ready to scale.'],
 ];
 
 const fadeUp = {
@@ -143,7 +143,7 @@ export function LandingPage() {
               animate={{ opacity: 1, y: 0 }}
               className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] uppercase tracking-[0.22em] text-neutral-300"
             >
-              <span className="h-1.5 w-1.5 rounded-full bg-accent2" /> AI Operating System
+              <span className="h-1.5 w-1.5 rounded-full bg-accent2" /> Nexora · Work Action OS
             </motion.div>
             <motion.h1
               initial={{ opacity: 0, y: 20 }}
@@ -151,7 +151,10 @@ export function LandingPage() {
               transition={{ delay: 0.08 }}
               className="font-display mt-6 text-4xl font-semibold leading-[1.05] tracking-tight text-white sm:text-5xl md:text-6xl lg:text-[4.1rem]"
             >
-              The <span className="gradient-text">AI Operating System</span> for Modern Teams.
+              <span className="gradient-text">Propose → Approve → Act</span>
+              <span className="block text-[0.72em] font-medium text-neutral-200 sm:text-[0.68em] md:mt-2">
+                across Slack, Jira, and Notion.
+              </span>
             </motion.h1>
             <motion.p
               initial={{ opacity: 0, y: 20 }}
@@ -159,8 +162,7 @@ export function LandingPage() {
               transition={{ delay: 0.16 }}
               className="mt-5 max-w-xl text-base leading-8 text-neutral-400 sm:text-lg"
             >
-              Connect your apps. Understand your business. Execute work automatically.
-              <span className="text-neutral-200"> One AI. Unlimited possibilities.</span>
+              Nexora is the Work Action OS with a human gate — it plans real writes, then waits for your approval before anything lands in your tools.
             </motion.p>
             <motion.div
               initial={{ opacity: 0, y: 20 }}
@@ -180,9 +182,9 @@ export function LandingPage() {
             </motion.div>
             <div className="mt-10 grid max-w-lg grid-cols-3 gap-3 text-center">
               {[
-                ['Live tools', 'Slack · Notion'],
-                ['Execution', 'Real APIs'],
-                ['Mode', 'OS, not chatbot'],
+                ['Beachhead', 'Slack · Jira · Notion'],
+                ['Gate', 'Human approve'],
+                ['Loop', 'Propose → Act'],
               ].map(([k, v]) => (
                 <div key={k} className="rounded-2xl border border-white/8 bg-white/[0.03] px-3 py-3">
                   <div className="text-[10px] uppercase tracking-[0.18em] text-neutral-500">{k}</div>
@@ -263,7 +265,11 @@ export function LandingPage() {
 
       {/* How it works — before Why Nexora */}
       <section id="how-it-works" className="mx-auto max-w-7xl px-4 py-16 sm:px-6">
-        <SectionHeading eyebrow="How it works" title="From intent to execution." body="A continuous loop — not a single prompt." />
+        <SectionHeading
+          eyebrow="How it works"
+          title="Propose → Approve → Act."
+          body="High-consequence writes pause for a human gate — then run against live Slack, Jira, and Notion APIs."
+        />
         <div className="mt-12 flex flex-wrap items-center justify-center gap-2 sm:gap-3">
           {FLOW.map((step, i) => (
             <motion.div key={step} {...fadeUp} className="flex items-center gap-2 sm:gap-3">
@@ -535,8 +541,8 @@ export function LandingPage() {
       <section className="mx-auto max-w-7xl px-4 pb-24 sm:px-6">
         <motion.div {...fadeUp} className="relative overflow-hidden rounded-[36px] border border-white/10 bg-gradient-to-br from-accent/20 via-[#0b1220] to-accent2/10 px-8 py-16 text-center">
           <Globe2 className="mx-auto text-accent" size={28} />
-          <h2 className="font-display mt-5 text-3xl font-semibold text-white sm:text-5xl">Ready to build with AI?</h2>
-          <p className="mx-auto mt-4 max-w-xl text-neutral-400">Start free, connect your tools, and execute work from a single command surface.</p>
+          <h2 className="font-display mt-5 text-3xl font-semibold text-white sm:text-5xl">Ready to run work with a human gate?</h2>
+          <p className="mx-auto mt-4 max-w-xl text-neutral-400">Start free, connect Slack · Jira · Notion, and Approve & run real actions from one surface.</p>
           <div className="mt-8 flex flex-wrap justify-center gap-3">
             <Link href="/register" className="rounded-full bg-accent px-6 py-3 text-sm font-semibold text-[#04101f]">Start Free</Link>
             <Link href="/login" className="rounded-full border border-white/15 px-6 py-3 text-sm text-white">Book Demo</Link>
@@ -544,7 +550,7 @@ export function LandingPage() {
           <div className="mt-8 flex flex-wrap justify-center gap-4 text-xs text-neutral-500">
             <span className="inline-flex items-center gap-1"><ShieldCheck size={12} /> SOC2-ready posture</span>
             <span className="inline-flex items-center gap-1"><Fingerprint size={12} /> Encrypted tokens</span>
-            <span className="inline-flex items-center gap-1"><Sparkles size={12} /> Live Slack · Notion</span>
+            <span className="inline-flex items-center gap-1"><Sparkles size={12} /> Live Slack · Jira · Notion</span>
           </div>
         </motion.div>
       </section>
@@ -556,7 +562,7 @@ export function LandingPage() {
         <div className="mx-auto grid max-w-7xl gap-10 px-4 sm:px-6 md:grid-cols-4">
           <div>
             <div className="font-display tracking-[0.2em]">NEXORA</div>
-            <p className="mt-3 text-sm text-neutral-500">The AI Operating System for modern teams.</p>
+            <p className="mt-3 text-sm text-neutral-500">Work Action OS — Propose → Approve → Act.</p>
           </div>
           {[
             ['Product', ['Features', 'Integrations', 'Pricing']],

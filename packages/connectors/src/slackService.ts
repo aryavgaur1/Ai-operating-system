@@ -115,6 +115,7 @@ export function getUserClient(): WebClient | null {
 function mapSlackError(err: any): SlackServiceError {
   const data = err?.data ?? {};
   const apiError = String(data.error ?? err?.code ?? err?.message ?? 'unknown_error');
+  const neededScope = data.needed ?? data.provided;
 
   if (err?.code === ErrorCode.PlatformError) {
     switch (apiError) {
@@ -123,27 +124,42 @@ function mapSlackError(err: any): SlackServiceError {
       case 'token_revoked':
       case 'token_expired':
       case 'account_inactive':
-        return new SlackServiceError('Invalid or revoked Slack token', 'invalid_token', 401);
-      case 'missing_scope':
         return new SlackServiceError(
-          `Missing Slack permissions: ${data.needed ?? data.provided ?? 'unknown scope'}`,
+          'Slack auth expired or revoked. Open Integrations → Disconnect Slack → Connect Slack, then retry.',
+          'invalid_auth',
+          401
+        );
+      case 'missing_scope':
+      case 'not_allowed_token_type':
+        return new SlackServiceError(
+          neededScope
+            ? `Slack is missing required permissions (${neededScope}). Reinstall/reconnect Slack under Integrations with chat:write (and usually channels:read / channels:join).`
+            : 'Slack app is missing chat:write (and usually channels:read / channels:join). Reinstall/reconnect Slack under Integrations with those scopes.',
           'missing_permissions',
           403
         );
       case 'channel_not_found':
       case 'not_in_channel':
-        return new SlackServiceError('Slack channel not found (or bot is not a member)', 'channel_not_found', 404);
+        return new SlackServiceError(
+          'Slack channel not found or bot is not a member. Invite the Nexora bot to the channel (or use a public channel the bot can join), then retry.',
+          'channel_not_found',
+          404
+        );
       case 'user_not_found':
         return new SlackServiceError('Slack user not found', 'user_not_found', 404);
       case 'ratelimited':
       case 'rate_limited':
-        return new SlackServiceError('Slack rate limit exceeded — retry later', 'rate_limited', 429);
+        return new SlackServiceError('Slack rate limit exceeded — wait a minute and Approve & run again.', 'rate_limited', 429);
       case 'is_archived':
-        return new SlackServiceError('Slack channel is archived', 'channel_archived', 400);
+        return new SlackServiceError('That Slack channel is archived. Pick an active channel and retry.', 'channel_archived', 400);
       case 'name_taken':
         return new SlackServiceError('Channel name already taken', 'name_taken', 409);
       case 'already_in_channel':
         return new SlackServiceError('Already in channel', 'already_in_channel', 200);
+      case 'msg_too_long':
+        return new SlackServiceError('Slack message is too long. Shorten the text and retry.', 'msg_too_long', 400);
+      case 'no_text':
+        return new SlackServiceError('Slack post needs message text. Re-ask in Chat with the exact words to post.', 'no_text', 400);
       default:
         return new SlackServiceError(`Slack API error: ${apiError}`, apiError, 400);
     }
@@ -280,14 +296,31 @@ export async function resolveChannelId(channel: string): Promise<string> {
 }
 
 export async function postMessage(input: { channel: string; text: string; threadTs?: string }) {
+  const requestedChannel = String(input.channel ?? '').trim();
+  const text = String(input.text ?? '').trim();
+  if (!requestedChannel) {
+    throw new SlackServiceError(
+      'Slack post needs a channel. Re-ask like: Post to #ops on Slack: standup summary ready',
+      'channel_required',
+      400
+    );
+  }
+  if (!text) {
+    throw new SlackServiceError(
+      'Slack post needs message text. Re-ask in Chat with the exact words to post.',
+      'no_text',
+      400
+    );
+  }
+
   const client = getClient();
-  const channel = await resolveChannelId(input.channel);
+  const channel = await resolveChannelId(requestedChannel);
 
   const attempt = async (target: string) =>
     callSlack(() =>
       client.chat.postMessage({
         channel: target,
-        text: String(input.text ?? ''),
+        text,
         thread_ts: input.threadTs,
       })
     );
@@ -318,7 +351,7 @@ export async function postMessage(input: { channel: string; text: string; thread
       };
     } catch {
       throw new SlackServiceError(
-        `Slack channel not found or bot is not a member of #${String(input.channel).replace(/^#/, '')}. Invite the bot to the channel and ensure the app has chat:write + channels:join (and channels:read to list channels).`,
+        `Slack channel not found or bot is not a member of #${requestedChannel.replace(/^#/, '')}. Invite the Nexora bot to that channel (channel details → Integrations), ensure chat:write + channels:join, then retry Approve & run.`,
         'channel_not_found',
         404
       );
@@ -1044,82 +1077,6 @@ export async function searchFiles(query: string, count = 20) {
   }
 }
 
-export async function updateMessage(input: { channel: string; ts: string; text: string }) {
-  const client = getClient();
-  const channel = await resolveChannelId(input.channel);
-  const ts = String(input.ts ?? '').trim();
-  if (!ts) throw new SlackServiceError('message ts is required', 'ts_required', 400);
-  const res = await callSlack(() =>
-    client.chat.update({
-      channel,
-      ts,
-      text: String(input.text ?? ''),
-    })
-  );
-  return { ok: true, channel: res.channel ?? channel, ts: res.ts ?? ts, text: input.text, verified: true };
-}
-
-export async function deleteMessage(input: { channel: string; ts: string }) {
-  const client = getClient();
-  const channel = await resolveChannelId(input.channel);
-  const ts = String(input.ts ?? '').trim();
-  if (!ts) throw new SlackServiceError('message ts is required', 'ts_required', 400);
-  await callSlack(() => client.chat.delete({ channel, ts }));
-  return { ok: true, channel, ts, deleted: true };
-}
-
-export async function getPermalink(input: { channel: string; ts: string }) {
-  const client = getClient();
-  const channel = await resolveChannelId(input.channel);
-  const ts = String(input.ts ?? '').trim();
-  if (!ts) throw new SlackServiceError('message ts is required', 'ts_required', 400);
-  const res = await callSlack(() => client.chat.getPermalink({ channel, message_ts: ts }));
-  return { ok: true, channel, ts, permalink: (res as any).permalink as string };
-}
-
-export async function joinChannel(input: { channel: string }) {
-  const client = getClient();
-  const channel = await resolveChannelId(input.channel);
-  const res = await callSlack(() => client.conversations.join({ channel }));
-  const joined = (res as any).channel ?? {};
-  return { ok: true, id: joined.id ?? channel, name: joined.name, channel: joined.id ?? channel };
-}
-
-export async function openDm(input: { users: string | string[]; text?: string }) {
-  const client = getClient();
-  const refs = Array.isArray(input.users) ? input.users : String(input.users ?? '').split(/[,\s]+/).filter(Boolean);
-  const userIds = await resolveUserRefs(refs);
-  if (!userIds.length) throw new SlackServiceError('No users found for DM', 'users_required', 400);
-  const open = await callSlack(() => client.conversations.open({ users: userIds.join(',') }));
-  const channel = String((open as any).channel?.id ?? '');
-  if (!channel) throw new SlackServiceError('Could not open DM', 'dm_open_failed', 502);
-  if (input.text) {
-    const posted = await postMessage({ channel, text: String(input.text) });
-    return { ok: true, channel, users: userIds, ts: posted.ts, posted: true };
-  }
-  return { ok: true, channel, users: userIds, posted: false };
-}
-
-/** Post Block Kit (used for in-Slack Approve & Run cards). */
-export async function postBlocks(input: {
-  channel: string;
-  text: string;
-  blocks: unknown[];
-  threadTs?: string;
-}) {
-  const client = getClient();
-  const channel = await resolveChannelId(input.channel);
-  const res = await callSlack(() =>
-    client.chat.postMessage({
-      channel,
-      text: String(input.text ?? ''),
-      blocks: input.blocks as any,
-      thread_ts: input.threadTs,
-    })
-  );
-  return { ok: true, channel: res.channel, ts: res.ts };
-}
-
 export const slackService = {
   initializeClient,
   initializeUserClient,
@@ -1134,12 +1091,6 @@ export const slackService = {
   resolveChannelId,
   postMessage,
   postExternalMessage,
-  postBlocks,
-  updateMessage,
-  deleteMessage,
-  getPermalink,
-  joinChannel,
-  openDm,
   listChannels,
   listUsers,
   findUsersByRole,

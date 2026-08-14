@@ -7,15 +7,17 @@ import {
   ArrowLeft,
   CheckCircle2,
   Clock,
+  ExternalLink,
   Eye,
   FileDiff,
   History,
+  Loader2,
   MessageSquare,
   ShieldAlert,
   ShieldCheck,
   XCircle,
 } from 'lucide-react';
-import { api, type ApprovalRequest } from '@/lib/api';
+import { api, type ApprovalRequest, type ToolCallResult } from '@/lib/api';
 import { GlassCard, Reveal } from '@/components/motion';
 import { RiskRadial } from '@/components/charts';
 import { cn } from '@/lib/utils';
@@ -46,6 +48,21 @@ const actionHint: Record<string, string> = {
   createRoadmap: 'Creates a Notion roadmap',
 };
 
+type TimelineState = 'verified' | 'failed' | 'rejected' | 'pending_execution' | 'expired';
+
+function asOutput(result?: ToolCallResult | null): Record<string, unknown> {
+  if (!result?.output || typeof result.output !== 'object') return {};
+  return result.output as Record<string, unknown>;
+}
+
+function slackChannelLabel(raw: unknown, fallback?: unknown): string {
+  const primary = String(raw || fallback || '').trim();
+  if (!primary) return '#channel';
+  if (primary.startsWith('#')) return primary;
+  if (/^[CGD][A-Z0-9]+$/i.test(primary)) return primary;
+  return `#${primary.replace(/^#/, '')}`;
+}
+
 function humanTitle(a: ApprovalRequest): string {
   const input = a.input || {};
   if (a.tool === 'jira' && a.action === 'createIssue') {
@@ -57,9 +74,14 @@ function humanTitle(a: ApprovalRequest): string {
   if (a.tool === 'jira' && a.action === 'transitionIssue') {
     return `Move Jira ${String(input.issueKey || input.key || 'issue')} → ${String(input.status || input.transition || 'new status')}`;
   }
+  if (a.tool === 'jira' && a.action === 'updateIssue') {
+    return `Update Jira ${String(input.issueKey || input.key || 'issue')}`;
+  }
   if (a.tool === 'slack' && (a.action === 'postMessage' || a.action === 'postMessageExternalChannel')) {
-    const ch = String(input.channel || 'channel');
-    return `Post to Slack ${ch.startsWith('#') ? ch : `#${ch}`}`;
+    return `Post to Slack ${slackChannelLabel(input.channel)}`;
+  }
+  if (a.tool === 'notion' && (a.action === 'createPage' || a.action.startsWith('create'))) {
+    return `Create Notion page: ${String(input.title || 'Untitled')}`;
   }
   if (a.tool === 'notion') {
     return `Notion: ${String(input.title || a.action)}`;
@@ -68,6 +90,162 @@ function humanTitle(a: ApprovalRequest): string {
     return `Email ${String(input.to || 'recipient')}: ${String(input.subject || 'draft')}`;
   }
   return `${a.tool}.${a.action}`;
+}
+
+function timelineState(a: ApprovalRequest): TimelineState {
+  if (a.status === 'rejected') return 'rejected';
+  if (a.status === 'expired') return 'expired';
+  if (a.status === 'approved') {
+    const failed =
+      a.executionStatus === 'failed' ||
+      a.executionResult?.ok === false ||
+      Boolean(a.executionResult?.error && !a.executionResult?.ok);
+    if (failed) return 'failed';
+    const verified =
+      a.executionVerified === true ||
+      a.executionStatus === 'completed' ||
+      (a.executionResult?.ok === true && !a.executionResult?.mocked);
+    if (verified) return 'verified';
+    return 'pending_execution';
+  }
+  return 'pending_execution';
+}
+
+function timelineMeta(state: TimelineState): {
+  label: string;
+  tone: string;
+  Icon: typeof CheckCircle2;
+} {
+  switch (state) {
+    case 'verified':
+      return {
+        label: 'Approved · verified',
+        tone: 'border-emerald-400/25 bg-emerald-500/10 text-emerald-300',
+        Icon: CheckCircle2,
+      };
+    case 'failed':
+      return {
+        label: 'Approved · failed',
+        tone: 'border-amber-400/25 bg-amber-500/10 text-amber-200',
+        Icon: ShieldAlert,
+      };
+    case 'rejected':
+      return {
+        label: 'Rejected',
+        tone: 'border-rose-400/25 bg-rose-500/10 text-rose-300',
+        Icon: XCircle,
+      };
+    case 'expired':
+      return {
+        label: 'Expired',
+        tone: 'border-white/10 bg-white/5 text-neutral-400',
+        Icon: Clock,
+      };
+    default:
+      return {
+        label: 'Pending execution',
+        tone: 'border-sky-400/25 bg-sky-500/10 text-sky-200',
+        Icon: Loader2,
+      };
+  }
+}
+
+/** Human-readable artifact from a verified execution (key, url, channel). */
+function executionArtifacts(
+  approval: Pick<ApprovalRequest, 'tool' | 'action' | 'input'>,
+  result?: ToolCallResult | null
+): { primary?: string; url?: string; detail?: string } {
+  const o = asOutput(result);
+  const input = approval.input || {};
+
+  if (approval.tool === 'jira') {
+    const key = String(o.key || o.issueKey || input.issueKey || input.key || '').trim();
+    const url = typeof o.url === 'string' ? o.url : undefined;
+    if (approval.action === 'createIssue' && key) {
+      return { primary: key, url, detail: url ? `Opened in Jira` : 'Issue created in Jira' };
+    }
+    if (key) return { primary: key, url, detail: url ? 'View in Jira' : undefined };
+  }
+
+  if (approval.tool === 'notion') {
+    const url = typeof o.url === 'string' ? o.url : undefined;
+    const title = String(o.title || input.title || '').trim();
+    const id = String(o.id || '').trim();
+    if (url) {
+      return {
+        primary: title || 'Notion page',
+        url,
+        detail: 'Open in Notion',
+      };
+    }
+    if (id) return { primary: title || id, detail: `Page id ${id.slice(0, 8)}…` };
+  }
+
+  if (approval.tool === 'slack') {
+    const channel = slackChannelLabel(o.channelName || o.channel, input.channel);
+    const ts = o.ts ? String(o.ts) : undefined;
+    return {
+      primary: channel,
+      detail: ts ? `Posted · ts ${ts}` : 'Message posted',
+    };
+  }
+
+  const key = o.key || o.id || o.ts;
+  const url = typeof o.url === 'string' ? o.url : undefined;
+  if (key || url) {
+    return { primary: key ? String(key) : undefined, url, detail: url ? 'Open result' : undefined };
+  }
+  return {};
+}
+
+/** Flash / chat success copy after Approve & run. */
+function successFlashMessage(approval: ApprovalRequest, result?: ToolCallResult | null): string {
+  const arts = executionArtifacts(approval, result);
+  const title = humanTitle(approval);
+
+  if (approval.tool === 'jira' && approval.action === 'createIssue' && arts.primary) {
+    return arts.url
+      ? `Created Jira ${arts.primary} — ${arts.url}`
+      : `Created Jira issue ${arts.primary}`;
+  }
+  if (approval.tool === 'jira' && arts.primary) {
+    return arts.url
+      ? `Jira ${arts.primary} updated — ${arts.url}`
+      : `Jira ${arts.primary} updated`;
+  }
+  if (approval.tool === 'notion' && (approval.action === 'createPage' || approval.action.startsWith('create'))) {
+    if (arts.url) {
+      return arts.primary && arts.primary !== 'Notion page'
+        ? `Created Notion page “${arts.primary}” — ${arts.url}`
+        : `Created Notion page — ${arts.url}`;
+    }
+    return `Created Notion page${arts.primary ? `: ${arts.primary}` : ''}`;
+  }
+  if (
+    approval.tool === 'slack' &&
+    (approval.action === 'postMessage' || approval.action === 'postMessageExternalChannel')
+  ) {
+    return `Posted to Slack ${arts.primary || slackChannelLabel(approval.input?.channel)}`;
+  }
+  if (arts.primary && arts.url) return `Approved and ran: ${title} → ${arts.primary} — ${arts.url}`;
+  if (arts.primary) return `Approved and ran: ${title} → ${arts.primary}`;
+  return `Approved and executed ${approval.tool}.${approval.action} (verified).`;
+}
+
+function stepResultLabel(approval: ApprovalRequest, result?: ToolCallResult | null): string {
+  const arts = executionArtifacts(approval, result);
+  if (approval.tool === 'jira' && arts.primary) return `✓ ${arts.primary}`;
+  if (approval.tool === 'notion' && arts.url) return `✓ page created`;
+  if (approval.tool === 'notion' && arts.primary) return `✓ ${arts.primary}`;
+  if (approval.tool === 'slack' && arts.primary) return `✓ ${arts.primary}`;
+  if (arts.primary) return `✓ ${arts.primary}`;
+  return '✓ verified';
+}
+
+function timelineSortTime(a: ApprovalRequest): number {
+  const t = a.executedAt || a.createdAt;
+  const n = t ? Date.parse(t) : 0;
+  return Number.isFinite(n) ? n : 0;
 }
 
 function diffRows(input: Record<string, unknown>): Array<{ label: string; value: string }> {
@@ -138,14 +316,26 @@ export default function ApprovalsPage() {
 
   const pending = useMemo(() => approvals.filter((a) => a.status === 'pending'), [approvals]);
   const decided = useMemo(() => approvals.filter((a) => a.status !== 'pending'), [approvals]);
+  const timeline = useMemo(
+    () => [...decided].sort((a, b) => timelineSortTime(b) - timelineSortTime(a)),
+    [decided]
+  );
   const failedExec = useMemo(
-    () =>
-      decided.filter(
-        (a) => a.status === 'approved' && (a.executionStatus === 'failed' || a.executionResult?.ok === false)
-      ),
+    () => decided.filter((a) => timelineState(a) === 'failed'),
     [decided]
   );
   const highCount = pending.filter((a) => a.riskLevel === 'high').length;
+  const timelineCounts = useMemo(() => {
+    const counts = { verified: 0, failed: 0, rejected: 0, pending_execution: 0 };
+    for (const a of decided) {
+      const s = timelineState(a);
+      if (s === 'verified') counts.verified += 1;
+      else if (s === 'failed') counts.failed += 1;
+      else if (s === 'rejected') counts.rejected += 1;
+      else if (s === 'pending_execution') counts.pending_execution += 1;
+    }
+    return counts;
+  }, [decided]);
 
   async function decide(id: string, decision: 'approved' | 'rejected') {
     if (decidingId) return;
@@ -156,16 +346,11 @@ export default function ApprovalsPage() {
       if (decision === 'approved') {
         const out = res.executionResult;
         if (out?.ok && !out.mocked) {
-          const o = (out.output || {}) as Record<string, unknown>;
-          const key = o.key || o.id || o.ts;
           setStepResults((prev) => ({
             ...prev,
-            [id]: key ? `✓ ${String(key)}` : '✓ verified',
+            [id]: stepResultLabel(res.approval, out),
           }));
-          const url = o.url;
-          const msg = key
-            ? `Approved and created ${key}${url ? ` — ${url}` : ''}`
-            : `Approved and executed ${res.approval.tool}.${res.approval.action} (verified).`;
+          const msg = successFlashMessage(res.approval, out);
           const remaining = pending.filter((p) => p.id !== id);
           if (remaining.length === 0) {
             window.sessionStorage.setItem('nexora:approvalFlash', msg);
@@ -208,13 +393,13 @@ export default function ApprovalsPage() {
         const res = await api.decideApproval(a.id, 'approved');
         const out = res.executionResult;
         if (out?.ok && !out.mocked) {
-          const key = (out.output as any)?.key || (out.output as any)?.id || 'ok';
-          lines.push(`✓ ${a.tool}.${a.action} → ${key}`);
-          setStepResults((prev) => ({ ...prev, [a.id]: `✓ ${key}` }));
+          const flash = successFlashMessage(res.approval, out);
+          lines.push(`✓ ${flash}`);
+          setStepResults((prev) => ({ ...prev, [a.id]: stepResultLabel(res.approval, out) }));
         } else {
-          lines.push(`✗ ${a.tool}.${a.action} → ${out?.error || 'failed'}`);
+          lines.push(`✗ ${humanTitle(a)} → ${out?.error || 'failed'}`);
           setStepResults((prev) => ({ ...prev, [a.id]: `✗ ${out?.error || 'failed'}` }));
-          setError(`Stopped after failure on ${a.tool}.${a.action}. Remaining steps not run.`);
+          setError(`Stopped after failure on ${humanTitle(a)}. Remaining steps not run.`);
           break;
         }
       } catch (err) {
@@ -264,9 +449,12 @@ export default function ApprovalsPage() {
               </div>
               <div className="col-span-2 rounded-[18px] border border-white/8 bg-black/20 px-4 py-3 text-xs text-neutral-400">
                 <span className="inline-flex items-center gap-1.5 text-neutral-300">
-                  <History size={12} /> Audit trail
+                  <History size={12} /> Action Timeline
                 </span>
-                <div className="mt-1">{decided.length} decided action{decided.length === 1 ? '' : 's'} logged</div>
+                <div className="mt-1">
+                  {decided.length} decided action{decided.length === 1 ? '' : 's'}
+                  {timelineCounts.verified > 0 ? ` · ${timelineCounts.verified} verified` : ''}
+                </div>
               </div>
             </div>
           </div>
@@ -297,7 +485,7 @@ export default function ApprovalsPage() {
               tab === 'audit' ? 'bg-accent text-[#04101f]' : 'text-neutral-400 hover:text-white'
             )}
           >
-            Audit ({decided.length})
+            Timeline ({decided.length})
           </button>
         </div>
         {tab === 'pending' && pending.length > 1 && (
@@ -498,43 +686,191 @@ export default function ApprovalsPage() {
       )}
 
       {tab === 'audit' && (
-        <div className="space-y-3">
+        <div className="space-y-5">
           {decided.length === 0 && !loading && (
-            <GlassCard className="p-6 text-sm text-neutral-400" hoverLift={false}>
-              No decided actions yet. After you Approve or Reject, they appear here as your audit trail.
-            </GlassCard>
-          )}
-          {decided.map((a) => (
-            <div
-              key={a.id}
-              className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/8 bg-black/20 px-5 py-3.5 text-sm"
-            >
-              <div className="min-w-0">
-                <div className="font-medium text-neutral-200">{humanTitle(a)}</div>
-                <div className="mt-1 text-[11px] text-neutral-500">
-                  {a.tool}.{a.action}
-                  {a.createdAt ? ` · requested ${new Date(a.createdAt).toLocaleString()}` : ''}
-                  {a.executedAt ? ` · executed ${new Date(a.executedAt).toLocaleString()}` : ''}
-                  {a.executionStatus ? ` · execution: ${a.executionStatus}` : ''}
-                  {a.executionVerified ? ' · verified' : ''}
-                  {(a.executionResult?.output as any)?.key
-                    ? ` · ${(a.executionResult!.output as any).key}`
-                    : (a.executionResult?.output as any)?.id
-                      ? ` · ${(a.executionResult!.output as any).id}`
-                      : ''}
+            <GlassCard className="p-6" hoverLift={false}>
+              <div className="flex items-start gap-3">
+                <History className="mt-0.5 text-accent2" size={18} />
+                <div>
+                  <div className="text-sm font-medium text-white">Action Timeline is empty</div>
+                  <p className="mt-2 text-sm leading-6 text-neutral-400">
+                    Every Approve &amp; run and Reject lands here as a durable memory of what actually happened —
+                    keys, URLs, and failure reasons included.
+                  </p>
                 </div>
               </div>
-              <span
-                className={cn(
-                  'inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide',
-                  a.status === 'approved' ? 'text-emerald-400' : 'text-rose-400'
+            </GlassCard>
+          )}
+
+          {decided.length > 0 && (
+            <>
+              <div className="flex flex-wrap items-center gap-2 text-[11px] text-neutral-500">
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-black/25 px-3 py-1 text-neutral-300">
+                  <History size={11} /> Action Timeline · newest first
+                </span>
+                {timelineCounts.verified > 0 && (
+                  <span className="rounded-full border border-emerald-400/20 bg-emerald-500/10 px-3 py-1 text-emerald-300">
+                    {timelineCounts.verified} verified
+                  </span>
                 )}
-              >
-                {a.status === 'approved' ? <CheckCircle2 size={13} /> : <XCircle size={13} />}
-                {a.status}
-              </span>
-            </div>
-          ))}
+                {timelineCounts.failed > 0 && (
+                  <span className="rounded-full border border-amber-400/20 bg-amber-500/10 px-3 py-1 text-amber-200">
+                    {timelineCounts.failed} failed
+                  </span>
+                )}
+                {timelineCounts.rejected > 0 && (
+                  <span className="rounded-full border border-rose-400/20 bg-rose-500/10 px-3 py-1 text-rose-300">
+                    {timelineCounts.rejected} rejected
+                  </span>
+                )}
+                {timelineCounts.pending_execution > 0 && (
+                  <span className="rounded-full border border-sky-400/20 bg-sky-500/10 px-3 py-1 text-sky-200">
+                    {timelineCounts.pending_execution} pending execution
+                  </span>
+                )}
+              </div>
+
+              <div className="relative space-y-0 pl-2">
+                <div
+                  className="pointer-events-none absolute bottom-3 left-[21px] top-3 w-px bg-gradient-to-b from-white/20 via-white/10 to-transparent"
+                  aria-hidden
+                />
+                {timeline.map((a, idx) => {
+                  const state = timelineState(a);
+                  const meta = timelineMeta(state);
+                  const Icon = meta.Icon;
+                  const arts = executionArtifacts(a, a.executionResult);
+                  const when = a.executedAt || a.createdAt;
+                  const errorText =
+                    state === 'failed'
+                      ? a.executionResult?.error ||
+                        'Execution failed — fix connection/scopes, then re-ask in Chat to create a new approval'
+                      : null;
+
+                  return (
+                    <motion.div
+                      key={a.id}
+                      initial={{ opacity: 0, x: -8 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ delay: Math.min(idx * 0.04, 0.32) }}
+                      className="relative flex gap-4 pb-5 last:pb-0"
+                    >
+                      <div className="relative z-[1] flex w-8 shrink-0 justify-center pt-4">
+                        <span
+                          className={cn(
+                            'flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-[#0b1220] shadow-[0_0_0_4px_rgba(4,10,20,0.9)]',
+                            meta.tone
+                          )}
+                        >
+                          <Icon size={14} className={state === 'pending_execution' ? 'animate-spin' : undefined} />
+                        </span>
+                      </div>
+
+                      <div className="glass min-w-0 flex-1 rounded-[22px] p-5">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="text-base font-semibold text-white">{humanTitle(a)}</div>
+                            <div className="mt-1 code text-[11px] text-neutral-500">
+                              {a.tool}.{a.action}
+                            </div>
+                          </div>
+                          <span
+                            className={cn(
+                              'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide',
+                              meta.tone
+                            )}
+                          >
+                            {meta.label}
+                          </span>
+                        </div>
+
+                        <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-neutral-500">
+                          {when && (
+                            <span className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-black/25 px-2.5 py-1">
+                              <Clock size={11} />
+                              {a.executedAt ? 'Executed' : 'Decided'} {new Date(when).toLocaleString()}
+                            </span>
+                          )}
+                          {a.createdAt && a.executedAt && (
+                            <span className="rounded-full border border-white/8 bg-black/20 px-2.5 py-1">
+                              Requested {new Date(a.createdAt).toLocaleString()}
+                            </span>
+                          )}
+                          {a.riskLevel && (
+                            <span
+                              className="rounded-full border px-2.5 py-1 capitalize"
+                              style={{
+                                borderColor: `${riskColor[a.riskLevel] ?? '#5b9dff'}44`,
+                                color: riskColor[a.riskLevel] ?? '#5b9dff',
+                                background: `${riskColor[a.riskLevel] ?? '#5b9dff'}14`,
+                              }}
+                            >
+                              {a.riskLevel} risk
+                            </span>
+                          )}
+                        </div>
+
+                        {state === 'verified' && (arts.primary || arts.url) && (
+                          <div className="mt-4 rounded-2xl border border-emerald-400/15 bg-emerald-500/5 px-4 py-3">
+                            <div className="text-[10px] uppercase tracking-[0.18em] text-emerald-400/70">Result</div>
+                            <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+                              {arts.primary && (
+                                <span className="text-sm font-medium text-emerald-100">{arts.primary}</span>
+                              )}
+                              {arts.detail && !arts.url && (
+                                <span className="text-xs text-emerald-200/60">{arts.detail}</span>
+                              )}
+                              {arts.url && (
+                                <a
+                                  href={arts.url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="inline-flex items-center gap-1 text-xs font-medium text-accent hover:underline"
+                                >
+                                  {arts.detail || 'Open'} <ExternalLink size={11} />
+                                </a>
+                              )}
+                            </div>
+                            {arts.url && (
+                              <div className="mt-1 truncate text-[11px] text-neutral-500">{arts.url}</div>
+                            )}
+                          </div>
+                        )}
+
+                        {state === 'failed' && errorText && (
+                          <div className="mt-4 rounded-2xl border border-amber-400/20 bg-amber-500/5 px-4 py-3">
+                            <div className="text-[10px] uppercase tracking-[0.18em] text-amber-400/80">
+                              Execution error
+                            </div>
+                            <p className="mt-1.5 text-sm leading-6 text-amber-100/90">{errorText}</p>
+                            <Link
+                              href="/app/chat"
+                              className="mt-3 inline-flex rounded-full border border-amber-400/30 bg-amber-500/10 px-3 py-1.5 text-[11px] font-semibold text-amber-100"
+                            >
+                              Return to Chat to retry
+                            </Link>
+                          </div>
+                        )}
+
+                        {state === 'rejected' && (
+                          <p className="mt-4 text-xs leading-5 text-neutral-500">
+                            This action was blocked and never executed against the live tool.
+                          </p>
+                        )}
+
+                        {state === 'pending_execution' && (
+                          <p className="mt-4 text-xs leading-5 text-sky-200/70">
+                            Approved, but a verified execution result has not landed yet. Refresh shortly or check
+                            Integrations if this stalls.
+                          </p>
+                        )}
+                      </div>
+                    </motion.div>
+                  );
+                })}
+              </div>
+            </>
+          )}
         </div>
       )}
 

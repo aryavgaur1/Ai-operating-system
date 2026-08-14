@@ -11,7 +11,7 @@ import { chatRouter } from './routes/chat';
 import { approvalsRouter } from './routes/approvals';
 import { integrationsRouter } from './routes/integrations';
 import { webhooksRouter } from './routes/webhooks';
-import { slackRouter, slackEventsRouter, slackCommandsRouter, slackInteractionsRouter } from './routes/slack';
+import { slackRouter, slackEventsRouter } from './routes/slack';
 import { authRouter } from './routes/auth';
 import { adminRouter } from './routes/admin';
 import { oauthNotionRouter } from './routes/oauth-notion';
@@ -19,7 +19,6 @@ import { oauthSlackRouter } from './routes/oauth-slack';
 import { oauthJiraRouter } from './routes/oauth-jira';
 import { conversationsRouter } from './routes/conversations';
 import { dashboardRouter } from './routes/dashboard';
-import { marketingChatbotRouter, adminChatbotRouter } from './routes/marketing-chatbot';
 import { errorMiddleware } from './lib/errors';
 import { isLiveMode } from '@enterprise-ai-os/connectors';
 
@@ -81,15 +80,6 @@ app.use(
     },
   })
 );
-// Slack slash commands + interactive buttons post form-urlencoded
-app.use(
-  express.urlencoded({
-    extended: true,
-    verify: (req, _res, buf) => {
-      (req as any).rawBody = buf;
-    },
-  })
-);
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -103,8 +93,6 @@ const authLimiter = rateLimit({
 // Public webhooks / events
 app.use('/webhooks', webhooksRouter);
 app.use('/integrations/slack/events', slackEventsRouter);
-app.use('/integrations/slack/commands', slackCommandsRouter);
-app.use('/integrations/slack/interactions', slackInteractionsRouter);
 
 // Auth (rate-limited)
 app.use('/auth', authLimiter, authRouter);
@@ -112,10 +100,19 @@ app.use('/oauth/notion', oauthNotionRouter);
 app.use('/oauth/slack', oauthSlackRouter);
 app.use('/oauth/jira', oauthJiraRouter);
 
-app.get('/health', (_req, res) => res.json({ ok: true, service: 'enterprise-ai-os-api', saas: SAAS_MODE }));
-
-// Public marketing assistant (same AI Service, tools disabled)
-app.use('/marketing-chatbot', marketingChatbotRouter);
+app.get('/health', (_req, res) =>
+  res.json({
+    ok: true,
+    service: 'enterprise-ai-os-api',
+    saas: SAAS_MODE,
+    commit:
+      process.env.RAILWAY_GIT_COMMIT_SHA ||
+      process.env.GIT_COMMIT_SHA ||
+      process.env.COMMIT_REF ||
+      null,
+    deployedAt: process.env.RAILWAY_DEPLOYMENT_ID || null,
+  })
+);
 
 /**
  * One-shot founder bootstrap: attach platform NOTION_API_KEY to founder user rows.
@@ -186,7 +183,6 @@ app.use('/integrations/slack', slackRouter);
 app.use('/integrations', integrationsRouter);
 app.use('/conversations', conversationsRouter);
 app.use('/dashboard', dashboardRouter);
-app.use('/admin/chatbot', adminChatbotRouter);
 app.use('/admin', adminRouter);
 
 app.use(errorMiddleware);

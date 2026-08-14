@@ -24,11 +24,6 @@ import {
   listPins,
   searchFiles,
   findUsersByRole,
-  updateMessage,
-  deleteMessage,
-  getPermalink,
-  joinChannel,
-  openDm,
 } from './slackService';
 import * as intelligence from './slackIntelligence';
 
@@ -101,11 +96,6 @@ const LIVE_ACTIONS = [
   'findDecision',
   'findOwner',
   'generateMeetingNotes',
-  'updateMessage',
-  'deleteMessage',
-  'getPermalink',
-  'joinChannel',
-  'openDm',
 ];
 
 function workspaceUrl(channelId: string, ts?: string): string {
@@ -286,22 +276,50 @@ class SlackConnector implements ToolConnector {
       try {
         switch (action) {
           case 'postMessage': {
-            const requestedChannel = String(input.channel ?? '');
+            const requestedChannel = String(input.channel ?? '').trim();
+            const text = String(input.text ?? '').trim();
+            if (!requestedChannel) {
+              return failResult(
+                action,
+                'Slack post needs a channel. Re-ask like: Post to #ops on Slack: standup summary ready'
+              );
+            }
+            if (!text) {
+              return failResult(
+                action,
+                'Slack post needs message text. Re-ask with the exact words to post after the channel.'
+              );
+            }
             const result = await postMessage({
               channel: requestedChannel,
-              text: String(input.text ?? ''),
+              text,
               threadTs: input.threadTs as string | undefined,
             });
-            return okResult(action, { ...result, channelName: requestedChannel.replace(/^#/, '') });
+            return okResult(action, {
+              ...result,
+              channelName: requestedChannel.replace(/^#/, ''),
+              textPreview: text.slice(0, 200),
+            });
           }
           case 'postMessageExternalChannel': {
-            const requestedChannel = String(input.channel ?? '');
+            const requestedChannel = String(input.channel ?? '').trim();
+            const text = String(input.text ?? '').trim();
+            if (!requestedChannel) {
+              return failResult(action, 'External Slack post needs a channel name or ID.');
+            }
+            if (!text) {
+              return failResult(action, 'External Slack post needs message text.');
+            }
             const result = await postExternalMessage({
               channel: requestedChannel,
-              text: String(input.text ?? ''),
+              text,
               threadTs: input.threadTs as string | undefined,
             });
-            return okResult(action, { ...result, channelName: requestedChannel.replace(/^#/, '') });
+            return okResult(action, {
+              ...result,
+              channelName: requestedChannel.replace(/^#/, ''),
+              textPreview: text.slice(0, 200),
+            });
           }
           case 'listChannels':
             return okResult(action, { channels: await listChannels(Number(input.limit ?? 200)) });
@@ -575,41 +593,6 @@ class SlackConnector implements ToolConnector {
               await intelligence.generateMeetingNotes({
                 channel: String(input.channel ?? 'general'),
                 limit: Number(input.limit ?? 50),
-              })
-            );
-          case 'updateMessage':
-            return okResult(
-              action,
-              await updateMessage({
-                channel: String(input.channel ?? ''),
-                ts: String(input.ts ?? input.timestamp ?? ''),
-                text: String(input.text ?? ''),
-              })
-            );
-          case 'deleteMessage':
-            return okResult(
-              action,
-              await deleteMessage({
-                channel: String(input.channel ?? ''),
-                ts: String(input.ts ?? input.timestamp ?? ''),
-              })
-            );
-          case 'getPermalink':
-            return okResult(
-              action,
-              await getPermalink({
-                channel: String(input.channel ?? ''),
-                ts: String(input.ts ?? input.timestamp ?? ''),
-              })
-            );
-          case 'joinChannel':
-            return okResult(action, await joinChannel({ channel: String(input.channel ?? '') }));
-          case 'openDm':
-            return okResult(
-              action,
-              await openDm({
-                users: (input.users as string | string[]) ?? (input.user as string) ?? '',
-                text: input.text as string | undefined,
               })
             );
           default:
