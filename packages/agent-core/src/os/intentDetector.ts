@@ -101,9 +101,10 @@ const RULES: IntentRule[] = [
     confidence: 0.94,
     rationale: 'Launch / war-room style project kickoff',
     test: (q) =>
-      /\b(war\s*room|launch\s+room|launch\s+war)\b/.test(q) ||
-      (/\blaunch\b/.test(q) && /\b(project|version|atlas|v\d)\b/.test(q)) ||
-      (/\b(spin\s*up|kick\s*off)\b/.test(q) && /\b(project|launch|room)\b/.test(q)),
+      !isExplicitJiraCreate(q) &&
+      (/\b(war\s*room|launch\s+room|launch\s+war)\b/.test(q) ||
+        (/\blaunch\b/.test(q) && /\b(project|version|atlas|v\d)\b/.test(q)) ||
+        (/\b(spin\s*up|kick\s*off)\b/.test(q) && /\b(project|launch|room)\b/.test(q))),
     entities: projectEntity,
   },
   {
@@ -191,6 +192,33 @@ const RULES: IntentRule[] = [
   },
 ];
 
+/**
+ * Explicit "create/open a Jira ticket|issue|task" — must never become Slack war room / follow-up.
+ */
+export function isExplicitJiraCreate(q: string): boolean {
+  const text = q.toLowerCase();
+  if (/\b(slack|notion|gmail|email)\b/.test(text) && !/\bjira\b/.test(text)) {
+    // "create a ticket on slack" is not Jira
+    if (!/\b(ticket|issue|bug|task)\b/.test(text)) return false;
+  }
+  if (/\bjira\b/.test(text) && /\b(create|open|file|log|track)\b/.test(text) && /\b(ticket|issue|task|bug|risk)\b/.test(text)) {
+    return true;
+  }
+  // "create a jira ticket…" already covered; also "create a ticket to track…" without other tools
+  if (
+    /\b(create|open|file|log)\b/.test(text) &&
+    /\b(ticket|issue)\b/.test(text) &&
+    !/\b(slack|notion|gmail|email|war\s*room|incident|channel)\b/.test(text)
+  ) {
+    return true;
+  }
+  // "create a vendor jira ticket" / "jira ticket for vendor"
+  if (/\bjira\b/.test(text) && /\b(ticket|issue|task|bug)\b/.test(text) && /\b(create|open|file|log|track|new)\b/.test(text)) {
+    return true;
+  }
+  return false;
+}
+
 export function detectOsIntent(query: string): OsIntent {
   const q = query.toLowerCase();
 
@@ -205,29 +233,12 @@ export function detectOsIntent(query: string): OsIntent {
     };
   }
 
-  // Explicit Jira create/track beats reminder_workflow (which used to steal "…follow-up")
-  if (
-    /\bjira\b/.test(q) &&
-    /\b(create|open|file|log|track)\b/.test(q) &&
-    /\b(ticket|issue|task|bug|risk)\b/.test(q)
-  ) {
+  // Explicit Jira create/track beats war-room / reminder / follow-up false positives
+  if (isExplicitJiraCreate(query)) {
     return {
       kind: 'simple_action',
-      confidence: 0.97,
+      confidence: 0.99,
       rationale: 'Explicit Jira ticket/issue create — queue for Approvals',
-      legacyIntent: 'action',
-      entities: {},
-    };
-  }
-  if (
-    /\b(create|open|file|log)\b/.test(q) &&
-    /\b(ticket|issue)\b/.test(q) &&
-    !/\b(slack|notion|gmail|email)\b/.test(q)
-  ) {
-    return {
-      kind: 'simple_action',
-      confidence: 0.94,
-      rationale: 'Ticket/issue create — treat as Jira action for Approvals',
       legacyIntent: 'action',
       entities: {},
     };

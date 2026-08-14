@@ -1,4 +1,4 @@
-export { detectOsIntent, isExplicitSlackCommand, isExplicitNotionCommand } from './intentDetector';
+export { detectOsIntent, isExplicitSlackCommand, isExplicitNotionCommand, isExplicitJiraCreate } from './intentDetector';
 export { planWorkflow } from './workflowPlanner';
 export type { WorkflowPlan } from './workflowPlanner';
 export { executePlanResilient } from './resilientExecutor';

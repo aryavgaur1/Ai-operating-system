@@ -5,7 +5,7 @@ import {
   DEFAULT_APPROVAL_POLICY,
 } from '@enterprise-ai-os/shared';
 import type { LLMClient } from './llmClient';
-import { isExplicitNotionCommand, isExplicitSlackCommand } from './os/intentDetector';
+import { isExplicitNotionCommand, isExplicitSlackCommand, isExplicitJiraCreate } from './os/intentDetector';
 
 // ============================================================
 // LLM Planner — the "reasoning engine" box in the architecture
@@ -250,8 +250,7 @@ const TOOL_RULES: ToolRule[] = [
       'blocked',
       'unanswered',
       'complaint',
-      'follow up',
-      'follow-up',
+      'pending approval nudge',
       'action item',
       'canvas',
       'bookmark',
@@ -266,6 +265,8 @@ const TOOL_RULES: ToolRule[] = [
     buildInput: (query) => parseSlackActionQuery(query),
     match: (query: string) => {
       const lower = query.toLowerCase();
+      // Never steal explicit Jira ticket creates
+      if (isExplicitJiraCreate(query)) return false;
       if (/\b(teams|discord|whatsapp)\b/.test(lower) && !/\bslack\b/.test(lower)) return false;
       if (isExplicitSlackCommand(query)) return true;
       if (/\b(create|make)\b/.test(lower) && /\b(channel|chaanel|chanel|chnnel|war\s*room|incident)\b/.test(lower))
@@ -304,6 +305,9 @@ const TOOL_RULES: ToolRule[] = [
 
 function parseSlackActionQuery(query: string): Record<string, unknown> {
   const lower = query.toLowerCase();
+  if (isExplicitJiraCreate(query)) {
+    return { action: 'postMessage', channel: 'general', text: '', _skip: true };
+  }
 
   const quoted =
     query.match(/["“]([^"”]+)["”]/)?.[1] ??
@@ -717,6 +721,37 @@ function parseNotionActionQuery(query: string) {
 function proposeToolCalls(query: string): ToolCall[] {
   const lower = query.toLowerCase();
 
+  // HARD RULE: explicit Jira ticket create never stacks Slack war-room / follow-up tools
+  if (isExplicitJiraCreate(query)) {
+    const requiresApproval =
+      isHighConsequence('jira', 'createIssue') &&
+      !policyAllowsAutoRun(DEFAULT_APPROVAL_POLICY, 'jira', 'createIssue');
+    const wantsRisk = /\brisk\b/i.test(query);
+    const titled =
+      query.match(/(?:titled|called|named)\s+["']?([^"'\n.]+)["']?/i)?.[1]?.trim() ||
+      query.match(/create (?:a )?(?:jira )?(?:ticket|issue|task|risk)(?: for| about| to)?\s+(.+)/i)?.[1]?.trim() ||
+      query.match(/\b(?:ticket|issue|task)\s+to\s+(.+)/i)?.[1]?.trim();
+    const summary = (titled || query.replace(/\bjira\b/gi, '').replace(/\b(create|a|ticket|issue|task|to|track)\b/gi, ' ').replace(/\s+/g, ' ').trim() || query).slice(0, 100);
+    const projectFromQuery =
+      query.match(/\b(?:in|for)\s+project\s+([A-Z][A-Z0-9_]{1,10})\b/i)?.[1] ||
+      query.match(/\bproject\s+([A-Z][A-Z0-9_]{1,10})\b/i)?.[1];
+    const project = (projectFromQuery || process.env.JIRA_DEFAULT_PROJECT || '').trim().toUpperCase();
+    return [
+      {
+        tool: 'jira',
+        action: 'createIssue',
+        input: {
+          ...(project ? { project } : {}),
+          summary: wantsRisk && !/\brisk\b/i.test(summary) ? `Risk: ${summary}`.slice(0, 255) : summary.slice(0, 255),
+          description: query,
+          issueType: wantsRisk ? 'Risk' : 'Task',
+        },
+        riskLevel: requiresApproval ? 'high' : 'low',
+        requiresApproval,
+      },
+    ];
+  }
+
   // Multi-tool playbook: incident workspace → Slack + Jira + Notion (+ notify)
   if (
     /\b(incident\s+workspace|prepare\s+an?\s+incident|create\s+an?\s+incident\s+workspace)\b/i.test(query) ||
@@ -782,6 +817,7 @@ function proposeToolCalls(query: string): ToolCall[] {
     if (!hitKeyword && !hitMatch) continue;
 
     const input = rule.buildInput(query);
+    if ((input as any)._skip) continue;
     const action = typeof rule.action === 'function' ? rule.action(query) : (input.action as string | undefined) ?? rule.action;
     const requiresApproval =
       isHighConsequence(rule.tool, action) &&

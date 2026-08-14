@@ -10,6 +10,7 @@ import {
   executePlanResilient,
   rememberFromExecution,
   logWorkflow,
+  isExplicitJiraCreate,
 } from './os';
 
 // ============================================================
@@ -175,16 +176,17 @@ export async function runAgentTurn(
   const workflow = planWorkflow(query, osIntent);
   let plan: AgentPlan;
 
-  // Hard override: never let reminder/follow-up steal an explicit Jira ticket create.
-  const looksLikeJiraCreate =
-    /\b(create|open|file|log|track)\b/i.test(query) &&
-    /\b(ticket|issue|task|bug|risk)\b/i.test(query) &&
-    (/\bjira\b/i.test(query) || !/\b(slack|notion|gmail|email)\b/i.test(query));
-  const workflowIsFollowUpSteal =
-    workflow.toolCalls.length > 0 &&
-    workflow.toolCalls.every((c) => c.tool === 'slack' && c.action === 'followUpPendingReplies');
+  // HARD RULE: explicit Jira ticket create never runs Slack war-room / incident / follow-up workflows
+  const looksLikeJiraCreate = isExplicitJiraCreate(query);
+  if (looksLikeJiraCreate && workflow.toolCalls.length > 0) {
+    workflow.reasoning.push(
+      'Override: explicit Jira ticket create — discarding multi-step Slack workflow (war room / follow-up / incident).'
+    );
+    workflow.toolCalls = [];
+    workflow.planSteps = [];
+  }
 
-  if (workflow.toolCalls.length > 0 && !(looksLikeJiraCreate && workflowIsFollowUpSteal)) {
+  if (workflow.toolCalls.length > 0) {
     const draft = await llm.complete([
       {
         role: 'system',
@@ -203,15 +205,17 @@ export async function runAgentTurn(
       responseDraft: draft,
     };
   } else {
-    if (looksLikeJiraCreate && workflowIsFollowUpSteal) {
-      workflow.reasoning.push(
-        'Override: Jira ticket create detected — ignoring Slack followUpPendingReplies false positive.'
-      );
-      workflow.toolCalls = [];
-      workflow.planSteps = [];
-    }
     // Legacy single-action path (still goes through resilient executor)
     plan = await buildPlan(query, legacyIntent.intent === 'action' ? legacyIntent : { ...legacyIntent, intent: osIntent.legacyIntent }, context, llm);
+    // Belt-and-suspenders: if somehow Slack war room slipped in, strip it for Jira creates
+    if (looksLikeJiraCreate) {
+      plan.toolCalls = plan.toolCalls.filter(
+        (c) => !(c.tool === 'slack' && (c.action === 'createWarRoom' || c.action === 'createIncident' || c.action === 'followUpPendingReplies'))
+      );
+      if (plan.toolCalls.length === 0 || !plan.toolCalls.some((c) => c.tool === 'jira' && c.action === 'createIssue')) {
+        plan = await buildPlan(query, { intent: 'action', confidence: 0.99, rationale: 'Forced Jira createIssue' }, context, llm);
+      }
+    }
     workflow.reasoning.push('Legacy planner selected tool calls.');
     workflow.planSteps.push(...plan.toolCalls.map((c) => `${c.tool}.${c.action}`));
   }
