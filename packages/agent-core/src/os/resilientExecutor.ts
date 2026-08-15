@@ -16,6 +16,7 @@ import {
   verifyToolResult,
   withBackoff,
 } from './preflight';
+import { stripCapabilityMeta, validateCapabilityExecution } from './capabilityRegistry';
 
 // ============================================================
 // STEPS 5–7 — Self-healing execution + verification
@@ -50,6 +51,32 @@ async function executeOne(call: ToolCall, maxAttempts = 3): Promise<{ result: To
   let current = call;
   const startedAll = Date.now();
 
+  // Hard capability boundary — application-owned, not prompt trust
+  const gate = validateCapabilityExecution(current);
+  if (!gate.ok) {
+    const result: ToolCallResult = {
+      tool: current.tool,
+      action: current.action,
+      ok: false,
+      mocked: false,
+      error: gate.message,
+    };
+    return {
+      result,
+      step: {
+        stepId,
+        tool: current.tool,
+        action: current.action,
+        status: 'fatal_failure',
+        attempts: 1,
+        durationMs: Date.now() - startedAll,
+        error: `${gate.code}: ${gate.message}`,
+        healActions: ['capability_gate_rejected'],
+        verified: false,
+      },
+    };
+  }
+
   // Preflight
   const pre = await preflightToolCall(current);
   healActions.push(...pre.healActions);
@@ -83,7 +110,8 @@ async function executeOne(call: ToolCall, maxAttempts = 3): Promise<{ result: To
     const started = Date.now();
     try {
       const connector = getConnector(current.tool);
-      const result = await withBackoff(() => connector.execute(current.action, current.input), 2);
+      const execInput = stripCapabilityMeta(current.input);
+      const result = await withBackoff(() => connector.execute(current.action, execInput), 2);
       await audit(current, result, started, { healActions, attempt: attempts });
 
       if (result.ok && !result.mocked) {

@@ -18,6 +18,10 @@ import {
   isExplicitSlackCommand,
   isSlackReadQuestion,
 } from './intentDetector';
+import {
+  buildCapabilityScope,
+  filterCallsByCapabilityScope,
+} from './capabilityRegistry';
 
 /**
  * Authoritative routing — ONE decision before planner/workflow/executor.
@@ -601,11 +605,22 @@ export function filterToolCallsByFamily(
       }
       kept.push(c);
     }
-    // If nothing matched but we have a lock, strip all (caller may rebuild from lock)
-    return { kept, stripped };
+    // Action-level capability check on whatever survived the lock
+    const scope = buildCapabilityScope(route);
+    const byCap = filterCallsByCapabilityScope(kept, scope);
+    return {
+      kept: byCap.kept,
+      stripped: [
+        ...stripped,
+        ...byCap.stripped.map((s) => ({
+          tool: s.tool,
+          action: s.action,
+          reason: s.reason === 'CAPABILITY_NOT_ALLOWED' ? `capability_not_in_scope:${family}` : s.reason,
+        })),
+      ],
+    };
   }
 
-  const allowed = new Set(allowedToolsForFamily(family));
   if (family === 'meta' || family === 'read_only' || family === 'general') {
     return {
       kept: [],
@@ -617,24 +632,17 @@ export function filterToolCallsByFamily(
     };
   }
 
-  const kept: ToolCall[] = [];
-  const stripped: RoutingDecisionRecord['strippedTools'] = [];
-  for (const c of calls) {
-    if (allowed.has(c.tool)) {
-      if (
-        family === 'jira' &&
-        c.tool === 'slack' &&
-        ['createWarRoom', 'createIncident', 'followUpPendingReplies'].includes(c.action)
-      ) {
-        stripped.push({ tool: c.tool, action: c.action, reason: 'jira_family_blocks_slack_workflow' });
-        continue;
-      }
-      kept.push(c);
-    } else {
-      stripped.push({ tool: c.tool, action: c.action, reason: `tool_not_in_family:${family}` });
-    }
-  }
-  return { kept, stripped };
+  // Action-level capability scope (application-owned) — not LLM / keyword trust
+  const scope = buildCapabilityScope(route ?? { family, lockedTool: null, lockedAction: null, ambiguous: false, mode: 'execute' });
+  const byCap = filterCallsByCapabilityScope(calls, scope);
+  return {
+    kept: byCap.kept,
+    stripped: byCap.stripped.map((s) => ({
+      tool: s.tool,
+      action: s.action,
+      reason: s.reason === 'CAPABILITY_NOT_ALLOWED' ? `capability_not_in_scope:${family}` : s.reason,
+    })),
+  };
 }
 
 /** Build the single locked tool call from the authoritative route (when possible). */

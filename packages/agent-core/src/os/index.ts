@@ -32,3 +32,15 @@ export {
   isDryRunRequest,
 } from './routingPolicy';
 export type { IntentFamily, RequestMode, AuthoritativeRoute, RouteAction } from './routingPolicy';
+export {
+  getCapability,
+  listCapabilities,
+  buildCapabilityScope,
+  validateCapabilityExecution,
+  stampCapabilityContext,
+  stripCapabilityMeta,
+  filterCallsByCapabilityScope,
+  capabilityName,
+  isCapabilityAllowed,
+} from './capabilityRegistry';
+export type { Capability, CapabilityScope, CapabilityGateResult } from './capabilityRegistry';

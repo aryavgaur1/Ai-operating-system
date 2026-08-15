@@ -9,6 +9,7 @@ import {
 import { logSlackAction } from '@enterprise-ai-os/stores';
 import { getApprovalStore } from './approvals';
 import { verifyToolResult, preflightToolCall } from './os/preflight';
+import { stripCapabilityMeta, validateCapabilityExecution } from './os/capabilityRegistry';
 
 // ============================================================
 // Tool Execution Engine — executes planned tool calls with
@@ -62,10 +63,21 @@ export async function executePlan(
       });
       continue;
     }
+    const gate = validateCapabilityExecution(call);
+    if (!gate.ok) {
+      executedCalls.push({
+        tool: call.tool,
+        action: call.action,
+        ok: false,
+        mocked: false,
+        error: gate.message,
+      });
+      continue;
+    }
     const connector = getConnector(call.tool);
     const started = Date.now();
     try {
-      const result = await connector.execute(call.action, call.input);
+      const result = await connector.execute(call.action, stripCapabilityMeta(call.input));
       executedCalls.push(result);
       await auditSlack(call.action, call.input, result, started, plan.reasoning?.slice(0, 500));
     } catch (err) {
@@ -266,6 +278,21 @@ export async function executeApprovedAction(approvalId: string): Promise<ToolCal
     requiresApproval: false,
   };
 
+  // Capability boundary — reject cross-scope / unknown even after Approve & run
+  const gate = validateCapabilityExecution(call);
+  if (!gate.ok) {
+    const failed: ToolCallResult = {
+      tool: call.tool,
+      action: call.action,
+      ok: false,
+      mocked: false,
+      error: gate.message,
+    };
+    await auditSlack(approval.action, approval.input ?? {}, failed, Date.now(), 'capability_gate');
+    await approvalStore.completeExecution(approvalId, failed, false);
+    return failed;
+  }
+
   // Re-validate connection / project / channel / parent right before live execute
   const pf = await preflightToolCall(call);
   if (!pf.ok) {
@@ -286,7 +313,7 @@ export async function executeApprovedAction(approvalId: string): Promise<ToolCal
   const started = Date.now();
   let result: ToolCallResult;
   try {
-    result = await connector.execute(approval.action, call.input);
+    result = await connector.execute(approval.action, stripCapabilityMeta(call.input));
   } catch (err) {
     result = {
       tool: approval.tool,

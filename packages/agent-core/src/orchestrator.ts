@@ -16,6 +16,7 @@ import {
   clarifyReplyForJira,
   cancelReply,
   dryRunReplyForPlan,
+  stampCapabilityContext,
 } from './os';
 
 // ============================================================
@@ -310,6 +311,9 @@ export async function runAgentTurn(
     const rebuilt = toolCallFromRoute(route, query);
     if (rebuilt) plan.toolCalls = [rebuilt];
   }
+
+  // Stamp capability scope onto every call (survives Approvals → executeApprovedAction)
+  plan.toolCalls = plan.toolCalls.map((c) => stampCapabilityContext(c, route));
 
   planSteps.push(...plan.toolCalls.map((c) => `${c.tool}.${c.action}`));
 
