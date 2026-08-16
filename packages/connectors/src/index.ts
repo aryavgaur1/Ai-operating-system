@@ -20,6 +20,8 @@ export {
   buildApprovalBlocks,
   replyApprovalOutcome,
   getApprovalsChannel,
+  encodeApprovalButtonValue,
+  parseApprovalButtonValue,
 } from './slackApprovals';
 export {
   connectorContext,

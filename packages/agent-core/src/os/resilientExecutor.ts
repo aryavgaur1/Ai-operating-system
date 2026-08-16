@@ -354,6 +354,7 @@ export async function executePlanResilient(
         action: gated.action,
         riskLevel: gated.riskLevel,
         summary: JSON.stringify(gated.input ?? {}).slice(0, 400),
+        payloadFingerprint: approval.payloadFingerprint || '',
       });
       steps.push({
         stepId: `approval.${gated.tool}.${gated.action}`,

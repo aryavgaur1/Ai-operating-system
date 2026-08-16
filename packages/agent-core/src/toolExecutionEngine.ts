@@ -64,6 +64,7 @@ export async function executePlan(
         action: call.action,
         riskLevel: call.riskLevel,
         summary: JSON.stringify(call.input ?? {}).slice(0, 400),
+        payloadFingerprint: approval.payloadFingerprint || '',
       });
       continue;
     }
@@ -404,5 +405,23 @@ export async function executeApprovedAction(approvalId: string): Promise<ToolCal
 
   await auditSlack(approval.action, approval.input ?? {}, result, started, 'approved_action');
   await approvalStore.completeExecution(approvalId, result, verified && result.ok && !result.mocked);
+
+  // Persist Notion page identity for exact updatePage targeting (P0.3.3)
+  if (result.ok && !result.mocked && approval.tool === 'notion') {
+    try {
+      const { rememberFromExecution } = await import('./os/threadMemory');
+      await rememberFromExecution(approval.organizationId, approval.requestedByUserId, approval.action, [
+        {
+          tool: approval.tool,
+          action: approval.action,
+          ok: true,
+          output: result.output,
+        },
+      ]);
+    } catch {
+      // non-fatal
+    }
+  }
+
   return result;
 }

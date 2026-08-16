@@ -221,6 +221,42 @@ export async function preflightToolCall(call: ToolCall): Promise<PreflightResult
           input.title = `Nexora Note ${new Date().toISOString().slice(0, 10)}`;
           healActions.push('inferred_notion_title');
         }
+        // updatePage: prefer explicit pageId → Timeline/memory latest → refuse ambiguous title search
+        if (call.action === 'updatePage') {
+          let pageId = String(input.pageId ?? input.id ?? '').trim();
+          if (!pageId) {
+            try {
+              const { recall } = await import('./threadMemory');
+              const orgId =
+                String(input._organizationId ?? '').trim() ||
+                String(getConnectorContext().organizationId ?? '').trim();
+              if (orgId) {
+                const latest = await recall(orgId, 'notion:page:latest');
+                const memId = String(latest?.pageId ?? '').trim();
+                if (memId) {
+                  pageId = memId;
+                  input.pageId = memId;
+                  if (latest?.url) input.pageUrl = latest.url;
+                  healActions.push('resolved_notion_pageId_from_memory');
+                }
+              }
+            } catch {
+              // ignore
+            }
+          }
+          if (!pageId) {
+            return {
+              ok: false,
+              input,
+              healActions,
+              fatal:
+                'Notion update needs an exact pageId (from a Nexora-created page / Timeline). Title-only updates are refused to avoid changing the wrong page.',
+            };
+          }
+          input.pageId = pageId;
+          delete input.allowTitleResolve;
+          delete input._allowTitleResolve;
+        }
         // Prove a shared parent exists before we queue Approve & run
         if (!input.parentPageId && call.action !== 'updatePage') {
           const pageSearch = await client.search({

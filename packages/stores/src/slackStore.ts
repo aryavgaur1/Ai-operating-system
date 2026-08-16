@@ -104,6 +104,32 @@ export async function getSlackInstallation(organizationId: string): Promise<Slac
   }
 }
 
+/** Resolve Nexora org from Slack team id (interactive approvals workspace binding). */
+export async function findOrganizationBySlackTeam(
+  teamId: string
+): Promise<{ organizationId: string; metadata: Record<string, unknown> } | null> {
+  const tid = String(teamId || '').trim();
+  if (!tid) return null;
+  try {
+    const res = await query<SlackInstallationRow>(
+      `select * from slack_installations
+       where team_id = $1 and status = 'active'
+       order by last_synced_at desc nulls last, installed_at desc
+       limit 1`,
+      [tid]
+    );
+    const row = res.rows[0];
+    if (!row) return null;
+    return {
+      organizationId: row.organization_id,
+      metadata: (row.metadata as Record<string, unknown>) || {},
+    };
+  } catch (err) {
+    console.warn('[slackStore] team lookup skipped:', err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+
 export async function storeSlackEvent(input: SlackEventInput): Promise<void> {
   await safeQuery(
     `insert into slack_events

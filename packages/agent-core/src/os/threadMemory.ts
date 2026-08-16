@@ -104,14 +104,24 @@ export async function rememberFromExecution(
       keys.push(key);
     }
     if (call.tool === 'notion' && (out.id || out.url)) {
-      const key = `notion:page:${String(out.id || 'latest')}`;
+      const pageId = out.id;
+      const url = out.url;
+      const key = `notion:page:${String(pageId || 'latest')}`;
       await remember({
         organizationId,
         userId,
         key,
-        value: { pageId: out.id, url: out.url, query: queryText, action: call.action },
+        value: { pageId, url, title: out.title, query: queryText, action: call.action },
       });
       keys.push(key);
+      // Always refresh pointer for follow-up updatePage
+      await remember({
+        organizationId,
+        userId,
+        key: 'notion:page:latest',
+        value: { pageId, url, title: out.title, query: queryText, action: call.action },
+      });
+      keys.push('notion:page:latest');
     }
     if (out.summary) {
       const key = `intel:${call.action}:latest`;

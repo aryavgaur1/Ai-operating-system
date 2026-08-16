@@ -1,12 +1,19 @@
 import { Router, type Request, type Response, type NextFunction } from 'express';
-import { isLiveMode, slackService, SlackServiceError, runWithConnectorContext, replyApprovalOutcome } from '@enterprise-ai-os/connectors';
-import { runAgentTurn, getApprovalStore, executeApprovedAction } from '@enterprise-ai-os/agent-core';
+import { isLiveMode, slackService, SlackServiceError, runWithConnectorContext, replyApprovalOutcome, parseApprovalButtonValue } from '@enterprise-ai-os/connectors';
+import {
+  runAgentTurn,
+  getApprovalStore,
+  executeApprovedAction,
+  ApprovalIntegrityError,
+  assertSlackInteractiveApproval,
+} from '@enterprise-ai-os/agent-core';
 import {
   getSlackInstallation,
   upsertSlackInstallation,
   storeSlackEvent,
   listSlackEvents,
   logSlackAction,
+  findOrganizationBySlackTeam,
 } from '@enterprise-ai-os/stores';
 import { handleWebhookEvent, getStores } from '../ingestion/pipeline';
 import { getDemoOrgId } from '../middleware/auth';
@@ -535,24 +542,87 @@ slackInteractionsRouter.post(
 
     const action = payload?.actions?.[0];
     const actionId = String(action?.action_id ?? '');
-    const approvalId = String(action?.value ?? '').trim();
+    const buttonRaw = String(action?.value ?? '').trim();
+    const parsedButton = parseApprovalButtonValue(buttonRaw);
     const channelId = String(payload?.channel?.id ?? payload?.container?.channel_id ?? '');
     const messageTs = String(payload?.message?.ts ?? payload?.container?.message_ts ?? '');
     const slackUser = String(payload?.user?.id ?? 'slack-user');
+    const slackTeam = String(payload?.team?.id ?? payload?.user?.team_id ?? '').trim();
 
     // Ack immediately (empty 200 — follow-up via chat.postMessage)
     res.status(200).send();
 
-    if (!approvalId || (actionId !== 'nexora_approve_run' && actionId !== 'nexora_reject')) {
+    if (!actionId || (actionId !== 'nexora_approve_run' && actionId !== 'nexora_reject')) {
       return;
     }
 
     void (async () => {
       const store = getApprovalStore();
-      const orgId = getDemoOrgId();
       try {
+        if (!parsedButton) {
+          await replyApprovalOutcome({
+            channel: channelId,
+            threadTs: messageTs,
+            text:
+              'Refused: Slack approval button is missing integrity binding (approvalId|fingerprint). Re-queue from Nexora Approvals.',
+          });
+          void logSlackAction({
+            action: 'interactive_approve_refused',
+            status: 'error',
+            error: 'missing_button_fingerprint',
+            payload: { actionId, buttonRaw: buttonRaw.slice(0, 80), slackUser },
+          });
+          return;
+        }
+
+        const { approvalId, fingerprint: buttonFingerprint } = parsedButton;
+        const existing = await store.get(approvalId);
+
         if (actionId === 'nexora_reject') {
-          const updated = await store.decide(approvalId, 'rejected', `slack:${slackUser}`);
+          if (!existing) {
+            await replyApprovalOutcome({
+              channel: channelId,
+              threadTs: messageTs,
+              text: `Approval \`${approvalId}\` not found.`,
+            });
+            return;
+          }
+          try {
+            const teamOrg = slackTeam ? await findOrganizationBySlackTeam(slackTeam) : null;
+            const allowEnv = String(process.env.SLACK_APPROVAL_ALLOWED_USER_IDS || '')
+              .split(',')
+              .map((s) => s.trim())
+              .filter(Boolean);
+            const mappedUser =
+              teamOrg &&
+              String((teamOrg.metadata as any)?.authedUserId || '') === slackUser
+                ? String((teamOrg.metadata as any)?.userId || '')
+                : undefined;
+            assertSlackInteractiveApproval(existing, {
+              slackUserId: slackUser,
+              slackTeamId: slackTeam,
+              buttonFingerprint,
+              resolvedOrganizationId: teamOrg?.organizationId,
+              mappedNexoraUserId: mappedUser || undefined,
+              allowedSlackUserIds: allowEnv,
+            });
+          } catch (err) {
+            const msg = err instanceof ApprovalIntegrityError ? err.message : String(err);
+            await replyApprovalOutcome({
+              channel: channelId,
+              threadTs: messageTs,
+              text: `Reject refused: ${msg}`,
+            });
+            void logSlackAction({
+              organizationId: existing.organizationId,
+              action: 'interactive_reject_refused',
+              status: 'error',
+              error: msg,
+              payload: { approvalId, slackUser },
+            });
+            return;
+          }
+          const updated = await store.decide(approvalId, 'rejected', mappedDecider(slackUser, existing));
           await replyApprovalOutcome({
             channel: channelId,
             threadTs: messageTs,
@@ -563,12 +633,18 @@ slackInteractionsRouter.post(
           return;
         }
 
-        const existing = await store.get(approvalId);
+        // Approve & Run
         if (!existing) {
           await replyApprovalOutcome({
             channel: channelId,
             threadTs: messageTs,
             text: `Approval \`${approvalId}\` not found.`,
+          });
+          void logSlackAction({
+            action: 'interactive_approve_refused',
+            status: 'error',
+            error: 'not_found',
+            payload: { approvalId, slackUser },
           });
           return;
         }
@@ -582,12 +658,55 @@ slackInteractionsRouter.post(
           await replyApprovalOutcome({
             channel: channelId,
             threadTs: messageTs,
-            text: `Already ${okRun ? 'completed' : 'failed'}: \`${existing.tool}.${existing.action}\` (idempotent).`,
+            text: `Already ${okRun ? 'completed' : 'failed'}: \`${existing.tool}.${existing.action}\` (idempotent — no re-execute).`,
           });
           return;
         }
 
-        const claimed = await store.claimForExecution(approvalId, `slack:${slackUser}`);
+        const teamOrg = slackTeam ? await findOrganizationBySlackTeam(slackTeam) : null;
+        const allowEnv = String(process.env.SLACK_APPROVAL_ALLOWED_USER_IDS || '')
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean);
+        const mappedUser =
+          teamOrg && String((teamOrg.metadata as any)?.authedUserId || '') === slackUser
+            ? String((teamOrg.metadata as any)?.userId || '')
+            : '';
+
+        try {
+          assertSlackInteractiveApproval(existing, {
+            slackUserId: slackUser,
+            slackTeamId: slackTeam,
+            buttonFingerprint,
+            resolvedOrganizationId: teamOrg?.organizationId,
+            mappedNexoraUserId: mappedUser || undefined,
+            allowedSlackUserIds: allowEnv,
+          });
+        } catch (err) {
+          const code = err instanceof ApprovalIntegrityError ? err.code : 'APPROVAL_INVALID_STATE';
+          const msg = err instanceof Error ? err.message : String(err);
+          await replyApprovalOutcome({
+            channel: channelId,
+            threadTs: messageTs,
+            text: `Approve refused (${code}): ${msg}`,
+          });
+          void logSlackAction({
+            organizationId: existing.organizationId,
+            action: 'interactive_approve_refused',
+            status: 'error',
+            error: `${code}: ${msg}`,
+            payload: {
+              approvalId,
+              slackUser,
+              tool: existing.tool,
+              action: existing.action,
+            },
+          });
+          return;
+        }
+
+        const decidedBy = mappedUser || `slack:${slackUser}`;
+        const claimed = await store.claimForExecution(approvalId, decidedBy);
         if (!claimed) {
           await replyApprovalOutcome({
             channel: channelId,
@@ -597,8 +716,10 @@ slackInteractionsRouter.post(
           return;
         }
 
+        // Connector context must use the Nexora requester (token owner), not the Slack clicker alias
+        const connectorUserId = existing.requestedByUserId || mappedUser || decidedBy;
         const executionResult = await withUserConnectorContext(
-          { id: `slack:${slackUser}`, organizationId: existing.organizationId || orgId },
+          { id: connectorUserId, organizationId: existing.organizationId },
           () => executeApprovedAction(approvalId)
         );
 
@@ -618,17 +739,22 @@ slackInteractionsRouter.post(
       } catch (err) {
         logger.error('slack.interaction_approve_failed', {
           message: err instanceof Error ? err.message : String(err),
-          approvalId,
         });
-        await replyApprovalOutcome({
-          channel: channelId,
-          threadTs: messageTs,
-          text: `Approve & run error: ${err instanceof Error ? err.message : String(err)}`,
-        });
+        if (channelId) {
+          await replyApprovalOutcome({
+            channel: channelId,
+            threadTs: messageTs,
+            text: `Approve & run error: ${err instanceof Error ? err.message : String(err)}`,
+          }).catch(() => undefined);
+        }
       }
     })();
   })
 );
+
+function mappedDecider(slackUser: string, approval: { requestedByUserId?: string }): string {
+  return approval.requestedByUserId || `slack:${slackUser}`;
+}
 
 /** Express error passthrough helper for this router if needed by tests. */
 export function slackErrorHandler(err: unknown, _req: Request, res: Response, next: NextFunction) {

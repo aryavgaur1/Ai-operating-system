@@ -156,16 +156,27 @@ function extractTitle(page: any): string {
   return 'Untitled';
 }
 
-async function findPageByTitle(client: Client, title: string): Promise<any | null> {
+async function findPagesByExactTitle(
+  client: Client,
+  title: string
+): Promise<{ matches: any[]; ambiguous: boolean }> {
   const response = await client.search({
     query: title,
     filter: { property: 'object', value: 'page' },
-    page_size: 20,
+    page_size: 25,
   });
-
   const normalizedTitle = title.trim().toLowerCase();
-  const matched = (response.results as any[]).find((page) => extractTitle(page).trim().toLowerCase() === normalizedTitle);
-  return matched || ((response.results as any[])[0] ?? null);
+  const matches = ((response.results as any[]) ?? []).filter(
+    (page) => extractTitle(page).trim().toLowerCase() === normalizedTitle
+  );
+  return { matches, ambiguous: matches.length > 1 };
+}
+
+/** @deprecated Prefer findPagesByExactTitle — never returns a fuzzy first hit. */
+async function findPageByTitle(client: Client, title: string): Promise<any | null> {
+  const { matches, ambiguous } = await findPagesByExactTitle(client, title);
+  if (ambiguous || matches.length !== 1) return null;
+  return matches[0] ?? null;
 }
 
 /** Fetches a page's block content and flattens it into plain text. */
@@ -415,27 +426,78 @@ class NotionConnector implements ToolConnector {
           case 'updatePage': {
             let pageId = String(input.pageId ?? input.id ?? '').trim() || undefined;
             const titleQuery = String(input.title ?? input.query ?? '').trim();
+            const allowTitleResolve = input.allowTitleResolve === true || input._allowTitleResolve === true;
+
             if (!pageId) {
               if (!titleQuery) {
                 return {
                   tool: 'notion',
                   action,
                   ok: false,
-                  error: 'Notion update needs pageId or an existing page title to find.',
+                  error:
+                    'Notion update refused: no pageId. Pass the exact Notion pageId (from Timeline or the create result), or create the page in Nexora first.',
                   mocked: false,
                 };
               }
-              const found = await findPageByTitle(client, titleQuery);
-              if (!found?.id) {
+              if (!allowTitleResolve) {
                 return {
                   tool: 'notion',
                   action,
                   ok: false,
-                  error: `No Notion page found titled “${titleQuery}”.`,
+                  error:
+                    `Notion update refused: title “${titleQuery}” is ambiguous without pageId. Provide pageId from the Nexora-created page / Timeline, then retry.`,
                   mocked: false,
                 };
               }
-              pageId = found.id;
+              const { matches, ambiguous } = await findPagesByExactTitle(client, titleQuery);
+              if (ambiguous) {
+                const choices = matches.slice(0, 5).map((p) => ({
+                  id: p.id,
+                  url: p.url,
+                  title: extractTitle(p),
+                }));
+                return {
+                  tool: 'notion',
+                  action,
+                  ok: false,
+                  error: `Multiple Notion pages titled “${titleQuery}”. Choose one pageId — refusing to guess.`,
+                  output: { ambiguous: true, choices },
+                  mocked: false,
+                };
+              }
+              if (matches.length !== 1) {
+                return {
+                  tool: 'notion',
+                  action,
+                  ok: false,
+                  error: `No exact Notion page titled “${titleQuery}”. Provide pageId and retry.`,
+                  mocked: false,
+                };
+              }
+              pageId = matches[0].id;
+            }
+
+            // Fail closed on wrong / inaccessible pageId before mutating
+            let before: any;
+            try {
+              before = await client.pages.retrieve({ page_id: pageId as string });
+              if (!(before as any)?.id) {
+                return {
+                  tool: 'notion',
+                  action,
+                  ok: false,
+                  error: `Notion pageId ${pageId} not found — refusing update.`,
+                  mocked: false,
+                };
+              }
+            } catch (err) {
+              return {
+                tool: 'notion',
+                action,
+                ok: false,
+                error: `Notion pageId ${pageId} is invalid or inaccessible: ${humanizeNotionError(err)}`,
+                mocked: false,
+              };
             }
 
             const newTitle = String(input.newTitle ?? input.setTitle ?? '').trim();
@@ -443,11 +505,7 @@ class NotionConnector implements ToolConnector {
             if (newTitle) {
               properties.title = { title: [{ type: 'text', text: { content: newTitle.slice(0, 2000) } }] };
             }
-            // Allow rich_text Description updates when provided
             const description = String(input.description ?? input.body ?? '').trim();
-            if (description && !newTitle) {
-              // Prefer appending children blocks for body updates
-            }
 
             try {
               if (Object.keys(properties).length) {
@@ -474,16 +532,43 @@ class NotionConnector implements ToolConnector {
                   mocked: false,
                 };
               }
+
               const retrieved = await client.pages.retrieve({ page_id: pageId as string });
-              if (!(retrieved as any)?.id) {
+              if (!(retrieved as any)?.id || String((retrieved as any).id) !== String(pageId)) {
                 return {
                   tool: 'notion',
                   action,
                   ok: false,
-                  error: 'Notion updatePage verify failed — page not retrievable after update.',
+                  error: 'Notion updatePage verify failed — retrieved id does not match target pageId.',
                   mocked: false,
                 };
               }
+              if (newTitle) {
+                const gotTitle = extractTitle(retrieved).trim().toLowerCase();
+                if (gotTitle !== newTitle.trim().toLowerCase()) {
+                  return {
+                    tool: 'notion',
+                    action,
+                    ok: false,
+                    error: `Notion updatePage verify failed — expected title “${newTitle}”, got “${extractTitle(retrieved)}”.`,
+                    mocked: false,
+                  };
+                }
+              }
+              if (description) {
+                const text = await fetchPageText(client, pageId as string).catch(() => '');
+                const needle = description.slice(0, 80);
+                if (needle && !text.includes(needle.slice(0, 40))) {
+                  return {
+                    tool: 'notion',
+                    action,
+                    ok: false,
+                    error: 'Notion updatePage verify failed — appended body not found on page.',
+                    mocked: false,
+                  };
+                }
+              }
+
               console.log(`[notion.updatePage] REAL ok id=${pageId}`);
               return {
                 tool: 'notion',
@@ -494,6 +579,7 @@ class NotionConnector implements ToolConnector {
                   url: (retrieved as any).url,
                   title: newTitle || extractTitle(retrieved),
                   verified: true,
+                  previousTitle: extractTitle(before),
                 },
                 mocked: false,
               };

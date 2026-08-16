@@ -43,12 +43,14 @@ export {
   filterCallsByCapabilityScope,
   capabilityName,
   isCapabilityAllowed,
+  CAPABILITY_META,
 } from './capabilityRegistry';
 export type { Capability, CapabilityScope, CapabilityGateResult } from './capabilityRegistry';
 export {
   ApprovalIntegrityError,
   assertApprovalAuthorized,
   assertApprovalExecutable,
+  assertSlackInteractiveApproval,
   computeApprovalFingerprint,
   isApprovalExpired,
   approvalTtlMs,

@@ -120,6 +120,109 @@ export function assertApprovalAuthorized(
   }
 }
 
+/**
+ * P0.3.3 — Slack interactive Approve & Run gate.
+ * Button must carry approvalId|fingerprint; workspace must match; owner must match when known.
+ * Call BEFORE claimForExecution / any connector call.
+ */
+export function assertSlackInteractiveApproval(
+  approval: ApprovalRequest,
+  opts: {
+    slackUserId: string;
+    slackTeamId?: string;
+    buttonFingerprint: string;
+    /** Nexora org resolved from Slack team installation */
+    resolvedOrganizationId?: string;
+    /** Nexora user id mapped from Slack authed user (when known) */
+    mappedNexoraUserId?: string;
+    /** Optional allowlist of Slack user IDs (env) */
+    allowedSlackUserIds?: string[];
+  }
+): void {
+  if (!approval) {
+    throw new ApprovalIntegrityError('APPROVAL_NOT_FOUND', 'Approval not found.');
+  }
+  if (isApprovalExpired(approval)) {
+    throw new ApprovalIntegrityError('APPROVAL_EXPIRED', 'Approval has expired and cannot execute.');
+  }
+  if (approval.status === 'rejected') {
+    throw new ApprovalIntegrityError('APPROVAL_INVALID_STATE', 'Approval was rejected.');
+  }
+  if (approval.executionStatus === 'completed' || approval.executionStatus === 'failed') {
+    throw new ApprovalIntegrityError('APPROVAL_ALREADY_EXECUTED', 'Approval already finished execution.');
+  }
+  if (approval.status !== 'pending') {
+    throw new ApprovalIntegrityError(
+      'APPROVAL_INVALID_STATE',
+      `Approval is not pending (status=${approval.status}).`
+    );
+  }
+
+  const storedFp = approval.payloadFingerprint?.trim();
+  if (!storedFp) {
+    throw new ApprovalIntegrityError(
+      'APPROVAL_PAYLOAD_CHANGED',
+      'Approval is missing integrity fingerprint — Slack button cannot authorize it.'
+    );
+  }
+  if (opts.buttonFingerprint.trim() !== storedFp) {
+    throw new ApprovalIntegrityError(
+      'APPROVAL_PAYLOAD_CHANGED',
+      'Slack button fingerprint does not match the stored approval — refusing execution.'
+    );
+  }
+
+  // Live binding must still match stored fingerprint (detect DB tamper)
+  const liveFp = computeApprovalFingerprint(approval.tool, approval.action, approval.input);
+  if (liveFp !== storedFp) {
+    throw new ApprovalIntegrityError(
+      'APPROVAL_PAYLOAD_CHANGED',
+      'Approval payload no longer matches its integrity fingerprint.'
+    );
+  }
+
+  if (opts.resolvedOrganizationId) {
+    if (approval.organizationId !== opts.resolvedOrganizationId) {
+      throw new ApprovalIntegrityError(
+        'APPROVAL_NOT_AUTHORIZED',
+        'Slack workspace does not match this approval’s Nexora organization.'
+      );
+    }
+  } else if (opts.slackTeamId) {
+    throw new ApprovalIntegrityError(
+      'APPROVAL_NOT_AUTHORIZED',
+      'Slack team is not linked to a Nexora organization — refusing interactive approve.'
+    );
+  }
+
+  const allow = (opts.allowedSlackUserIds || [])
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const slackUser = String(opts.slackUserId || '').trim();
+  if (allow.length && slackUser && !allow.includes(slackUser)) {
+    throw new ApprovalIntegrityError(
+      'APPROVAL_NOT_AUTHORIZED',
+      'This Slack user is not on the approval allowlist.'
+    );
+  }
+
+  // Owner binding: mapped Nexora user must be requester (or admin allowlist already passed)
+  if (opts.mappedNexoraUserId && approval.requestedByUserId) {
+    if (opts.mappedNexoraUserId !== approval.requestedByUserId) {
+      throw new ApprovalIntegrityError(
+        'APPROVAL_NOT_AUTHORIZED',
+        'Slack user is not the Nexora requester for this approval.'
+      );
+    }
+  } else if (approval.requestedByUserId && !opts.mappedNexoraUserId && !allow.length) {
+    // Fail closed: cannot prove Slack clicker owns the Nexora approval
+    throw new ApprovalIntegrityError(
+      'APPROVAL_NOT_AUTHORIZED',
+      'Cannot verify Slack user ownership for this approval. Approve in the Nexora web Approvals inbox, or set SLACK_APPROVAL_ALLOWED_USER_IDS.'
+    );
+  }
+}
+
 export type IntegrityCheckOk = {
   ok: true;
   fingerprint: string;
