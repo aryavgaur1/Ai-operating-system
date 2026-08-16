@@ -477,7 +477,7 @@ export async function verifyToolResult(call: ToolCall, result: ToolCallResult): 
         const info = await slackService.getClient().conversations.info({ channel: id });
         return Boolean((info as any).ok && (info as any).channel?.id);
       } catch {
-        return Boolean(id);
+        return false;
       }
     }
     if (call.tool === 'slack' && call.action === 'createIncident') {
@@ -488,7 +488,7 @@ export async function verifyToolResult(call: ToolCall, result: ToolCallResult): 
         const info = await slackService.getClient().conversations.info({ channel: id });
         return Boolean((info as any).ok && (info as any).channel?.id);
       } catch {
-        return Boolean(id);
+        return false;
       }
     }
     if (call.tool === 'slack' && (call.action === 'updateMessage' || call.action === 'deleteMessage')) {
