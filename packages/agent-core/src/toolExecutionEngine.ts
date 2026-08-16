@@ -10,6 +10,10 @@ import { logSlackAction } from '@enterprise-ai-os/stores';
 import { getApprovalStore } from './approvals';
 import { verifyToolResult, preflightToolCall } from './os/preflight';
 import { stripCapabilityMeta, validateCapabilityExecution } from './os/capabilityRegistry';
+import {
+  ApprovalIntegrityError,
+  assertApprovalExecutable,
+} from './os/approvalIntegrity';
 
 // ============================================================
 // Tool Execution Engine — executes planned tool calls with
@@ -255,6 +259,7 @@ function rejectMockOrUnverified(result: ToolCallResult, verified: boolean): Tool
 /**
  * Called when a human approves a pending action from the approvals inbox / chat.
  * Uses ONLY the stored approval input — never invents params from the client.
+ * Integrity gate runs BEFORE any connector call.
  */
 export async function executeApprovedAction(approvalId: string): Promise<ToolCallResult | undefined> {
   const approvalStore = getApprovalStore();
@@ -268,6 +273,24 @@ export async function executeApprovedAction(approvalId: string): Promise<ToolCal
 
   if (approval.status !== 'approved' || approval.executionStatus !== 'executing') {
     return undefined;
+  }
+
+  // P0.3 integrity — ZERO connector calls on failure
+  try {
+    assertApprovalExecutable(approval);
+  } catch (err) {
+    const code = err instanceof ApprovalIntegrityError ? err.code : 'APPROVAL_INVALID_STATE';
+    const message = err instanceof Error ? err.message : 'Approval integrity check failed';
+    const failed: ToolCallResult = {
+      tool: approval.tool,
+      action: approval.action,
+      ok: false,
+      mocked: false,
+      error: `${code}: ${message}`,
+    };
+    await auditSlack(approval.action, approval.input ?? {}, failed, Date.now(), 'approval_integrity');
+    await approvalStore.completeExecution(approvalId, failed, false);
+    return failed;
   }
 
   const call: ToolCall = {
@@ -307,7 +330,30 @@ export async function executeApprovedAction(approvalId: string): Promise<ToolCal
     await approvalStore.completeExecution(approvalId, failed, false);
     return failed;
   }
-  call.input = pf.input;
+  // Keep capability stamps from the approved snapshot; merge preflight heals
+  call.input = {
+    ...pf.input,
+    _intentFamily: call.input._intentFamily,
+    _capabilityScope: call.input._capabilityScope,
+    _lockedCapability: call.input._lockedCapability,
+  };
+
+  // Re-check fingerprint against ORIGINAL approved snapshot (not healed view)
+  try {
+    assertApprovalExecutable(approval);
+  } catch (err) {
+    const code = err instanceof ApprovalIntegrityError ? err.code : 'APPROVAL_PAYLOAD_CHANGED';
+    const message = err instanceof Error ? err.message : 'Approval integrity failed after preflight';
+    const failed: ToolCallResult = {
+      tool: call.tool,
+      action: call.action,
+      ok: false,
+      mocked: false,
+      error: `${code}: ${message}`,
+    };
+    await approvalStore.completeExecution(approvalId, failed, false);
+    return failed;
+  }
 
   const connector = getConnector(approval.tool);
   const started = Date.now();

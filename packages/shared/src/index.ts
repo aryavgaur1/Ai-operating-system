@@ -196,6 +196,10 @@ export interface ApprovalRequest {
   status: ApprovalStatus;
   requestedByUserId?: string;
   createdAt: string;
+  /** SHA-256 of canonical bound action (tool+action+scope+payload). */
+  payloadFingerprint?: string;
+  /** ISO expiry — Approve & run must fail after this. */
+  expiresAt?: string;
   executionStatus?: ApprovalExecutionStatus;
   executionResult?: ToolCallResult;
   executionVerified?: boolean;

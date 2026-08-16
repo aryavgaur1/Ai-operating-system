@@ -44,3 +44,14 @@ export {
   isCapabilityAllowed,
 } from './capabilityRegistry';
 export type { Capability, CapabilityScope, CapabilityGateResult } from './capabilityRegistry';
+export {
+  ApprovalIntegrityError,
+  assertApprovalAuthorized,
+  assertApprovalExecutable,
+  computeApprovalFingerprint,
+  isApprovalExpired,
+  approvalTtlMs,
+  canonicalJson,
+  approvalAuditDetail,
+} from './approvalIntegrity';
+export type { ApprovalIntegrityCode, ApprovalAuditEvent, AuthUserLike } from './approvalIntegrity';
