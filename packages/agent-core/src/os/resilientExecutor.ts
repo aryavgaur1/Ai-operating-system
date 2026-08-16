@@ -120,6 +120,31 @@ async function executeOne(call: ToolCall, maxAttempts = 3): Promise<{ result: To
           healActions.push('verification_failed_retry');
           continue;
         }
+        // Jira P0.1 standard: never report success unless external verify confirms
+        if (!verified) {
+          const failed: ToolCallResult = {
+            ...result,
+            ok: false,
+            mocked: false,
+            error:
+              result.error ||
+              `External verification failed for ${current.tool}.${current.action} — refusing unverified success.`,
+          };
+          return {
+            result: failed,
+            step: {
+              stepId,
+              tool: current.tool,
+              action: current.action,
+              status: 'fatal_failure',
+              attempts,
+              durationMs: Date.now() - startedAll,
+              healActions: [...healActions, 'verification_failed'],
+              verified: false,
+              error: failed.error,
+            },
+          };
+        }
         return {
           result,
           step: {
@@ -130,7 +155,7 @@ async function executeOne(call: ToolCall, maxAttempts = 3): Promise<{ result: To
             attempts,
             durationMs: Date.now() - startedAll,
             healActions,
-            verified,
+            verified: true,
             output: result.output,
           },
         };

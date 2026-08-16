@@ -67,6 +67,7 @@ const LIVE_ACTIONS = [
   'getChannelHistory',
   'getThread',
   'searchHistory',
+  'searchMessages',
   'summarizeChannel',
   'uploadFile',
   'addReaction',
@@ -294,10 +295,33 @@ class SlackConnector implements ToolConnector {
               text,
               threadTs: input.threadTs as string | undefined,
             });
+            // In-connector verify (Jira P0.1 standard)
+            try {
+              const hist = await slackService.getClient().conversations.history({
+                channel: String(result.channel),
+                latest: String(result.ts),
+                oldest: String(result.ts),
+                inclusive: true,
+                limit: 1,
+              });
+              const found = Boolean(
+                (hist as any).ok && Array.isArray((hist as any).messages) && (hist as any).messages.length > 0
+              );
+              if (!found) {
+                return failResult(action, 'Slack postMessage succeeded but message was not found on verify — refusing fake success.');
+              }
+            } catch (err) {
+              return failResult(
+                action,
+                `Slack postMessage verify failed: ${err instanceof Error ? err.message : err}`
+              );
+            }
             return okResult(action, {
               ...result,
               channelName: requestedChannel.replace(/^#/, ''),
               textPreview: text.slice(0, 200),
+              verified: true,
+              url: `https://slack.com/archives/${result.channel}/p${String(result.ts).replace('.', '')}`,
             });
           }
           case 'postMessageExternalChannel': {
@@ -345,10 +369,13 @@ class SlackConnector implements ToolConnector {
               })
             );
           case 'searchHistory':
-            return okResult(
-              action,
-              await searchHistory(String(input.query ?? input.text ?? ''), Number(input.count ?? 20))
+          case 'searchMessages': {
+            const result = await searchHistory(
+              String(input.query ?? input.text ?? ''),
+              Number(input.count ?? 20)
             );
+            return okResult(action, { ...result, verified: true });
+          }
           case 'summarizeChannel':
             return okResult(
               action,
@@ -385,17 +412,56 @@ class SlackConnector implements ToolConnector {
               isPrivate: Boolean(input.isPrivate),
             });
             if (!result.id) return failResult(action, 'Slack createChannel returned no channel id');
-            return okResult(action, result);
+            try {
+              const info = await slackService.getClient().conversations.info({ channel: result.id });
+              if (!(info as any).ok || !(info as any).channel?.id) {
+                return failResult(action, 'Slack createChannel verify failed — channel not found after create.');
+              }
+            } catch (err) {
+              return failResult(
+                action,
+                `Slack createChannel verify failed: ${err instanceof Error ? err.message : err}`
+              );
+            }
+            return okResult(action, { ...result, verified: true });
           }
-          case 'inviteUsers':
-            return okResult(
-              action,
-              await inviteUsers({
-                channel: String(input.channel ?? ''),
-                users: (input.users as string | string[]) ?? (input.user as string) ?? '',
-                roles: input.roles as string[] | undefined,
-              })
-            );
+          case 'inviteUsers': {
+            const result = await inviteUsers({
+              channel: String(input.channel ?? ''),
+              users: (input.users as string | string[]) ?? (input.user as string) ?? '',
+              roles: input.roles as string[] | undefined,
+            });
+            const channel = String(result.channel ?? input.channel ?? '');
+            const invited = (result.invited as string[] | undefined) ?? [];
+            const already = (result.alreadyMembers as string[] | undefined) ?? [];
+            const need = [...invited, ...already].filter(Boolean);
+            if (!channel || !need.length) {
+              return failResult(
+                action,
+                'Slack inviteUsers did not resolve any members to verify — refusing unverified success.'
+              );
+            }
+            try {
+              const members = await slackService.getClient().conversations.members({
+                channel,
+                limit: 200,
+              });
+              const set = new Set<string>(((members as any).members ?? []) as string[]);
+              const missing = need.filter((id) => !set.has(id));
+              if (missing.length) {
+                return failResult(
+                  action,
+                  `Slack invite verify failed — members not present: ${missing.slice(0, 5).join(', ')}`
+                );
+              }
+            } catch (err) {
+              return failResult(
+                action,
+                `Slack inviteUsers verify failed: ${err instanceof Error ? err.message : err}`
+              );
+            }
+            return okResult(action, { ...result, verified: true });
+          }
           case 'authTest':
             return okResult(action, await authTest());
           case 'setChannelTopic':

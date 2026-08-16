@@ -249,6 +249,8 @@ export const HIGH_CONSEQUENCE_ACTIONS: Record<ToolName, string[]> = {
   // Notion writes pause so a human confirms parent/workspace before create.
   notion: [
     'createPage',
+    'updatePage',
+    'createDatabaseEntry',
     'createDatabase',
     'createProject',
     'createPRD',

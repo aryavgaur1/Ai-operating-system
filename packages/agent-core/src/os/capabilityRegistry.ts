@@ -64,7 +64,7 @@ const DEFS: CapDef[] = [
   { connector: 'slack', action: 'postMessage', families: ['slack_write', 'launch', 'incident', 'standup', 'reminder'], rw: 'write', required: ['channel', 'text'], verify: 'external_confirm' },
   { connector: 'slack', action: 'postMessageExternalChannel', families: ['slack_write'], rw: 'write', verify: 'external_confirm' },
   { connector: 'slack', action: 'createChannel', families: ['slack_write', 'launch', 'incident'], rw: 'write', verify: 'external_confirm' },
-  { connector: 'slack', action: 'inviteUsers', families: ['slack_write', 'launch', 'incident'], rw: 'write', verify: 'none' },
+  { connector: 'slack', action: 'inviteUsers', families: ['slack_write', 'launch', 'incident'], rw: 'write', verify: 'external_confirm' },
   { connector: 'slack', action: 'createWarRoom', families: ['launch', 'incident'], rw: 'write', verify: 'external_confirm' },
   { connector: 'slack', action: 'createIncident', families: ['incident'], rw: 'write', verify: 'external_confirm' },
   { connector: 'slack', action: 'uploadFile', families: ['slack_write', 'incident'], rw: 'write', verify: 'none' },
@@ -83,6 +83,7 @@ const DEFS: CapDef[] = [
   { connector: 'slack', action: 'getChannelHistory', families: ['slack_read', 'standup', 'read_only'], rw: 'read', verify: 'none' },
   { connector: 'slack', action: 'getThread', families: ['slack_read', 'read_only'], rw: 'read', verify: 'none' },
   { connector: 'slack', action: 'searchHistory', families: ['slack_read', 'standup', 'read_only'], rw: 'read', verify: 'none' },
+  { connector: 'slack', action: 'searchMessages', families: ['slack_read', 'standup', 'read_only'], rw: 'read', verify: 'none' },
   { connector: 'slack', action: 'summarizeChannel', families: ['slack_read', 'standup'], rw: 'read', verify: 'none' },
   { connector: 'slack', action: 'summarizeThread', families: ['slack_read'], rw: 'read', verify: 'none' },
   { connector: 'slack', action: 'listPins', families: ['slack_read'], rw: 'read', verify: 'none' },
@@ -102,6 +103,8 @@ const DEFS: CapDef[] = [
 
   // —— Notion ——
   { connector: 'notion', action: 'createPage', families: ['notion', 'launch', 'standup'], rw: 'write', verify: 'get_created' },
+  { connector: 'notion', action: 'updatePage', families: ['notion', 'launch', 'standup'], rw: 'write', verify: 'external_confirm' },
+  { connector: 'notion', action: 'createDatabaseEntry', families: ['notion', 'launch'], rw: 'write', verify: 'get_created' },
   { connector: 'notion', action: 'createDatabase', families: ['notion'], rw: 'write', verify: 'get_created' },
   { connector: 'notion', action: 'publishPage', families: ['notion'], rw: 'write', verify: 'none' },
   { connector: 'notion', action: 'deletePage', families: ['notion'], rw: 'admin', verify: 'external_confirm' },

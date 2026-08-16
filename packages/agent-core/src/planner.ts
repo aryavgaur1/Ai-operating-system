@@ -561,10 +561,13 @@ function parseSlackActionQuery(query: string): Record<string, unknown> {
   if (/\b(search)\b/.test(lower) || (/\b(find|look up)\b/.test(lower) && /\b(slack|history|message)/.test(lower))) {
     const stripped = query
       .replace(/search( in)? slack( history)?( for)?/i, '')
+      .replace(/search\s+messages?\s+(in\s+slack\s+)?(for\s+)?/i, '')
       .replace(/slack/i, '')
       .trim();
     const q = quoted ?? (stripped || query);
-    return { action: 'searchHistory', query: q };
+    // searchMessages is the product alias; same live Slack search path as searchHistory
+    const preferMessages = /\bmessages?\b/.test(lower);
+    return { action: preferMessages ? 'searchMessages' : 'searchHistory', query: q };
   }
   if (/\b(summarize|summarise|recap)\b/.test(lower) && /\b(thread)\b/.test(lower)) {
     const ts = query.match(/\b(\d{10}\.\d+)\b/)?.[1];
@@ -691,11 +694,27 @@ function parseNotionActionQuery(query: string) {
   const lower = query.toLowerCase();
   const isDelete = /\b(delete|remove|archive|destroy|discard)\b/i.test(query) && /\b(page|doc|document|note|task|todo)\b/i.test(query);
   const isPublish = /\b(publish|share|post|submit)\b/i.test(query) && !isDelete;
+  const isUpdate =
+    !isDelete &&
+    !isPublish &&
+    /\b(update|edit|rename|append|change)\b/i.test(query) &&
+    /\b(page|doc|document|note|notion)\b/i.test(query);
+  const isSearch =
+    !isDelete &&
+    !isUpdate &&
+    (/\b(search|find|look\s*up|list)\b/i.test(query) && /\b(page|pages|doc|docs|notion)\b/i.test(query));
   const isTask = /\b(?:todo|to-?do|task|tasks|checklist)\b/i.test(query);
   const isMeeting = /\b(?:meeting note|meeting notes|meeting|standup|sync)\b/i.test(query);
   const isSummary = /\b(?:summary|summarize|recap|overview)\b/i.test(query);
   const explicitDatabase = /\b(database|db|table|board|kanban)\b/i.test(query);
   const isFormCreation = /\b(?:create|make|new)\b\s+(?:form|survey|database|db|table|board|kanban)\b/i.test(query);
+  const isDbEntry =
+    !isDelete &&
+    !isUpdate &&
+    !isSearch &&
+    explicitDatabase &&
+    /\b(entry|row|item|record)\b/i.test(query) &&
+    /\b(create|add|new)\b/i.test(query);
 
   const titleMatch =
     query.match(/(?:page|doc|document|note|task|todo|form|survey)\s+(?:called|named|titled)?\s*["“]([^"”]+)["”]/i) ||
@@ -704,6 +723,8 @@ function parseNotionActionQuery(query: string) {
     query.match(/(?:body|content|notes|description)\s*(?:is|:)?\s*["“]([^"”]+)["”]/i) ||
     query.match(/(?:body|content|notes|description)\s*(?:is|:)?\s*([^\n]+)$/i) ||
     query.match(/(?:with|using|that has)\s*["“]([^"”]+)["”]/i);
+  const newTitleMatch =
+    query.match(/(?:new\s+title|rename\s+to|set\s+title(?:\s+to)?)\s*["“]?([^"”\n]+?)["”]?(?:\s*$|\s+with|\s+body)/i);
 
   const rawTitle = titleMatch?.[1]?.trim() ?? titleMatch?.[2]?.trim();
   const title = rawTitle ?? query.slice(0, 60).trim();
@@ -716,17 +737,41 @@ function parseNotionActionQuery(query: string) {
       body = `Meeting notes:\n- Attendees:\n- Agenda:\n- Notes:\n- Action items:`;
     } else if (isSummary) {
       body = `Summary page for: ${query.trim()}`;
-    } else {
+    } else if (!isUpdate && !isSearch) {
       body = query.trim();
     }
   }
 
-  const action = isDelete ? 'deletePage' : isPublish ? 'publishPage' : isFormCreation ? 'createDatabase' : 'createPage';
+  if (isSearch) {
+    return {
+      action: 'searchPages',
+      query: rawTitle ?? (query.replace(/\b(search|find|look\s*up|list|notion|pages?|docs?)\b/gi, ' ').trim() || query),
+    };
+  }
+  if (isUpdate) {
+    return {
+      action: 'updatePage',
+      title: rawTitle ?? title,
+      newTitle: newTitleMatch?.[1]?.trim(),
+      description: body || undefined,
+      body: body || undefined,
+    };
+  }
+
+  const action = isDelete
+    ? 'deletePage'
+    : isPublish
+      ? 'publishPage'
+      : isFormCreation
+        ? 'createDatabase'
+        : isDbEntry
+          ? 'createDatabaseEntry'
+          : 'createPage';
   return {
     title,
     body,
     action,
-    useDatabase: explicitDatabase && !isFormCreation,
+    useDatabase: (explicitDatabase && !isFormCreation) || isDbEntry,
     template: action === 'createDatabase' ? 'database' : isTask ? 'task' : isMeeting ? 'meeting' : isSummary ? 'summary' : 'doc',
   };
 }

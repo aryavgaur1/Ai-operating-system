@@ -207,6 +207,8 @@ export async function preflightToolCall(call: ToolCall): Promise<PreflightResult
 
       const writeActions = [
         'createPage',
+        'updatePage',
+        'createDatabaseEntry',
         'createDatabase',
         'createProject',
         'createMeetingNotes',
@@ -215,12 +217,12 @@ export async function preflightToolCall(call: ToolCall): Promise<PreflightResult
         'createRoadmap',
       ];
       if (writeActions.includes(call.action)) {
-        if (!input.title) {
+        if (!input.title && call.action !== 'updatePage') {
           input.title = `Nexora Note ${new Date().toISOString().slice(0, 10)}`;
           healActions.push('inferred_notion_title');
         }
         // Prove a shared parent exists before we queue Approve & run
-        if (!input.parentPageId) {
+        if (!input.parentPageId && call.action !== 'updatePage') {
           const pageSearch = await client.search({
             filter: { property: 'object', value: 'page' },
             page_size: 5,
@@ -497,11 +499,54 @@ export async function verifyToolResult(call: ToolCall, result: ToolCallResult): 
     if (call.tool === 'slack' && call.action === 'joinChannel') {
       return Boolean(output.id || output.channel);
     }
+    if (call.tool === 'slack' && call.action === 'inviteUsers') {
+      const channel = String(output.channel ?? call.input?.channel ?? '').trim();
+      if (!channel) return false;
+      const invited = (output.invited as string[] | undefined) ?? [];
+      const already = (output.alreadyMembers as string[] | undefined) ?? [];
+      const need = [...invited, ...already].filter(Boolean);
+      if (!need.length) return false;
+      try {
+        const members = await slackService.getClient().conversations.members({ channel, limit: 200 });
+        const set = new Set<string>(((members as any).members ?? []) as string[]);
+        return need.every((id) => set.has(id));
+      } catch {
+        return false;
+      }
+    }
+    if (call.tool === 'slack' && (call.action === 'searchHistory' || call.action === 'searchMessages')) {
+      return Array.isArray(output.matches) || typeof output.count === 'number' || Array.isArray(output.messages);
+    }
     if (call.tool === 'jira' && (call.action === 'createIssue' || call.action === 'addComment' || call.action === 'transitionIssue')) {
       return Boolean(output.key || output.id);
     }
-    if (call.tool === 'notion' && (call.action === 'createPage' || call.action === 'createProject' || call.action === 'createPRD' || call.action === 'createWiki' || call.action === 'createMeetingNotes' || call.action === 'createDatabase')) {
-      return Boolean(output.id || output.url);
+    if (
+      call.tool === 'notion' &&
+      (call.action === 'createPage' ||
+        call.action === 'updatePage' ||
+        call.action === 'createDatabaseEntry' ||
+        call.action === 'createProject' ||
+        call.action === 'createPRD' ||
+        call.action === 'createWiki' ||
+        call.action === 'createMeetingNotes' ||
+        call.action === 'createRoadmap' ||
+        call.action === 'createDatabase')
+    ) {
+      const id = String(output.id ?? output.url ?? '').trim();
+      if (!id) return false;
+      try {
+        const { initializeNotionClient } = await import('@enterprise-ai-os/connectors');
+        const client = initializeNotionClient();
+        if (call.action === 'createDatabase') {
+          const db = await (client.databases as any).retrieve({ database_id: String(output.id) });
+          return Boolean(db?.id);
+        }
+        const page = await client.pages.retrieve({ page_id: String(output.id) });
+        return Boolean((page as any)?.id);
+      } catch {
+        // Never soft-pass: unverified Notion writes must fail like Jira P0.1
+        return false;
+      }
     }
     // Gmail / Salesforce must never pass verification without a live external id
     if (call.tool === 'gmail' || call.tool === 'salesforce') {

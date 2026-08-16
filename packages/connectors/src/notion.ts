@@ -308,6 +308,8 @@ class NotionConnector implements ToolConnector {
   listActions(): string[] {
     return [
       'createPage',
+      'updatePage',
+      'createDatabaseEntry',
       'createDatabase',
       'publishPage',
       'deletePage',
@@ -373,14 +375,131 @@ class NotionConnector implements ToolConnector {
                 mocked: false,
               };
             }
+            // In-connector verify (Jira P0.1 standard)
+            try {
+              const retrieved = await client.pages.retrieve({ page_id: page.id });
+              if (!(retrieved as any)?.id) {
+                return {
+                  tool: 'notion',
+                  action,
+                  ok: false,
+                  error: 'Notion createPage verify failed — page not retrievable after create.',
+                  mocked: false,
+                };
+              }
+            } catch (err) {
+              return {
+                tool: 'notion',
+                action,
+                ok: false,
+                error: humanizeNotionError(err),
+                mocked: false,
+              };
+            }
             console.log(`[notion.createPage] REAL ok id=${page.id} url=${(page as any).url ?? ''}`);
             return {
               tool: 'notion',
               action,
               ok: true,
-              output: { id: page.id, url: (page as any).url, title, parentId },
+              output: { id: page.id, url: (page as any).url, title, parentId, verified: true },
               mocked: false,
             };
+          }
+
+          case 'createDatabaseEntry': {
+            // Thin wrapper: create a page (row) under a database parent
+            const created = await this.execute('createPage', { ...input, useDatabase: true });
+            return { ...created, action: 'createDatabaseEntry' };
+          }
+
+          case 'updatePage': {
+            let pageId = String(input.pageId ?? input.id ?? '').trim() || undefined;
+            const titleQuery = String(input.title ?? input.query ?? '').trim();
+            if (!pageId) {
+              if (!titleQuery) {
+                return {
+                  tool: 'notion',
+                  action,
+                  ok: false,
+                  error: 'Notion update needs pageId or an existing page title to find.',
+                  mocked: false,
+                };
+              }
+              const found = await findPageByTitle(client, titleQuery);
+              if (!found?.id) {
+                return {
+                  tool: 'notion',
+                  action,
+                  ok: false,
+                  error: `No Notion page found titled “${titleQuery}”.`,
+                  mocked: false,
+                };
+              }
+              pageId = found.id;
+            }
+
+            const newTitle = String(input.newTitle ?? input.setTitle ?? '').trim();
+            const properties: Record<string, unknown> = {};
+            if (newTitle) {
+              properties.title = { title: [{ type: 'text', text: { content: newTitle.slice(0, 2000) } }] };
+            }
+            // Allow rich_text Description updates when provided
+            const description = String(input.description ?? input.body ?? '').trim();
+            if (description && !newTitle) {
+              // Prefer appending children blocks for body updates
+            }
+
+            try {
+              if (Object.keys(properties).length) {
+                await client.pages.update({
+                  page_id: pageId as string,
+                  properties: properties as any,
+                });
+              }
+              if (description) {
+                const children = buildChildrenBlocks({ body: description, content: description }) ?? [];
+                if (children.length) {
+                  await (client.blocks.children as any).append({
+                    block_id: pageId,
+                    children: children.slice(0, 50),
+                  });
+                }
+              }
+              if (!Object.keys(properties).length && !description) {
+                return {
+                  tool: 'notion',
+                  action,
+                  ok: false,
+                  error: 'Notion update needs newTitle and/or description/body content.',
+                  mocked: false,
+                };
+              }
+              const retrieved = await client.pages.retrieve({ page_id: pageId as string });
+              if (!(retrieved as any)?.id) {
+                return {
+                  tool: 'notion',
+                  action,
+                  ok: false,
+                  error: 'Notion updatePage verify failed — page not retrievable after update.',
+                  mocked: false,
+                };
+              }
+              console.log(`[notion.updatePage] REAL ok id=${pageId}`);
+              return {
+                tool: 'notion',
+                action,
+                ok: true,
+                output: {
+                  id: (retrieved as any).id,
+                  url: (retrieved as any).url,
+                  title: newTitle || extractTitle(retrieved),
+                  verified: true,
+                },
+                mocked: false,
+              };
+            } catch (err) {
+              return { tool: 'notion', action, ok: false, error: humanizeNotionError(err), mocked: false };
+            }
           }
 
           case 'createDatabase': {
@@ -395,8 +514,36 @@ class NotionConnector implements ToolConnector {
                 Description: { rich_text: {} },
               },
             });
-
-            return { tool: 'notion', action, ok: true, output: { id: database.id, url: (database as any).url }, mocked: false };
+            if (!database?.id) {
+              return {
+                tool: 'notion',
+                action,
+                ok: false,
+                error: 'Notion createDatabase returned no id — refusing fake success.',
+                mocked: false,
+              };
+            }
+            try {
+              const retrieved = await (client.databases as any).retrieve({ database_id: database.id });
+              if (!retrieved?.id) {
+                return {
+                  tool: 'notion',
+                  action,
+                  ok: false,
+                  error: 'Notion createDatabase verify failed — database not retrievable after create.',
+                  mocked: false,
+                };
+              }
+            } catch (err) {
+              return { tool: 'notion', action, ok: false, error: humanizeNotionError(err), mocked: false };
+            }
+            return {
+              tool: 'notion',
+              action,
+              ok: true,
+              output: { id: database.id, url: (database as any).url, verified: true },
+              mocked: false,
+            };
           }
 
           case 'publishPage': {

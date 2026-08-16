@@ -148,15 +148,23 @@ async function confirmExternalObject(call: ToolCall, result: ToolCallResult): Pr
     if (
       call.tool === 'notion' &&
       (call.action === 'createPage' ||
+        call.action === 'updatePage' ||
+        call.action === 'createDatabaseEntry' ||
         call.action === 'createProject' ||
         call.action === 'createPRD' ||
         call.action === 'createWiki' ||
         call.action === 'createMeetingNotes' ||
+        call.action === 'createRoadmap' ||
         call.action === 'createDatabase')
     ) {
       const id = String(output.id ?? '').trim();
       if (!id) return false;
-      const page = await initializeNotionClient().pages.retrieve({ page_id: id });
+      const client = initializeNotionClient();
+      if (call.action === 'createDatabase') {
+        const db = await (client.databases as any).retrieve({ database_id: id });
+        return Boolean(db?.id);
+      }
+      const page = await client.pages.retrieve({ page_id: id });
       return Boolean((page as any)?.id);
     }
 
@@ -212,7 +220,25 @@ async function confirmExternalObject(call: ToolCall, result: ToolCallResult): Pr
     }
 
     if (call.tool === 'slack' && call.action === 'inviteUsers') {
-      return output.ok !== false && Boolean(output.channel || call.input?.channel);
+      const channel = String(output.channel ?? call.input?.channel ?? '').trim();
+      if (!channel) return false;
+      const invited = (output.invited as string[] | undefined) ?? [];
+      const already = (output.alreadyMembers as string[] | undefined) ?? [];
+      const need = [...invited, ...already].filter(Boolean);
+      if (!need.length && output.ok === true) {
+        return false;
+      }
+      try {
+        const members = await slackService.getClient().conversations.members({ channel, limit: 200 });
+        const set = new Set<string>(((members as any).members ?? []) as string[]);
+        return need.length > 0 && need.every((id) => set.has(id));
+      } catch {
+        return false;
+      }
+    }
+
+    if (call.tool === 'slack' && (call.action === 'searchHistory' || call.action === 'searchMessages')) {
+      return Array.isArray(output.matches) || typeof output.count === 'number' || Array.isArray(output.messages);
     }
 
     if (call.tool === 'slack' && call.action === 'openDm') {
