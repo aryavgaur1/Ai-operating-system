@@ -162,11 +162,16 @@ async function executeOne(call: ToolCall, maxAttempts = 3): Promise<{ result: To
       }
 
       if (result.mocked) {
+        const failed: ToolCallResult = {
+          ...result,
+          ok: false,
+          mocked: false,
+          error:
+            humanizeError(current.tool, current.action, result.error) ||
+            `Refusing mock success for ${current.tool}.${current.action} — connect the live integration and retry.`,
+        };
         return {
-          result: {
-            ...result,
-            error: humanizeError(current.tool, current.action, result.error),
-          },
+          result: failed,
           step: {
             stepId,
             tool: current.tool,
@@ -174,7 +179,7 @@ async function executeOne(call: ToolCall, maxAttempts = 3): Promise<{ result: To
             status: 'fatal_failure',
             attempts,
             durationMs: Date.now() - startedAll,
-            error: result.error,
+            error: failed.error,
             healActions,
             verified: false,
           },

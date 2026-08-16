@@ -262,7 +262,7 @@ async function confirmExternalObject(call: ToolCall, result: ToolCallResult): Pr
   }
 }
 
-function rejectMockOrUnverified(result: ToolCallResult, verified: boolean): ToolCallResult {
+export function rejectMockOrUnverified(result: ToolCallResult, verified: boolean): ToolCallResult {
   if (result.mocked) {
     return {
       ...result,

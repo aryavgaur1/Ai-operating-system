@@ -465,7 +465,8 @@ export async function verifyToolResult(call: ToolCall, result: ToolCallResult): 
         });
         return Boolean((hist as any).ok && Array.isArray((hist as any).messages) && (hist as any).messages.length > 0);
       } catch {
-        return Boolean(ts);
+        // Never soft-pass: unverified Slack posts must fail like Jira P0.1
+        return false;
       }
     }
     if (call.tool === 'slack' && call.action === 'createWarRoom') {
