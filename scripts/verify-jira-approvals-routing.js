@@ -197,6 +197,21 @@ async function main() {
   assert.strictEqual(follow.allowWorkflow, false);
   console.log('PASS follow-up phrase cannot steal to Slack');
 
+  // History/memory context must not steal Slack/Notion into Jira
+  const poisonedSlack = resolveAuthoritativeRoute(
+    'Post to #general on Slack: "Nexora verify"\n\n[Context for planner — do not invent results]\nConversation history:\nUSER: Create a Jira ticket to track the vendor Contract follow up'
+  );
+  assert.ok(poisonedSlack.family === 'slack_write' || poisonedSlack.lockedTool === 'slack');
+  assert.notStrictEqual(poisonedSlack.lockedAction, 'createIssue');
+  console.log('PASS planner context cannot steal Slack → Jira');
+
+  const poisonedNotion = resolveAuthoritativeRoute(
+    'Create a Notion page called "Investor Notes"\n\n[Context for planner — do not invent results]\nConversation history:\nUSER: Create a Jira ticket'
+  );
+  assert.ok(poisonedNotion.family === 'notion' || poisonedNotion.lockedTool === 'notion');
+  assert.notStrictEqual(poisonedNotion.lockedAction, 'createIssue');
+  console.log('PASS planner context cannot steal Notion → Jira');
+
   console.log('\nAll Phase 1 authoritative routing regressions passed.');
 }
 

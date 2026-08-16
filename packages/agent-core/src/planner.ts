@@ -5,7 +5,7 @@ import {
   DEFAULT_APPROVAL_POLICY,
 } from '@enterprise-ai-os/shared';
 import type { LLMClient } from './llmClient';
-import { isExplicitNotionCommand, isExplicitSlackCommand, isExplicitJiraCreate, isExplicitJiraDelete } from './os/intentDetector';
+import { isExplicitNotionCommand, isExplicitSlackCommand, isExplicitJiraCreate, isExplicitJiraDelete, routingQuery } from './os/intentDetector';
 import { detectRequestMode, type AuthoritativeRoute, toolCallFromRoute } from './os/routingPolicy';
 
 // ============================================================
@@ -777,6 +777,7 @@ function parseNotionActionQuery(query: string) {
 }
 
 function proposeToolCalls(query: string, route?: AuthoritativeRoute): ToolCall[] {
+  query = routingQuery(query);
   // Authoritative route wins — no cross-tool keyword race
   if (route) {
     if (route.mode === 'cancel' || route.mode === 'clarify' || route.ambiguous) {
@@ -974,6 +975,7 @@ export async function buildPlan(
   llm: LLMClient,
   route?: AuthoritativeRoute
 ): Promise<AgentPlan> {
+  query = routingQuery(query);
   const lower = query.toLowerCase();
   if (
     (/\b(gmail|salesforce)\b/.test(lower) ||

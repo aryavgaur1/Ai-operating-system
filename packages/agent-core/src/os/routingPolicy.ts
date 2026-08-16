@@ -17,6 +17,7 @@ import {
   isExplicitNotionCommand,
   isExplicitSlackCommand,
   isSlackReadQuestion,
+  routingQuery,
 } from './intentDetector';
 import {
   buildCapabilityScope,
@@ -216,6 +217,8 @@ function ambiguousClarifyMessage(query: string, dest: ReturnType<typeof destinat
  * Call this ONCE; planner/workflow/executor must obey it.
  */
 export function resolveAuthoritativeRoute(query: string): AuthoritativeRoute {
+  // History/memory appended after planner marker must not change the live route
+  query = routingQuery(query);
   const mode = detectRequestMode(query);
   const entities = extractEntities(query);
   const routeAction = detectRouteAction(query);

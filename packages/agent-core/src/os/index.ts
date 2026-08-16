@@ -4,6 +4,7 @@ export {
   isExplicitNotionCommand,
   isExplicitJiraCreate,
   isExplicitJiraDelete,
+  routingQuery,
 } from './intentDetector';
 export { planWorkflow } from './workflowPlanner';
 export type { WorkflowPlan } from './workflowPlanner';

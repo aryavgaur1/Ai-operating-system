@@ -19,6 +19,16 @@ function stripUrls(q: string): string {
   return q.replace(/https?:\/\/[^\s<>"']+/gi, ' ');
 }
 
+/**
+ * Planner may append conversation/memory after this marker.
+ * Routing must use only the live user utterance — history must not steal Slack/Notion → Jira.
+ */
+export function routingQuery(query: string): string {
+  const marker = /\n\n\[Context for planner[^\]]*\]\n?/i;
+  const cut = query.split(marker)[0] ?? query;
+  return cut.trim();
+}
+
 function projectEntity(q: string): Record<string, string> {
   const quoted = q.match(/["“]([^"”]+)["”]/)?.[1];
   const named =
@@ -33,7 +43,7 @@ function projectEntity(q: string): Record<string, string> {
  * e.g. "why was the project hello delayed on slack"
  */
 export function isSlackReadQuestion(q: string): boolean {
-  const lower = q.toLowerCase();
+  const lower = routingQuery(q).toLowerCase();
   const hasWriteVerb =
     /\b(post|send|create|make|invite|upload|pin|remind|bookmark|canvas|schedule|set\s+(?:the\s+)?(?:topic|purpose))\b/.test(
       lower
@@ -61,7 +71,7 @@ export function isSlackReadQuestion(q: string): boolean {
 }
 
 export function isExplicitSlackCommand(q: string): boolean {
-  const lower = q.toLowerCase();
+  const lower = routingQuery(q).toLowerCase();
   // Read/intelligence questions must NOT be treated as write CRUD
   if (isSlackReadQuestion(q)) return false;
 
@@ -85,11 +95,12 @@ export function isExplicitSlackCommand(q: string): boolean {
 }
 
 export function isExplicitNotionCommand(q: string): boolean {
-  const text = stripUrls(q.toLowerCase());
+  const live = routingQuery(q);
+  const text = stripUrls(live.toLowerCase());
   // Slack wins if both mentioned as destination
-  if (isExplicitSlackCommand(q) && /\bon\s+slack\b/.test(q.toLowerCase())) return false;
+  if (isExplicitSlackCommand(q) && /\bon\s+slack\b/.test(live.toLowerCase())) return false;
   if (/\bon\s+notion\b/.test(text)) return true;
-  if (/\bnotion\b/.test(text) && /\b(page|doc|prd|wiki|database|project|meeting|roadmap|create|search|archive|publish)\b/.test(text))
+  if (/\bnotion\b/.test(text) && /\b(page|doc|prd|wiki|database|project|meeting|roadmap|create|search|archive|publish|update|edit)\b/.test(text))
     return true;
   if (/\b(prd|wiki|meeting notes|sprint board)\b/.test(text) && !/\bslack\b/.test(text)) return true;
   return false;
@@ -197,7 +208,7 @@ const RULES: IntentRule[] = [
  * Meta modes (cancel / clarify / dry-run / delete) are excluded.
  */
 export function isExplicitJiraCreate(q: string): boolean {
-  const text = q.toLowerCase();
+  const text = routingQuery(q).toLowerCase();
 
   // Meta / non-create modes — never force createIssue
   if (/\b(cancel|never\s*mind|scratch\s+that|abort)\b/.test(text)) return false;
@@ -233,7 +244,7 @@ export function isExplicitJiraCreate(q: string): boolean {
 
 /** Explicit Jira delete — must map to deleteIssue, never createIssue. */
 export function isExplicitJiraDelete(q: string): boolean {
-  const text = q.toLowerCase();
+  const text = routingQuery(q).toLowerCase();
   return (
     /\b(delete|remove)\b/.test(text) &&
     (/\bjira\b/.test(text) || /\b(ticket|issue)\b/.test(text)) &&
@@ -242,7 +253,7 @@ export function isExplicitJiraDelete(q: string): boolean {
 }
 
 export function detectOsIntent(query: string): OsIntent {
-  const q = query.toLowerCase();
+  const q = routingQuery(query).toLowerCase();
 
   // Read/intelligence questions first — never force postMessage for "why … on slack"
   if (isSlackReadQuestion(query)) {
