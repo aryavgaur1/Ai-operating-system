@@ -168,34 +168,59 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
           setHydrating(false);
           return;
         }
-        try {
+        const loadOnce = async () => {
           const data = await api.getConversation(resumeId);
-          if (cancelled) return;
+          if (cancelled) return false;
           setConversationIdState(resumeId);
           writeActiveConversationHint(resumeId);
           loadedIdRef.current = resumeId;
           setTurns(mapMessagesToTurns(data.messages || []));
           setError(null);
-        } catch {
-          writeActiveConversationHint(undefined);
-          loadedIdRef.current = undefined;
-          if (!cancelled) {
-            setError('Conversation not found or inaccessible.');
-            setTurns([]);
-            // Fall through to server resume instead of inventing a blank chat.
-            try {
-              const fallback = await resolveResumeConversationId();
-              if (!cancelled && fallback && fallback !== resumeId) {
-                router.replace(chatConversationPath(fallback));
-                return;
-              }
-            } catch {
-              // ignore
-            }
-            router.replace(APP_ROUTES.chat);
+          return true;
+        };
+        try {
+          if (await loadOnce()) {
+            if (!cancelled) setHydrating(false);
+            return;
           }
-        } finally {
-          if (!cancelled) setHydrating(false);
+        } catch (firstErr) {
+          if (cancelled) return;
+          // Transient auth/network blip — retry once before treating as missing.
+          try {
+            await new Promise((r) => setTimeout(r, 400));
+            if (cancelled) return;
+            if (await loadOnce()) {
+              if (!cancelled) setHydrating(false);
+              return;
+            }
+          } catch (secondErr) {
+            if (cancelled) return;
+            const msg = String((secondErr as Error)?.message || (firstErr as Error)?.message || '');
+            const isMissing = /not found|404|inaccessible/i.test(msg);
+            loadedIdRef.current = undefined;
+            if (isMissing) {
+              // Confirmed missing — try a different owned conversation. NEVER wipe to blank
+              // when resume still points at the same id (that caused blank-chat-with-History).
+              writeActiveConversationHint(undefined);
+              try {
+                const fallback = await resolveResumeConversationId();
+                if (!cancelled && fallback && fallback !== resumeId) {
+                  router.replace(chatConversationPath(fallback));
+                  return;
+                }
+              } catch {
+                // ignore
+              }
+              setError('Conversation not found or inaccessible.');
+              setTurns([]);
+              if (!cancelled) setHydrating(false);
+              return;
+            }
+            // Non-404: keep URL + hint; show error — do not open a blank chat.
+            setError(msg || 'Could not load conversation. Retrying may help.');
+            if (!cancelled) setHydrating(false);
+            return;
+          }
         }
         return;
       }

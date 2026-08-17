@@ -17,7 +17,8 @@ export function WorkspaceRail() {
 
   useEffect(() => {
     let cancelled = false;
-    setChatHref(chatResumeHref());
+    const hinted = chatResumeHref();
+    if (hinted !== APP_ROUTES.chat) setChatHref(hinted);
     (async () => {
       try {
         const href = await resolveChatHref();
@@ -73,7 +74,7 @@ export function WorkspaceRail() {
           const Icon = item.icon;
           const badge = item.badgeKey === 'approvals' ? pendingApprovals : 0;
           return (
-            <Link key={item.label} href={item.href} className="group relative">
+            <Link key={`${item.label}:${item.href}`} href={item.href} prefetch={false} className="group relative">
               <span
                 className={cn(
                   'relative flex h-10 w-10 items-center justify-center rounded-2xl transition-all',

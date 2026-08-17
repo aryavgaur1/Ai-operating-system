@@ -47,13 +47,15 @@ export function Nav() {
 
   useEffect(() => {
     let cancelled = false;
-    setChatHref(chatResumeHref());
+    // Prefer last known concrete chat href; do not flash bare /app/chat while resume loads.
+    const hinted = chatResumeHref();
+    if (hinted !== APP_ROUTES.chat) setChatHref(hinted);
     (async () => {
       try {
         const href = await resolveChatHref();
         if (!cancelled) setChatHref(href);
       } catch {
-        // keep hint / bare entry — bare /app/chat server-resolves
+        // keep hint / last concrete href — bare /app/chat still server-resolves
       }
     })();
     return () => {
@@ -200,7 +202,7 @@ export function Nav() {
             const Icon = link.icon;
             const showApprovalBadge = matchPrefix === APP_ROUTES.approvals && pendingApprovals > 0;
             return (
-              <Link key={link.label} href={link.href} className="relative">
+              <Link key={`${link.label}:${link.href}`} href={link.href} prefetch={false} className="relative">
                 {active && (
                   <motion.span
                     layoutId="nav-pill"
