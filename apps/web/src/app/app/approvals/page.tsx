@@ -21,7 +21,7 @@ import { api, type ApprovalRequest, type ToolCallResult } from '@/lib/api';
 import { GlassCard, Reveal } from '@/components/motion';
 import { RiskRadial } from '@/components/charts';
 import { cn } from '@/lib/utils';
-import { APP_ROUTES, chatConversationPath } from '@/lib/routes';
+import { APP_ROUTES, chatConversationPath, chatResumeHref } from '@/lib/routes';
 import { useRouter, useSearchParams } from 'next/navigation';
 
 const riskScore: Record<string, number> = { low: 24, medium: 58, high: 88 };
@@ -568,7 +568,7 @@ function ApprovalsPageInner() {
               res.approval.conversationId ||
               target?.conversationId ||
               '';
-            router.push(conv ? chatConversationPath(conv) : APP_ROUTES.chat);
+            router.push(conv ? chatConversationPath(conv) : chatResumeHref());
             return;
           }
           load();
@@ -627,7 +627,7 @@ function ApprovalsPageInner() {
       const conv =
         pending.find((p) => p.conversationId)?.conversationId ||
         '';
-      router.push(conv ? chatConversationPath(conv) : APP_ROUTES.chat);
+      router.push(conv ? chatConversationPath(conv) : chatResumeHref());
     }
   }
 
@@ -733,7 +733,7 @@ function ApprovalsPageInner() {
                     <li>Post to #ops on Slack: standup summary ready</li>
                   </ul>
                   <Link
-                    href={APP_ROUTES.chat}
+                    href={chatResumeHref()}
                     className="mt-4 inline-flex items-center gap-2 rounded-full bg-white/10 px-4 py-2 text-xs font-semibold text-white"
                   >
                     <MessageSquare size={13} /> Open Chat
@@ -1022,7 +1022,7 @@ function ApprovalsPageInner() {
                       </div>
                     </div>
                     <Link
-                      href={APP_ROUTES.chat}
+                      href={a.conversationId ? chatConversationPath(a.conversationId) : chatResumeHref()}
                       className="rounded-full border border-amber-400/30 bg-amber-500/10 px-4 py-2 text-xs font-semibold text-amber-100"
                     >
                       Return to Chat
@@ -1202,7 +1202,7 @@ function ApprovalsPageInner() {
                             </div>
                             <p className="mt-1.5 text-sm leading-6 text-amber-100/90">{errorText}</p>
                             <Link
-                              href={APP_ROUTES.chat}
+                              href={a.conversationId ? chatConversationPath(a.conversationId) : chatResumeHref()}
                               className="mt-3 inline-flex rounded-full border border-amber-400/30 bg-amber-500/10 px-3 py-1.5 text-[11px] font-semibold text-amber-100"
                             >
                               Return to Chat to retry
@@ -1232,7 +1232,7 @@ function ApprovalsPageInner() {
         </div>
       )}
 
-      <Link href={APP_ROUTES.chat} className="inline-flex items-center gap-1.5 text-xs text-neutral-500 hover:text-white">
+      <Link href={chatResumeHref()} className="inline-flex items-center gap-1.5 text-xs text-neutral-500 hover:text-white">
         <ArrowLeft size={12} /> Back to chat
       </Link>
     </div>

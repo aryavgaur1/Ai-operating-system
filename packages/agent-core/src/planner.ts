@@ -7,6 +7,7 @@ import {
 import type { LLMClient } from './llmClient';
 import { isExplicitNotionCommand, isExplicitSlackCommand, isExplicitJiraCreate, isExplicitJiraDelete, routingQuery } from './os/intentDetector';
 import { detectRequestMode, type AuthoritativeRoute, toolCallFromRoute } from './os/routingPolicy';
+import { resolveNotionCreateBody } from './notionContent';
 
 // ============================================================
 // LLM Planner — the "reasoning engine" box in the architecture
@@ -727,19 +728,25 @@ function parseNotionActionQuery(query: string) {
     query.match(/(?:new\s+title|rename\s+to|set\s+title(?:\s+to)?)\s*["“]?([^"”\n]+?)["”]?(?:\s*$|\s+with|\s+body)/i);
 
   const rawTitle = titleMatch?.[1]?.trim() ?? titleMatch?.[2]?.trim();
-  const title = rawTitle ?? query.slice(0, 60).trim();
+  const title =
+    rawTitle ??
+    query.match(/(?:called|named|titled)\s+["']?([^"'\n.]+)["']?/i)?.[1]?.trim() ??
+    query.slice(0, 60).trim();
   let body = bodyMatch?.[1]?.trim() ?? '';
 
   if (!body) {
     if (isTask) {
-      body = `- [ ] ${query.trim()}`;
+      body = resolveNotionCreateBody(query, title, `- [ ] ${title}`);
     } else if (isMeeting) {
-      body = `Meeting notes:\n- Attendees:\n- Agenda:\n- Notes:\n- Action items:`;
+      body = resolveNotionCreateBody(query, title);
     } else if (isSummary) {
-      body = `Summary page for: ${query.trim()}`;
+      body = resolveNotionCreateBody(query, title);
     } else if (!isUpdate && !isSearch) {
-      body = query.trim();
+      // Never echo the raw user command as page body
+      body = resolveNotionCreateBody(query, title);
     }
+  } else if (body.toLowerCase() === query.trim().toLowerCase() && !isUpdate && !isSearch) {
+    body = resolveNotionCreateBody(query, title);
   }
 
   if (isSearch) {

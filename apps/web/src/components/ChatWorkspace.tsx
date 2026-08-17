@@ -119,7 +119,7 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
   const lastUserMessageRef = useRef<string>('');
   const recognitionRef = useRef<any>(null);
 
-  function setConversationId(id: string | undefined) {
+  function setConversationId(id: string | undefined, opts?: { hardNavigate?: boolean }) {
     setConversationIdState(id);
     writeActiveConversationId(id);
     if (!id) {
@@ -127,9 +127,16 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
       return;
     }
     const target = chatConversationPath(id);
-    if (typeof window !== 'undefined' && window.location.pathname !== target) {
-      router.replace(target);
+    if (typeof window === 'undefined') return;
+    if (window.location.pathname === target) return;
+
+    // Avoid remounting ChatWorkspace mid-stream (that wiped the live transcript).
+    // Soft-update the URL; hard navigate only when explicitly requested (e.g. after stream).
+    if (!opts?.hardNavigate && !routeConversationId) {
+      window.history.replaceState(window.history.state, '', target);
+      return;
     }
+    router.replace(target);
   }
 
   async function refreshHistory() {
@@ -146,7 +153,9 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
     (async () => {
       await refreshHistory();
       const resumeId =
-        routeConversationId && UUID_RE.test(routeConversationId) ? routeConversationId : undefined;
+        routeConversationId && UUID_RE.test(routeConversationId)
+          ? routeConversationId
+          : undefined;
 
       if (resumeId) {
         try {
@@ -167,7 +176,21 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
         }
       }
 
-      // Bare /app/chat — empty workspace (URL is source of truth)
+      // Bare /app/chat: resume last known conversation instead of wiping history.
+      // sessionStorage is convenience only — we still load from the database.
+      const cached = (() => {
+        try {
+          const id = window.sessionStorage.getItem(ACTIVE_CONVERSATION_KEY)?.trim();
+          return id && UUID_RE.test(id) ? id : undefined;
+        } catch {
+          return undefined;
+        }
+      })();
+      if (cached) {
+        if (!cancelled) router.replace(chatConversationPath(cached));
+        return;
+      }
+
       if (!cancelled) {
         setConversationIdState(undefined);
         setTurns([]);
@@ -309,7 +332,7 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
             );
           }
           if (event.type === 'error') setError(event.message);
-          if (event.type === 'conversation') setConversationId(event.conversationId);
+          if (event.type === 'conversation') setConversationId(event.conversationId, { hardNavigate: false });
           if (event.type === 'done') {
             setTurns((prev) => {
               const next = [...prev];
@@ -323,11 +346,15 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
               }
               return next;
             });
-            if (event.result.conversationId) setConversationId(event.result.conversationId);
+            if (event.result.conversationId) {
+              setConversationId(event.result.conversationId, { hardNavigate: true });
+            }
           }
         },
       });
-      if (result?.conversationId) setConversationId(result.conversationId);
+      if (result?.conversationId) {
+        setConversationId(result.conversationId, { hardNavigate: true });
+      }
       refreshHistory();
     } catch (err) {
       if ((err as Error).name === 'AbortError') {

@@ -97,12 +97,29 @@ export function isExplicitSlackCommand(q: string): boolean {
 export function isExplicitNotionCommand(q: string): boolean {
   const live = routingQuery(q);
   const text = stripUrls(live.toLowerCase());
-  // Slack wins if both mentioned as destination
-  if (isExplicitSlackCommand(q) && /\bon\s+slack\b/.test(live.toLowerCase())) return false;
+  // DESTINATION Slack beats Notion as a mere referenced noun/context
+  // e.g. "Post a Slack update about the Notion integration in #general"
+  if (isExplicitSlackCommand(q)) return false;
+  // DESTINATION Jira create/delete beats Notion mention-as-context
+  if (isExplicitJiraCreate(q) || isExplicitJiraDelete(q)) return false;
+
   if (/\bon\s+notion\b/.test(text)) return true;
-  if (/\bnotion\b/.test(text) && /\b(page|doc|prd|wiki|database|project|meeting|roadmap|create|search|archive|publish|update|edit)\b/.test(text))
+  // Require Notion + document artifact / CRUD — not just the word "Notion" or "update"
+  if (
+    /\bnotion\b/.test(text) &&
+    /\b(page|doc|document|prd|wiki|database|meeting\s+notes|roadmap)\b/.test(text)
+  ) {
     return true;
-  if (/\b(prd|wiki|meeting notes|sprint board)\b/.test(text) && !/\bslack\b/.test(text)) return true;
+  }
+  if (
+    /\bnotion\b/.test(text) &&
+    /\b(create|search|archive|publish|update|edit|make|new)\b/.test(text) &&
+    /\b(page|doc|document|prd|wiki|database|project|meeting|roadmap)\b/.test(text)
+  ) {
+    return true;
+  }
+  if (/\b(prd|wiki|meeting notes|sprint board)\b/.test(text) && !/\bslack\b/.test(text) && !/\bjira\b/.test(text))
+    return true;
   return false;
 }
 

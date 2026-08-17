@@ -4,6 +4,7 @@ import {
   policyAllowsAutoRun,
   DEFAULT_APPROVAL_POLICY,
 } from '@enterprise-ai-os/shared';
+import { resolveNotionCreateBody } from '../notionContent';
 
 // ============================================================
 // STEP 2 — Workflow Planner
@@ -154,19 +155,20 @@ export function planWorkflow(query: string, intent: OsIntent): WorkflowPlan {
       planSteps.push('Create / update Notion artifact from intent');
       reasoning.push('Notion-first workflow.');
       const title = intent.entities.title || query.slice(0, 60);
+      const draftBody = resolveNotionCreateBody(query, title);
       const lower = query.toLowerCase();
       if (/\bprd\b/.test(lower)) {
-        toolCalls.push(call('notion', 'createPRD', { title, body: query }));
+        toolCalls.push(call('notion', 'createPRD', { title, body: draftBody }));
       } else if (/\bwiki\b/.test(lower)) {
-        toolCalls.push(call('notion', 'createWiki', { title, body: query }));
+        toolCalls.push(call('notion', 'createWiki', { title, body: draftBody }));
       } else if (/\bmeeting/.test(lower)) {
-        toolCalls.push(call('notion', 'createMeetingNotes', { title, body: query }));
+        toolCalls.push(call('notion', 'createMeetingNotes', { title, body: draftBody }));
       } else if (/\b(database|db|table|board|kanban)\b/.test(lower)) {
         toolCalls.push(call('notion', 'createDatabase', { title }));
       } else if (/\broadmap\b/.test(lower)) {
-        toolCalls.push(call('notion', 'createRoadmap', { title, body: query }));
+        toolCalls.push(call('notion', 'createRoadmap', { title, body: draftBody }));
       } else if (/\b(project|hub|sprint)\b/.test(lower)) {
-        toolCalls.push(call('notion', 'createProject', { title, body: query }));
+        toolCalls.push(call('notion', 'createProject', { title, body: draftBody }));
       } else if (/\b(search|find)\b/.test(lower)) {
         toolCalls.push(call('notion', 'searchPages', { query: title }));
       } else if (/\b(delete|archive|remove)\b/.test(lower)) {
@@ -174,7 +176,7 @@ export function planWorkflow(query: string, intent: OsIntent): WorkflowPlan {
       } else if (/\b(publish)\b/.test(lower)) {
         toolCalls.push(call('notion', 'publishPage', { title }));
       } else {
-        toolCalls.push(call('notion', 'createPage', { title, body: query, template: 'doc' }));
+        toolCalls.push(call('notion', 'createPage', { title, body: draftBody, template: 'doc' }));
       }
       break;
     }

@@ -18,13 +18,12 @@ import {
 import { useEffect, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { api, clearSession } from '@/lib/api';
-import { APP_HOME, APP_ROUTES, LOGIN } from '@/lib/routes';
+import { APP_HOME, APP_ROUTES, LOGIN, chatResumeHref } from '@/lib/routes';
 import { isPlatformAdminEmail } from '@/lib/platformAdmin';
 
-const LINKS = [
+const STATIC_LINKS = [
   { href: APP_ROUTES.dashboard, label: 'Dashboard', icon: LayoutGrid },
   { href: APP_ROUTES.approvals, label: 'Approvals', icon: ShieldCheck },
-  { href: APP_ROUTES.chat, label: 'Chat', icon: MessageSquare },
   { href: APP_ROUTES.integrations, label: 'Integrations', icon: Plug },
 ];
 
@@ -43,6 +42,13 @@ export function Nav() {
   const [liveNotifs, setLiveNotifs] = useState<{ id: string; text: string; time: string; href?: string }[]>([]);
   const notifRef = useRef<HTMLDivElement | null>(null);
   const profileRef = useRef<HTMLDivElement | null>(null);
+
+  const LINKS = [
+    STATIC_LINKS[0],
+    STATIC_LINKS[1],
+    { href: chatResumeHref(), label: 'Chat', icon: MessageSquare, matchPrefix: APP_ROUTES.chat },
+    STATIC_LINKS[2],
+  ];
 
   useEffect(() => {
     api
@@ -171,11 +177,12 @@ export function Nav() {
 
         <nav className="hidden items-center gap-1 rounded-full border border-white/8 bg-black/20 p-1 md:flex">
           {LINKS.map((link) => {
-            const active = pathname?.startsWith(link.href);
+            const matchPrefix = 'matchPrefix' in link && link.matchPrefix ? link.matchPrefix : link.href;
+            const active = pathname?.startsWith(matchPrefix);
             const Icon = link.icon;
-            const showApprovalBadge = link.href === APP_ROUTES.approvals && pendingApprovals > 0;
+            const showApprovalBadge = matchPrefix === APP_ROUTES.approvals && pendingApprovals > 0;
             return (
-              <Link key={link.href} href={link.href} className="relative">
+              <Link key={link.label} href={link.href} className="relative">
                 {active && (
                   <motion.span
                     layoutId="nav-pill"
@@ -352,12 +359,13 @@ export function Nav() {
 
       <nav className="glass mx-auto mt-3 flex max-w-7xl items-center gap-1 overflow-x-auto rounded-2xl p-1.5 md:hidden">
         {LINKS.map((link) => {
-          const active = pathname?.startsWith(link.href);
+          const matchPrefix = 'matchPrefix' in link && link.matchPrefix ? link.matchPrefix : link.href;
+          const active = pathname?.startsWith(matchPrefix);
           const Icon = link.icon;
-          const showApprovalBadge = link.href === APP_ROUTES.approvals && pendingApprovals > 0;
+          const showApprovalBadge = matchPrefix === APP_ROUTES.approvals && pendingApprovals > 0;
           return (
             <Link
-              key={link.href}
+              key={link.label}
               href={link.href}
               className={cn(
                 'flex shrink-0 items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs transition-colors',

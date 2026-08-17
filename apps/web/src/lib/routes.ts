@@ -27,6 +27,30 @@ export function chatConversationPath(conversationId: string): string {
   return `${APP_ROUTES.chat}/${encodeURIComponent(conversationId)}`;
 }
 
+const ACTIVE_CONVERSATION_KEY = 'nexora:activeConversationId';
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/** Convenience cache only — DB + URL remain authoritative. */
+export function readCachedConversationId(): string | undefined {
+  if (typeof window === 'undefined') return undefined;
+  try {
+    const id = window.sessionStorage.getItem(ACTIVE_CONVERSATION_KEY)?.trim();
+    return id && UUID_RE.test(id) ? id : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Chat nav target: resume last conversation when known so Nav/Approvals never
+ * dump the user on empty bare /app/chat.
+ */
+export function chatResumeHref(): string {
+  const id = readCachedConversationId();
+  return id ? chatConversationPath(id) : APP_ROUTES.chat;
+}
+
 export const MARKETING_ROUTES = [
   '/',
   '/features',

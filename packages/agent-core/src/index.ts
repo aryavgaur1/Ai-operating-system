@@ -10,3 +10,4 @@ export * from './orchestrator';
 export * from './os';
 export * from './aiService';
 export * from './conversationResults';
+export * from './notionContent';

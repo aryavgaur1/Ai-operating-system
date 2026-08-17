@@ -170,19 +170,30 @@ function detectRouteAction(query: string): RouteAction {
   return 'unknown';
 }
 
+/**
+ * Destination systems (where the action runs) — NOT referenced nouns in content.
+ * "Post a Slack update about the Notion integration" → Slack only.
+ * "Create a Notion page documenting our Jira integration" → Notion only.
+ */
 function destinations(query: string): { jira: boolean; slack: boolean; notion: boolean } {
   const t = query.toLowerCase();
-  const jira =
-    /\bjira\b/.test(t) ||
-    (/\b(ticket|issue)\b/.test(t) && !/\b(slack|notion|channel|war\s*room)\b/.test(t)) ||
-    isExplicitJiraCreate(query) ||
-    isExplicitJiraDelete(query);
+
   const slack =
     isExplicitSlackCommand(query) ||
-    /\bslack\b/.test(t) ||
-    /#[a-z0-9_-]+/i.test(query) ||
     /\b(war\s*room|launch\s+war)\b/.test(t);
-  const notion = isExplicitNotionCommand(query) || /\bnotion\b/.test(t);
+
+  // Notion destination only via explicit Notion command (already yields to Slack/Jira dest)
+  const notion = !slack && isExplicitNotionCommand(query);
+
+  const jira =
+    !slack &&
+    !notion &&
+    (isExplicitJiraCreate(query) ||
+      isExplicitJiraDelete(query) ||
+      (/\bjira\b/.test(t) &&
+        /\b(create|open|file|log|track|update|delete|transition|assign|comment|ticket|issue)\b/.test(t)) ||
+      (/\b(ticket|issue)\b/.test(t) && !/\b(slack|notion|channel|war\s*room|page|doc|message)\b/.test(t)));
+
   return { jira, slack, notion };
 }
 

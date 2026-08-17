@@ -6,19 +6,20 @@ import { motion } from 'framer-motion';
 import { useEffect, useState } from 'react';
 import { LayoutGrid, MessageSquare, ShieldCheck, Plug, Settings, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { APP_ROUTES } from '@/lib/routes';
+import { APP_ROUTES, chatResumeHref } from '@/lib/routes';
 import { api } from '@/lib/api';
-
-const ITEMS = [
-  { href: APP_ROUTES.dashboard, label: 'Dashboard', icon: LayoutGrid },
-  { href: APP_ROUTES.approvals, label: 'Approvals', icon: ShieldCheck, badgeKey: 'approvals' as const },
-  { href: APP_ROUTES.chat, label: 'Chat', icon: MessageSquare },
-  { href: APP_ROUTES.integrations, label: 'Integrations', icon: Plug },
-];
 
 export function WorkspaceRail() {
   const pathname = usePathname();
   const [pendingApprovals, setPendingApprovals] = useState(0);
+  const chatHref = chatResumeHref();
+
+  const ITEMS = [
+    { href: APP_ROUTES.dashboard, label: 'Dashboard', icon: LayoutGrid, matchPrefix: APP_ROUTES.dashboard },
+    { href: APP_ROUTES.approvals, label: 'Approvals', icon: ShieldCheck, badgeKey: 'approvals' as const, matchPrefix: APP_ROUTES.approvals },
+    { href: chatHref, label: 'Chat', icon: MessageSquare, matchPrefix: APP_ROUTES.chat },
+    { href: APP_ROUTES.integrations, label: 'Integrations', icon: Plug, matchPrefix: APP_ROUTES.integrations },
+  ];
 
   useEffect(() => {
     let cancelled = false;
@@ -51,11 +52,11 @@ export function WorkspaceRail() {
         </div>
         <div className="h-px w-6 bg-white/10" />
         {ITEMS.map((item) => {
-          const active = pathname?.startsWith(item.href);
+          const active = pathname?.startsWith(item.matchPrefix);
           const Icon = item.icon;
           const badge = item.badgeKey === 'approvals' ? pendingApprovals : 0;
           return (
-            <Link key={item.href} href={item.href} className="group relative">
+            <Link key={item.label} href={item.href} className="group relative">
               <span
                 className={cn(
                   'relative flex h-10 w-10 items-center justify-center rounded-2xl transition-all',
