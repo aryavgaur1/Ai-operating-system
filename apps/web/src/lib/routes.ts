@@ -22,6 +22,11 @@ export const APP_ROUTES = {
   profile: '/app/profile',
 } as const;
 
+/** Stable chat URL — conversation ID survives Approvals navigation and reload. */
+export function chatConversationPath(conversationId: string): string {
+  return `${APP_ROUTES.chat}/${encodeURIComponent(conversationId)}`;
+}
+
 export const MARKETING_ROUTES = [
   '/',
   '/features',

@@ -98,3 +98,58 @@ export async function persistChatTurn(opts: {
   );
   return conversationId;
 }
+
+/** Ensure a conversation row exists before the agent turn (so approvals can link). */
+export async function ensureConversation(opts: {
+  organizationId: string;
+  userId: string;
+  conversationId?: string;
+  titleHint?: string;
+}): Promise<string> {
+  if (opts.conversationId) {
+    const { rows } = await query(
+      `select id from conversations
+       where id = $1 and organization_id = $2 and user_id = $3`,
+      [opts.conversationId, opts.organizationId, opts.userId]
+    );
+    if (!rows[0]) throw new AppError('Conversation not found', 404);
+    await query(`update conversations set updated_at = now() where id = $1`, [opts.conversationId]);
+    return opts.conversationId;
+  }
+  const title = (opts.titleHint || 'New conversation').slice(0, 80) || 'New conversation';
+  const created = await query<{ id: string }>(
+    `insert into conversations (organization_id, user_id, title)
+     values ($1, $2, $3) returning id`,
+    [opts.organizationId, opts.userId, title]
+  );
+  return created.rows[0].id;
+}
+
+/** Append a durable assistant message (e.g. verified Approve & Run result). */
+export async function appendAssistantMessage(opts: {
+  conversationId: string;
+  organizationId: string;
+  userId?: string;
+  content: string;
+  toolCalls?: unknown;
+}): Promise<void> {
+  if (opts.userId) {
+    const owned = await query(
+      `select id from conversations
+       where id = $1 and organization_id = $2 and user_id = $3`,
+      [opts.conversationId, opts.organizationId, opts.userId]
+    );
+    if (!owned.rows[0]) throw new AppError('Conversation not found', 404);
+  } else {
+    const owned = await query(
+      `select id from conversations where id = $1 and organization_id = $2`,
+      [opts.conversationId, opts.organizationId]
+    );
+    if (!owned.rows[0]) throw new AppError('Conversation not found', 404);
+  }
+  await query(
+    `insert into messages (conversation_id, role, content, tool_calls) values ($1, 'assistant', $2, $3)`,
+    [opts.conversationId, opts.content, opts.toolCalls ? JSON.stringify(opts.toolCalls) : null]
+  );
+  await query(`update conversations set updated_at = now() where id = $1`, [opts.conversationId]);
+}

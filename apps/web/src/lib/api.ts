@@ -179,6 +179,10 @@ export interface ApprovalRequest {
   input: Record<string, unknown>;
   status: 'pending' | 'approved' | 'rejected' | 'expired';
   createdAt: string;
+  conversationId?: string;
+  requestedByUserId?: string;
+  payloadFingerprint?: string;
+  expiresAt?: string;
   executionStatus?: 'executing' | 'completed' | 'failed' | 'cancelled' | 'partially_completed';
   executionResult?: ToolCallResult;
   executionVerified?: boolean;

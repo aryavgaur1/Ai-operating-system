@@ -53,10 +53,16 @@ function sortValue(value: unknown): unknown {
   return out;
 }
 
-/** Payload used for binding — includes capability stamps; drops UI-only lists. */
+/** Payload used for binding — includes capability stamps; drops UI/continuity-only keys. */
 export function bindingPayload(input: Record<string, unknown> | undefined): Record<string, unknown> {
   const src = { ...(input || {}) };
   delete src._availableProjects;
+  // Continuity metadata — must not affect fingerprint / capability binding
+  delete src._conversationId;
+  delete src._planStepId;
+  delete src._sourceMessageId;
+  delete src._goal;
+  delete src._understood;
   return src;
 }
 

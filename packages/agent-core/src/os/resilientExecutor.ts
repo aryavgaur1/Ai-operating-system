@@ -310,7 +310,8 @@ async function executeOne(call: ToolCall, maxAttempts = 3): Promise<{ result: To
 export async function executePlanResilient(
   organizationId: string,
   plan: AgentPlan,
-  requestedByUserId?: string
+  requestedByUserId?: string,
+  conversationId?: string
 ): Promise<ResilientOutcome> {
   const executedCalls: ToolCallResult[] = [];
   const pendingApprovalIds: string[] = [];
@@ -345,8 +346,16 @@ export async function executePlanResilient(
         });
         continue;
       }
-      const gated: ToolCall = { ...raw, input: pf.input };
-      const approval = await approvalStore.create(organizationId, gated, requestedByUserId);
+      const gated: ToolCall = {
+        ...raw,
+        input: {
+          ...pf.input,
+          ...(conversationId ? { _conversationId: conversationId } : {}),
+        },
+      };
+      const approval = await approvalStore.create(organizationId, gated, requestedByUserId, {
+        conversationId,
+      });
       pendingApprovalIds.push(approval.id);
       void notifyPendingApproval({
         approvalId: approval.id,
@@ -434,8 +443,15 @@ export async function executePlanResilient(
           if (!pf.ok) continue;
           const approval = await approvalStore.create(
             organizationId,
-            { ...broadcast, input: pf.input },
-            requestedByUserId
+            {
+              ...broadcast,
+              input: {
+                ...pf.input,
+                ...(conversationId ? { _conversationId: conversationId } : {}),
+              },
+            },
+            requestedByUserId,
+            { conversationId }
           );
           pendingApprovalIds.push(approval.id);
           steps.push({

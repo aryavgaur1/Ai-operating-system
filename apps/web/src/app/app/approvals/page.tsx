@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
@@ -21,6 +21,8 @@ import { api, type ApprovalRequest, type ToolCallResult } from '@/lib/api';
 import { GlassCard, Reveal } from '@/components/motion';
 import { RiskRadial } from '@/components/charts';
 import { cn } from '@/lib/utils';
+import { APP_ROUTES, chatConversationPath } from '@/lib/routes';
+import { useRouter, useSearchParams } from 'next/navigation';
 
 const riskScore: Record<string, number> = { low: 24, medium: 58, high: 88 };
 const riskColor: Record<string, string> = { low: '#8be9d0', medium: '#f5b95d', high: '#fb7185' };
@@ -90,6 +92,97 @@ function humanTitle(a: ApprovalRequest): string {
     return `Email ${String(input.to || 'recipient')}: ${String(input.subject || 'draft')}`;
   }
   return `${a.tool}.${a.action}`;
+}
+
+/** Structured action plan for Approvals UX (user-safe; no chain-of-thought). */
+function buildActionPlan(a: ApprovalRequest): {
+  goal: string;
+  understood: string;
+  tool: string;
+  action: string;
+  target: string[];
+  willChange: string[];
+  risk: string;
+  verification: string;
+  status: string;
+  steps: Array<{ id: string; label: string; kind: 'read' | 'write' | 'verify'; approval?: boolean }>;
+} {
+  const input = a.input || {};
+  const goal =
+    String(input._goal || '').trim() ||
+    humanTitle(a);
+  const understood =
+    String(input._understood || '').trim() ||
+    humanTitle(a);
+  const target: string[] = [];
+  const willChange: string[] = [];
+  if (a.tool === 'jira' && a.action === 'createIssue') {
+    if (input.project || input.projectKey) target.push(`Project: ${String(input.project || input.projectKey)}`);
+    if (input.summary || input.title) target.push(`Title: ${String(input.summary || input.title)}`);
+    if (input.issueType || input.type) target.push(`Type: ${String(input.issueType || input.type)}`);
+    willChange.push('Create 1 Jira issue');
+    if (input.description) willChange.push('Set issue description');
+  } else if (a.tool === 'slack' && a.action.startsWith('postMessage')) {
+    target.push(`Channel: ${slackChannelLabel(input.channel)}`);
+    if (input.text) target.push(`Message: ${String(input.text).slice(0, 160)}`);
+    willChange.push('Post 1 Slack message');
+  } else if (a.tool === 'notion') {
+    if (input.title) target.push(`Title: ${String(input.title)}`);
+    if (input.pageId || input.id) target.push(`pageId: ${String(input.pageId || input.id)}`);
+    willChange.push(a.action === 'updatePage' ? 'Update 1 Notion page' : 'Create 1 Notion page');
+  } else {
+    for (const [k, v] of Object.entries(input)) {
+      if (k.startsWith('_')) continue;
+      if (v == null || v === '') continue;
+      target.push(`${k}: ${typeof v === 'string' ? v.slice(0, 120) : JSON.stringify(v).slice(0, 120)}`);
+    }
+    willChange.push(`Run ${a.tool}.${a.action}`);
+  }
+
+  let status = 'Waiting for approval';
+  if (a.status === 'rejected') status = 'Rejected';
+  else if (a.status === 'expired') status = 'Expired';
+  else if (a.status === 'approved') {
+    if (a.executionStatus === 'executing') status = 'Executing / verifying';
+    else if (a.executionStatus === 'completed' && a.executionVerified) status = 'Completed (verified)';
+    else if (a.executionStatus === 'failed') status = 'Failed';
+    else if (a.executionStatus === 'completed') status = 'Completed';
+    else status = 'Approved';
+  }
+
+  const verification =
+    a.tool === 'jira'
+      ? 'Jira issue will be retrieved after creation to verify the result.'
+      : a.tool === 'slack'
+        ? 'Slack message will be retrieved by channel + ts to verify the result.'
+        : a.tool === 'notion'
+          ? 'Notion page will be retrieved by exact pageId to verify the result.'
+          : 'External object will be confirmed after execution.';
+
+  return {
+    goal,
+    understood,
+    tool: a.tool,
+    action: `${a.tool}.${a.action}`,
+    target,
+    willChange,
+    risk: a.riskLevel,
+    verification,
+    status,
+    steps: [
+      {
+        id: 'step-1',
+        label: humanTitle(a),
+        kind: 'write',
+        approval: true,
+      },
+      {
+        id: 'step-2',
+        label: 'Verify external result',
+        kind: 'verify',
+      },
+    ],
+  };
 }
 
 function timelineState(a: ApprovalRequest): TimelineState {
@@ -384,6 +477,23 @@ function buildInputPatch(a: ApprovalRequest, drafts: Record<string, Record<strin
 }
 
 export default function ApprovalsPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="rounded-[28px] border border-white/10 bg-black/20 p-8 text-sm text-neutral-400">
+          Loading approvals…
+        </div>
+      }
+    >
+      <ApprovalsPageInner />
+    </Suspense>
+  );
+}
+
+function ApprovalsPageInner() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const focusId = searchParams?.get('focus') || '';
   const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -392,6 +502,7 @@ export default function ApprovalsPage() {
   const [showRawId, setShowRawId] = useState<string | null>(null);
   const [tab, setTab] = useState<'pending' | 'audit'>('pending');
   const [drafts, setDrafts] = useState<Record<string, Record<string, string>>>({});
+  const [expandedPlanId, setExpandedPlanId] = useState<string | null>(focusId || null);
 
   function setDraftField(id: string, key: string, value: string) {
     setDrafts((prev) => ({
@@ -453,9 +564,11 @@ export default function ApprovalsPage() {
           const msg = successFlashMessage(res.approval, out);
           const remaining = pending.filter((p) => p.id !== id);
           if (remaining.length === 0) {
-            window.sessionStorage.setItem('nexora:approvalFlash', msg);
-            // Soft navigate — chat restores active conversation from sessionStorage
-            window.location.href = '/app/chat';
+            const conv =
+              res.approval.conversationId ||
+              target?.conversationId ||
+              '';
+            router.push(conv ? chatConversationPath(conv) : APP_ROUTES.chat);
             return;
           }
           load();
@@ -511,8 +624,10 @@ export default function ApprovalsPage() {
     setDecidingId(null);
     load();
     if (lines.length && lines.every((l) => l.startsWith('✓'))) {
-      window.sessionStorage.setItem('nexora:approvalFlash', lines.join('\n'));
-      window.location.href = '/app/chat';
+      const conv =
+        pending.find((p) => p.conversationId)?.conversationId ||
+        '';
+      router.push(conv ? chatConversationPath(conv) : APP_ROUTES.chat);
     }
   }
 
@@ -618,7 +733,7 @@ export default function ApprovalsPage() {
                     <li>Post to #ops on Slack: standup summary ready</li>
                   </ul>
                   <Link
-                    href="/app/chat"
+                    href={APP_ROUTES.chat}
                     className="mt-4 inline-flex items-center gap-2 rounded-full bg-white/10 px-4 py-2 text-xs font-semibold text-white"
                   >
                     <MessageSquare size={13} /> Open Chat
@@ -664,6 +779,14 @@ export default function ApprovalsPage() {
                                 <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1">
                                   Pending review
                                 </span>
+                                {a.conversationId ? (
+                                  <Link
+                                    href={`${chatConversationPath(a.conversationId)}#approval-${a.id}`}
+                                    className="inline-flex items-center gap-1.5 rounded-full border border-accent/30 bg-accent/10 px-2.5 py-1 text-accent hover:bg-accent/20"
+                                  >
+                                    <MessageSquare size={11} /> View conversation
+                                  </Link>
+                                ) : null}
                               </div>
                             </div>
                             <span
@@ -673,6 +796,98 @@ export default function ApprovalsPage() {
                               {a.riskLevel || 'high'} risk
                             </span>
                           </div>
+
+                          {(() => {
+                            const plan = buildActionPlan(a);
+                            const open = expandedPlanId === a.id || focusId === a.id;
+                            return (
+                              <div
+                                className={cn(
+                                  'mt-4 rounded-2xl border p-4',
+                                  focusId === a.id ? 'border-accent/40 bg-accent/5' : 'border-white/10 bg-black/30'
+                                )}
+                              >
+                                <button
+                                  type="button"
+                                  className="flex w-full items-center justify-between text-left"
+                                  onClick={() => setExpandedPlanId((id) => (id === a.id ? null : a.id))}
+                                >
+                                  <span className="text-xs font-semibold uppercase tracking-[0.18em] text-neutral-400">
+                                    Nexora action plan
+                                  </span>
+                                  <span className="text-[11px] text-neutral-500">{open ? 'Hide' : 'Show'}</span>
+                                </button>
+                                {open && (
+                                  <div className="mt-3 space-y-3 text-sm text-neutral-300">
+                                    <div>
+                                      <div className="text-[11px] uppercase tracking-wide text-neutral-500">Goal</div>
+                                      <div className="mt-0.5 text-white">{plan.goal}</div>
+                                    </div>
+                                    <div>
+                                      <div className="text-[11px] uppercase tracking-wide text-neutral-500">Understood</div>
+                                      <div className="mt-0.5">{plan.understood}</div>
+                                    </div>
+                                    <div className="grid gap-3 sm:grid-cols-2">
+                                      <div>
+                                        <div className="text-[11px] uppercase tracking-wide text-neutral-500">Tool</div>
+                                        <div className="mt-0.5 capitalize">{plan.tool}</div>
+                                      </div>
+                                      <div>
+                                        <div className="text-[11px] uppercase tracking-wide text-neutral-500">Action</div>
+                                        <div className="mt-0.5 code text-xs">{plan.action}</div>
+                                      </div>
+                                    </div>
+                                    {plan.target.length > 0 && (
+                                      <div>
+                                        <div className="text-[11px] uppercase tracking-wide text-neutral-500">Target</div>
+                                        <ul className="mt-1 list-inside list-disc space-y-0.5 text-neutral-200">
+                                          {plan.target.map((t) => (
+                                            <li key={t}>{t}</li>
+                                          ))}
+                                        </ul>
+                                      </div>
+                                    )}
+                                    <div>
+                                      <div className="text-[11px] uppercase tracking-wide text-neutral-500">Will change</div>
+                                      <ul className="mt-1 list-inside list-disc space-y-0.5">
+                                        {plan.willChange.map((t) => (
+                                          <li key={t}>{t}</li>
+                                        ))}
+                                      </ul>
+                                    </div>
+                                    <div className="grid gap-3 sm:grid-cols-2">
+                                      <div>
+                                        <div className="text-[11px] uppercase tracking-wide text-neutral-500">Risk</div>
+                                        <div className="mt-0.5 capitalize">{plan.risk}</div>
+                                      </div>
+                                      <div>
+                                        <div className="text-[11px] uppercase tracking-wide text-neutral-500">Status</div>
+                                        <div className="mt-0.5">{plan.status}</div>
+                                      </div>
+                                    </div>
+                                    <div>
+                                      <div className="text-[11px] uppercase tracking-wide text-neutral-500">Verification</div>
+                                      <div className="mt-0.5 text-neutral-400">{plan.verification}</div>
+                                    </div>
+                                    <div>
+                                      <div className="text-[11px] uppercase tracking-wide text-neutral-500">Steps</div>
+                                      <ol className="mt-1 space-y-1 text-xs text-neutral-400">
+                                        {plan.steps.map((step, i) => (
+                                          <li key={step.id}>
+                                            {i + 1}. {step.label}{' '}
+                                            <span className="uppercase text-neutral-600">
+                                              ({step.kind}
+                                              {step.approval ? ' · approval required' : ''})
+                                            </span>
+                                          </li>
+                                        ))}
+                                      </ol>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })()}
 
                           <p className="mt-3 text-sm leading-6 text-neutral-400">{hint}</p>
                           <p className="mt-1 text-xs leading-5 text-neutral-500">
@@ -807,7 +1022,7 @@ export default function ApprovalsPage() {
                       </div>
                     </div>
                     <Link
-                      href="/app/chat"
+                      href={APP_ROUTES.chat}
                       className="rounded-full border border-amber-400/30 bg-amber-500/10 px-4 py-2 text-xs font-semibold text-amber-100"
                     >
                       Return to Chat
@@ -908,6 +1123,14 @@ export default function ApprovalsPage() {
                             <div className="mt-1 code text-[11px] text-neutral-500">
                               {a.tool}.{a.action}
                             </div>
+                            {a.conversationId ? (
+                              <Link
+                                href={`${chatConversationPath(a.conversationId)}#approval-${a.id}`}
+                                className="mt-2 inline-flex items-center gap-1.5 text-xs text-accent hover:text-white"
+                              >
+                                <MessageSquare size={12} /> View conversation
+                              </Link>
+                            ) : null}
                           </div>
                           <span
                             className={cn(
@@ -979,7 +1202,7 @@ export default function ApprovalsPage() {
                             </div>
                             <p className="mt-1.5 text-sm leading-6 text-amber-100/90">{errorText}</p>
                             <Link
-                              href="/app/chat"
+                              href={APP_ROUTES.chat}
                               className="mt-3 inline-flex rounded-full border border-amber-400/30 bg-amber-500/10 px-3 py-1.5 text-[11px] font-semibold text-amber-100"
                             >
                               Return to Chat to retry
@@ -1009,7 +1232,7 @@ export default function ApprovalsPage() {
         </div>
       )}
 
-      <Link href="/app/chat" className="inline-flex items-center gap-1.5 text-xs text-neutral-500 hover:text-white">
+      <Link href={APP_ROUTES.chat} className="inline-flex items-center gap-1.5 text-xs text-neutral-500 hover:text-white">
         <ArrowLeft size={12} /> Back to chat
       </Link>
     </div>

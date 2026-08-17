@@ -4,7 +4,7 @@ import { randomUUID } from 'crypto';
 import { streamNexoraTurn, runNexoraTurn, wantsProductKnowledge, type AttachmentMeta } from '@enterprise-ai-os/agent-core';
 import { query } from '@enterprise-ai-os/stores';
 import { getStores } from '../ingestion/pipeline';
-import { persistChatTurn } from './conversations';
+import { persistChatTurn, ensureConversation } from './conversations';
 import { requireVerified } from '../middleware/auth';
 import { AppError, asyncHandler, ok } from '../lib/errors';
 import { withUserConnectorContext } from '../lib/withUserConnectors';
@@ -269,7 +269,15 @@ chatRouter.post(
       String(req.query.stream ?? '') === '1' ||
       String(req.headers.accept ?? '').includes('text/event-stream');
 
-    const history = await loadHistory(user.organizationId, user.id, conversationId);
+    // Ensure conversation exists BEFORE agent turn so approvals can link conversation_id
+    const activeConversationId = await ensureConversation({
+      organizationId: user.organizationId,
+      userId: user.id,
+      conversationId: typeof conversationId === 'string' ? conversationId : undefined,
+      titleHint: String(message).slice(0, 80),
+    });
+
+    const history = await loadHistory(user.organizationId, user.id, activeConversationId);
     const attachments = await loadAttachments(
       user.organizationId,
       user.id,
@@ -298,6 +306,9 @@ chatRouter.post(
           res.setHeader('Connection', 'keep-alive');
           if (typeof (res as any).flushHeaders === 'function') (res as any).flushHeaders();
 
+          // Emit conversation id immediately so the client can lock the URL
+          res.write(`data: ${JSON.stringify({ type: 'conversation', conversationId: activeConversationId })}\n\n`);
+
           let finalReply = '';
           let finalResult: any = null;
 
@@ -305,7 +316,7 @@ chatRouter.post(
             message,
             organizationId: user.organizationId,
             userId: user.id,
-            conversationId,
+            conversationId: activeConversationId,
             mode: 'authenticated',
             history,
             attachments,
@@ -322,13 +333,13 @@ chatRouter.post(
             res.write(`data: ${JSON.stringify(event)}\n\n`);
           }
 
-          let savedConversationId: string | undefined = conversationId;
+          let savedConversationId: string | undefined = activeConversationId;
           try {
             if (finalResult) {
               savedConversationId = await persistChatTurn({
                 organizationId: user.organizationId,
                 userId: user.id,
-                conversationId,
+                conversationId: activeConversationId,
                 userMessage: message,
                 assistantReply: finalReply,
                 toolCalls: {
@@ -353,7 +364,7 @@ chatRouter.post(
           message,
           organizationId: user.organizationId,
           userId: user.id,
-          conversationId,
+          conversationId: activeConversationId,
           mode: 'authenticated',
           history,
           attachments,
@@ -362,12 +373,12 @@ chatRouter.post(
           graphStore,
         });
 
-        let savedConversationId: string | undefined;
+        let savedConversationId: string | undefined = activeConversationId;
         try {
           savedConversationId = await persistChatTurn({
             organizationId: user.organizationId,
             userId: user.id,
-            conversationId,
+            conversationId: activeConversationId,
             userMessage: message,
             assistantReply: result.reply,
             toolCalls: {

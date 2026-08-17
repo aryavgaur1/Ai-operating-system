@@ -160,7 +160,8 @@ export async function runAgentTurn(
   organizationId: string,
   vectorStore: VectorStore,
   graphStore: GraphStore,
-  requestedByUserId?: string
+  requestedByUserId?: string,
+  conversationId?: string
 ): Promise<AgentTurnResult> {
   const started = Date.now();
 
@@ -344,7 +345,8 @@ export async function runAgentTurn(
   const { executedCalls, pendingApprovalIds, steps, retries } = await executePlanResilient(
     organizationId,
     plan,
-    requestedByUserId
+    requestedByUserId,
+    conversationId
   );
 
   const decision = buildDecisionRecord({

@@ -56,7 +56,10 @@ export async function executePlan(
 
   for (const call of plan.toolCalls) {
     if (call.requiresApproval) {
-      const approval = await approvalStore.create(organizationId, call, requestedByUserId);
+      const approval = await approvalStore.create(organizationId, call, requestedByUserId, {
+        conversationId:
+          typeof call.input?._conversationId === 'string' ? String(call.input._conversationId) : undefined,
+      });
       pendingApprovalIds.push(approval.id);
       void notifyPendingApproval({
         approvalId: approval.id,
@@ -404,7 +407,8 @@ export async function executeApprovedAction(approvalId: string): Promise<ToolCal
   result = rejectMockOrUnverified(result, verified);
 
   await auditSlack(approval.action, approval.input ?? {}, result, started, 'approved_action');
-  await approvalStore.completeExecution(approvalId, result, verified && result.ok && !result.mocked);
+  const verifiedOk = verified && result.ok && !result.mocked;
+  const completed = await approvalStore.completeExecution(approvalId, result, verifiedOk);
 
   // Persist Notion page identity for exact updatePage targeting (P0.3.3)
   if (result.ok && !result.mocked && approval.tool === 'notion') {
@@ -418,9 +422,33 @@ export async function executeApprovedAction(approvalId: string): Promise<ToolCal
           output: result.output,
         },
       ]);
+      // Conversation-scoped page identity for trusted updates
+      const pageId = String((result.output as any)?.id || (result.output as any)?.pageId || '').trim();
+      const convId = approval.conversationId?.trim();
+      if (pageId && convId) {
+        const { remember } = await import('./os/threadMemory');
+        await remember({
+          organizationId: approval.organizationId,
+          userId: approval.requestedByUserId,
+          key: `notion:page:conversation:${convId}:latest`,
+          value: {
+            pageId,
+            title: String(approval.input?.title || '').trim() || undefined,
+            url: (result.output as any)?.url,
+          },
+        });
+      }
     } catch {
       // non-fatal
     }
+  }
+
+  // Durable chat history (not sessionStorage flash)
+  try {
+    const { persistApprovalResultToConversation } = await import('./conversationResults');
+    await persistApprovalResultToConversation(completed || approval, result);
+  } catch {
+    // non-fatal
   }
 
   return result;

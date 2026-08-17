@@ -221,7 +221,7 @@ export async function preflightToolCall(call: ToolCall): Promise<PreflightResult
           input.title = `Nexora Note ${new Date().toISOString().slice(0, 10)}`;
           healActions.push('inferred_notion_title');
         }
-        // updatePage: prefer explicit pageId → Timeline/memory latest → refuse ambiguous title search
+        // updatePage: explicit pageId → conversation memory → org memory → title search (ask if ambiguous)
         if (call.action === 'updatePage') {
           let pageId = String(input.pageId ?? input.id ?? '').trim();
           if (!pageId) {
@@ -230,7 +230,18 @@ export async function preflightToolCall(call: ToolCall): Promise<PreflightResult
               const orgId =
                 String(input._organizationId ?? '').trim() ||
                 String(getConnectorContext().organizationId ?? '').trim();
-              if (orgId) {
+              const convId = String(input._conversationId ?? '').trim();
+              if (orgId && convId) {
+                const latestConv = await recall(orgId, `notion:page:conversation:${convId}:latest`);
+                const memId = String(latestConv?.pageId ?? '').trim();
+                if (memId) {
+                  pageId = memId;
+                  input.pageId = memId;
+                  if (latestConv?.url) input.pageUrl = latestConv.url;
+                  healActions.push('resolved_notion_pageId_from_conversation_memory');
+                }
+              }
+              if (!pageId && orgId) {
                 const latest = await recall(orgId, 'notion:page:latest');
                 const memId = String(latest?.pageId ?? '').trim();
                 if (memId) {
@@ -244,13 +255,23 @@ export async function preflightToolCall(call: ToolCall): Promise<PreflightResult
               // ignore
             }
           }
+          // Title-only: allow structured ask (do not guess). Connector still fail-closes on ambiguous.
           if (!pageId) {
+            const titleQuery = String(input.title ?? '').trim();
+            if (titleQuery) {
+              return {
+                ok: false,
+                input,
+                healActions,
+                fatal: `Notion update needs an exact pageId. If you meant “${titleQuery}”, choose the pageId from a Nexora-created page in this conversation (or Timeline). Multiple same-title pages must not be guessed.`,
+              };
+            }
             return {
               ok: false,
               input,
               healActions,
               fatal:
-                'Notion update needs an exact pageId (from a Nexora-created page / Timeline). Title-only updates are refused to avoid changing the wrong page.',
+                'Notion update needs an exact pageId (from a Nexora-created page in this conversation / Timeline). Title-only updates are refused to avoid changing the wrong page.',
             };
           }
           input.pageId = pageId;

@@ -195,6 +195,8 @@ export interface ApprovalRequest {
   input: Record<string, unknown>;
   status: ApprovalStatus;
   requestedByUserId?: string;
+  /** Originating chat conversation — continuity only; never replaces integrity checks. */
+  conversationId?: string;
   createdAt: string;
   /** SHA-256 of canonical bound action (tool+action+scope+payload). */
   payloadFingerprint?: string;

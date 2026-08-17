@@ -15,8 +15,18 @@ import {
   type ApprovalAuditEvent,
 } from './os/approvalIntegrity';
 
+export interface ApprovalCreateOptions {
+  /** Originating chat conversation (continuity). Does not replace integrity checks. */
+  conversationId?: string;
+}
+
 export interface ApprovalStore {
-  create(organizationId: string, toolCall: ToolCall, requestedByUserId?: string): Promise<ApprovalRequest>;
+  create(
+    organizationId: string,
+    toolCall: ToolCall,
+    requestedByUserId?: string,
+    options?: ApprovalCreateOptions
+  ): Promise<ApprovalRequest>;
   get(id: string): Promise<ApprovalRequest | undefined>;
   list(organizationId: string, status?: ApprovalStatus, userId?: string): Promise<ApprovalRequest[]>;
   listAll(status?: ApprovalStatus): Promise<ApprovalRequest[]>;
@@ -56,6 +66,7 @@ function mapRow(row: any): ApprovalRequest {
     input: parseInput(row.input),
     status: row.status,
     requestedByUserId: row.requested_by_user_id ?? undefined,
+    conversationId: row.conversation_id ?? undefined,
     createdAt: new Date(row.created_at).toISOString(),
     payloadFingerprint: row.payload_fingerprint ?? undefined,
     expiresAt: row.expires_at ? new Date(row.expires_at).toISOString() : undefined,
@@ -98,18 +109,28 @@ function expiresAtIso(from = Date.now()): string {
 }
 
 export class PostgresApprovalStore implements ApprovalStore {
-  async create(organizationId: string, toolCall: ToolCall, requestedByUserId?: string): Promise<ApprovalRequest> {
+  async create(
+    organizationId: string,
+    toolCall: ToolCall,
+    requestedByUserId?: string,
+    options?: ApprovalCreateOptions
+  ): Promise<ApprovalRequest> {
     const fingerprint = computeApprovalFingerprint(toolCall.tool, toolCall.action, toolCall.input);
     const expiresAt = expiresAtIso();
+    const conversationId =
+      options?.conversationId ||
+      (typeof toolCall.input?._conversationId === 'string' ? String(toolCall.input._conversationId) : undefined) ||
+      null;
     const { rows } = await query(
       `insert into approvals (
-         organization_id, requested_by_user_id, tool, action, risk_level, input,
+         organization_id, requested_by_user_id, conversation_id, tool, action, risk_level, input,
          payload_fingerprint, expires_at
-       ) values ($1, $2, $3, $4, $5, $6, $7, $8)
+       ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        returning *`,
       [
         organizationId,
         requestedByUserId ?? null,
+        conversationId,
         toolCall.tool,
         toolCall.action,
         toolCall.riskLevel,
@@ -282,7 +303,15 @@ export class PostgresApprovalStore implements ApprovalStore {
 export class InMemoryApprovalStore implements ApprovalStore {
   private items: Map<string, ApprovalRequest> = new Map();
 
-  async create(organizationId: string, toolCall: ToolCall, requestedByUserId?: string): Promise<ApprovalRequest> {
+  async create(
+    organizationId: string,
+    toolCall: ToolCall,
+    requestedByUserId?: string,
+    options?: ApprovalCreateOptions
+  ): Promise<ApprovalRequest> {
+    const conversationId =
+      options?.conversationId ||
+      (typeof toolCall.input?._conversationId === 'string' ? String(toolCall.input._conversationId) : undefined);
     const request: ApprovalRequest = {
       id: randomUUID(),
       organizationId,
@@ -292,6 +321,7 @@ export class InMemoryApprovalStore implements ApprovalStore {
       input: toolCall.input,
       status: 'pending',
       requestedByUserId,
+      conversationId,
       createdAt: new Date().toISOString(),
       payloadFingerprint: computeApprovalFingerprint(toolCall.tool, toolCall.action, toolCall.input),
       expiresAt: expiresAtIso(),
