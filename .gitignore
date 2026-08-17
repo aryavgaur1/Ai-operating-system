@@ -6,3 +6,4 @@ dist/
 apps/api/data/
 .npm-cache/
 *.tsbuildinfo
+.vercel
