@@ -19,6 +19,7 @@ import { api, type HealthCheck, type IntegrationStatus, type ApprovalRequest } f
 import { GlassCard, Reveal, StaggerGroup, fadeUp } from '@/components/motion';
 import { SparkArea, WeekBars } from '@/components/charts';
 import { cn } from '@/lib/utils';
+import { chatConversationPath, chatResumeHref } from '@/lib/routes';
 
 const sprintPlans = {
   'Sprint 1-2': {
@@ -195,7 +196,7 @@ export default function DashboardPage() {
                   <ArrowUpRight size={14} className="transition group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
                 </Link>
                 <Link
-                  href="/app/chat"
+                  href={chatResumeHref()}
                   className="inline-flex items-center gap-2 rounded-full border border-white/12 bg-white/5 px-5 py-2.5 text-sm text-neutral-200 transition hover:border-accent/40 hover:text-white"
                 >
                   Open chat
@@ -267,16 +268,23 @@ export default function DashboardPage() {
             <MessageSquare size={14} className="text-neutral-500" />
           </div>
           <div className="mt-4 space-y-3">
-            {(recentChats.length ? recentChats : recentConversations).map((c: any) => (
-              <div key={c.id || c.q} className="rounded-xl border border-white/8 bg-black/20 px-3 py-2.5 text-sm text-neutral-300">
-                <div className="truncate text-neutral-200">{c.title || c.q}</div>
-                <div className="mt-1 text-[11px] text-neutral-500">
-                  {c.updated_at ? new Date(c.updated_at).toLocaleString() : c.time}
-                </div>
-              </div>
-            ))}
+            {(recentChats.length ? recentChats : recentConversations).map((c: any) => {
+              const href = c.id ? chatConversationPath(String(c.id)) : chatResumeHref();
+              return (
+                <Link
+                  key={c.id || c.q}
+                  href={href}
+                  className="block rounded-xl border border-white/8 bg-black/20 px-3 py-2.5 text-sm text-neutral-300 transition hover:border-accent/30 hover:bg-black/30"
+                >
+                  <div className="truncate text-neutral-200">{c.title || c.q}</div>
+                  <div className="mt-1 text-[11px] text-neutral-500">
+                    {c.updated_at ? new Date(c.updated_at).toLocaleString() : c.time}
+                  </div>
+                </Link>
+              );
+            })}
           </div>
-          <Link href="/app/chat" className="mt-4 inline-flex items-center gap-1 text-xs text-accent hover:text-white">
+          <Link href={chatResumeHref()} className="mt-4 inline-flex items-center gap-1 text-xs text-accent hover:text-white">
             Open conversation log <ArrowUpRight size={12} />
           </Link>
         </GlassCard>

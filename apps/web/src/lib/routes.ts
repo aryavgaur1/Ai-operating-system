@@ -31,12 +31,14 @@ const ACTIVE_CONVERSATION_KEY = 'nexora:activeConversationId';
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-/** Convenience cache only — DB + URL remain authoritative. */
+/** Convenience cache only — DB + URL remain authoritative. Survives browser close via localStorage. */
 export function readCachedConversationId(): string | undefined {
   if (typeof window === 'undefined') return undefined;
   try {
-    const id = window.sessionStorage.getItem(ACTIVE_CONVERSATION_KEY)?.trim();
-    return id && UUID_RE.test(id) ? id : undefined;
+    const fromSession = window.sessionStorage.getItem(ACTIVE_CONVERSATION_KEY)?.trim();
+    if (fromSession && UUID_RE.test(fromSession)) return fromSession;
+    const fromLocal = window.localStorage.getItem(ACTIVE_CONVERSATION_KEY)?.trim();
+    return fromLocal && UUID_RE.test(fromLocal) ? fromLocal : undefined;
   } catch {
     return undefined;
   }

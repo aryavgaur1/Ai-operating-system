@@ -255,23 +255,78 @@ export async function preflightToolCall(call: ToolCall): Promise<PreflightResult
               // ignore
             }
           }
-          // Title-only: allow structured ask (do not guess). Connector still fail-closes on ambiguous.
+          // After memory: exact-title search — one safe match continues; many → ask with candidates
           if (!pageId) {
             const titleQuery = String(input.title ?? '').trim();
             if (titleQuery) {
-              return {
-                ok: false,
-                input,
-                healActions,
-                fatal: `Notion update needs an exact pageId. If you meant “${titleQuery}”, choose the pageId from a Nexora-created page in this conversation (or Timeline). Multiple same-title pages must not be guessed.`,
-              };
+              try {
+                const response = await client.search({
+                  query: titleQuery,
+                  filter: { property: 'object', value: 'page' },
+                  page_size: 25,
+                });
+                const pages = (response.results as any[]) ?? [];
+                const extractTitle = (page: any): string => {
+                  const props = page?.properties || {};
+                  for (const key of Object.keys(props)) {
+                    const prop = props[key];
+                    if (prop?.type === 'title' && Array.isArray(prop.title)) {
+                      return prop.title.map((t: any) => t.plain_text || '').join('').trim();
+                    }
+                  }
+                  return String(page?.id || '');
+                };
+                const normalized = titleQuery.toLowerCase();
+                const matches = pages.filter(
+                  (p) => extractTitle(p).trim().toLowerCase() === normalized
+                );
+                if (matches.length === 1) {
+                  pageId = String(matches[0].id);
+                  input.pageId = pageId;
+                  if (matches[0].url) input.pageUrl = matches[0].url;
+                  healActions.push('resolved_notion_pageId_from_unique_title');
+                } else if (matches.length > 1) {
+                  const choices = matches.slice(0, 5).map((p) => {
+                    const id = String(p.id);
+                    const url = String(p.url || '');
+                    return `• ${extractTitle(p)} — pageId \`${id}\`${url ? ` (${url})` : ''}`;
+                  });
+                  return {
+                    ok: false,
+                    input,
+                    healActions,
+                    fatal:
+                      `I found ${matches.length} Notion pages titled “${titleQuery}”. Which one should I update?\n\n` +
+                      `${choices.join('\n')}\n\n` +
+                      `Reply with the pageId (or open the page in Timeline). I will not guess.`,
+                  };
+                } else {
+                  return {
+                    ok: false,
+                    input,
+                    healActions,
+                    fatal:
+                      `I could not find a Notion page titled “${titleQuery}” that Nexora can access. ` +
+                      `Share the pageId from a Nexora-created page in this conversation / Timeline, or create the page first.`,
+                  };
+                }
+              } catch (err) {
+                return {
+                  ok: false,
+                  input,
+                  healActions,
+                  fatal: `Notion title lookup failed: ${(err as Error).message}`,
+                };
+              }
             }
+          }
+          if (!pageId) {
             return {
               ok: false,
               input,
               healActions,
               fatal:
-                'Notion update needs an exact pageId (from a Nexora-created page in this conversation / Timeline). Title-only updates are refused to avoid changing the wrong page.',
+                'Notion update needs an exact pageId (from a Nexora-created page in this conversation / Timeline). Title-only updates are refused when no unique page can be resolved.',
             };
           }
           input.pageId = pageId;

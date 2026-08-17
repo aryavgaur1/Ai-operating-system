@@ -60,11 +60,29 @@ type MicState = 'idle' | 'listening' | 'unsupported' | 'denied' | 'error';
 
 function writeActiveConversationId(id: string | undefined) {
   try {
-    if (id) window.sessionStorage.setItem(ACTIVE_CONVERSATION_KEY, id);
-    else window.sessionStorage.removeItem(ACTIVE_CONVERSATION_KEY);
+    // localStorage survives browser close; still only a resume hint — URL + DB are authoritative.
+    if (id) {
+      window.localStorage.setItem(ACTIVE_CONVERSATION_KEY, id);
+      window.sessionStorage.setItem(ACTIVE_CONVERSATION_KEY, id);
+    } else {
+      window.localStorage.removeItem(ACTIVE_CONVERSATION_KEY);
+      window.sessionStorage.removeItem(ACTIVE_CONVERSATION_KEY);
+    }
   } catch {
     // ignore
   }
+}
+
+function readActiveConversationId(): string | undefined {
+  try {
+    const fromSession = window.sessionStorage.getItem(ACTIVE_CONVERSATION_KEY)?.trim();
+    if (fromSession && UUID_RE.test(fromSession)) return fromSession;
+    const fromLocal = window.localStorage.getItem(ACTIVE_CONVERSATION_KEY)?.trim();
+    if (fromLocal && UUID_RE.test(fromLocal)) return fromLocal;
+  } catch {
+    // ignore
+  }
+  return undefined;
 }
 
 function mapMessagesToTurns(messages: any[]): Turn[] {
@@ -177,15 +195,8 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
       }
 
       // Bare /app/chat: resume last known conversation instead of wiping history.
-      // sessionStorage is convenience only — we still load from the database.
-      const cached = (() => {
-        try {
-          const id = window.sessionStorage.getItem(ACTIVE_CONVERSATION_KEY)?.trim();
-          return id && UUID_RE.test(id) ? id : undefined;
-        } catch {
-          return undefined;
-        }
-      })();
+      // localStorage/sessionStorage are convenience only — we still load from the database.
+      const cached = readActiveConversationId();
       if (cached) {
         if (!cancelled) router.replace(chatConversationPath(cached));
         return;
