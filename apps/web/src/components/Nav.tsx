@@ -19,6 +19,7 @@ import { useEffect, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { api, clearSession } from '@/lib/api';
 import { APP_HOME, APP_ROUTES, LOGIN, chatResumeHref } from '@/lib/routes';
+import { resolveChatHref } from '@/lib/activeConversation';
 import { isPlatformAdminEmail } from '@/lib/platformAdmin';
 
 const STATIC_LINKS = [
@@ -40,12 +41,24 @@ export function Nav() {
   const [pendingApprovals, setPendingApprovals] = useState(0);
   const [newUsers24h, setNewUsers24h] = useState(0);
   const [liveNotifs, setLiveNotifs] = useState<{ id: string; text: string; time: string; href?: string }[]>([]);
-  const [chatHref, setChatHref] = useState<string>(APP_ROUTES.chat);
+  const [chatHref, setChatHref] = useState<string>(() => chatResumeHref());
   const notifRef = useRef<HTMLDivElement | null>(null);
   const profileRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
     setChatHref(chatResumeHref());
+    (async () => {
+      try {
+        const href = await resolveChatHref();
+        if (!cancelled) setChatHref(href);
+      } catch {
+        // keep hint / bare entry — bare /app/chat server-resolves
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [pathname]);
 
   const LINKS = [

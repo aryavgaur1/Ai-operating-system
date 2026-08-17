@@ -372,6 +372,13 @@ export const api = {
   },
 
   listConversations: () => request<{ conversations: any[] }>('/conversations'),
+  resumeConversation: () =>
+    request<{ conversationId: string | null; source: 'active' | 'recent' | 'none' }>('/conversations/resume'),
+  activateConversation: (id: string) =>
+    request<{ conversationId: string }>(`/conversations/${encodeURIComponent(id)}/activate`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
   createConversation: (title?: string) =>
     request<{ conversation: { id: string; title: string } }>('/conversations', {
       method: 'POST',

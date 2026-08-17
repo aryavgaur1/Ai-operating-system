@@ -25,6 +25,7 @@ import { MarkdownLite } from '@/components/MarkdownLite';
 import { RiskRadial } from '@/components/charts';
 import { cn } from '@/lib/utils';
 import { APP_ROUTES, chatConversationPath } from '@/lib/routes';
+import { writeActiveConversationHint, resolveResumeConversationId } from '@/lib/activeConversation';
 
 const riskScore: Record<string, number> = { low: 24, medium: 58, high: 88 };
 const riskColor: Record<string, string> = { low: '#8be9d0', medium: '#f5b95d', high: '#fb7185' };
@@ -52,38 +53,10 @@ const riskBadgeClasses: Record<string, string> = {
 
 const MAX_CLIENT_UPLOAD_BYTES = 12 * 1024 * 1024;
 const ALLOWED_CLIENT_EXT = /\.(pdf|docx|txt|md|markdown|csv|tsv|json|xlsx|xls|png|jpe?g|webp|gif|ts|tsx|js|jsx|py|sql|html|css|ya?ml)$/i;
-const ACTIVE_CONVERSATION_KEY = 'nexora:activeConversationId';
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 type MicState = 'idle' | 'listening' | 'unsupported' | 'denied' | 'error';
-
-function writeActiveConversationId(id: string | undefined) {
-  try {
-    // localStorage survives browser close; still only a resume hint — URL + DB are authoritative.
-    if (id) {
-      window.localStorage.setItem(ACTIVE_CONVERSATION_KEY, id);
-      window.sessionStorage.setItem(ACTIVE_CONVERSATION_KEY, id);
-    } else {
-      window.localStorage.removeItem(ACTIVE_CONVERSATION_KEY);
-      window.sessionStorage.removeItem(ACTIVE_CONVERSATION_KEY);
-    }
-  } catch {
-    // ignore
-  }
-}
-
-function readActiveConversationId(): string | undefined {
-  try {
-    const fromSession = window.sessionStorage.getItem(ACTIVE_CONVERSATION_KEY)?.trim();
-    if (fromSession && UUID_RE.test(fromSession)) return fromSession;
-    const fromLocal = window.localStorage.getItem(ACTIVE_CONVERSATION_KEY)?.trim();
-    if (fromLocal && UUID_RE.test(fromLocal)) return fromLocal;
-  } catch {
-    // ignore
-  }
-  return undefined;
-}
 
 function mapMessagesToTurns(messages: any[]): Turn[] {
   return (messages || []).map((m: any) => {
@@ -117,7 +90,9 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
   const [turns, setTurns] = useState<Turn[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [hydrating, setHydrating] = useState(Boolean(routeConversationId));
+  // Always hydrate on mount so bare /app/chat never flashes a blank "new chat"
+  // before server resume redirects to the real conversation.
+  const [hydrating, setHydrating] = useState(true);
   const [statusLine, setStatusLine] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
@@ -143,16 +118,15 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
 
   function setConversationId(id: string | undefined) {
     setConversationIdState(id);
-    writeActiveConversationId(id);
+    writeActiveConversationHint(id);
     if (!id) {
       if (routeConversationId) router.replace(APP_ROUTES.chat);
       return;
     }
     const target = chatConversationPath(id);
     if (typeof window === 'undefined') return;
-    // Always update Next.js App Router — never soft replaceState (that desynced the router
-    // and skipped hardNavigate, leaving Nav/Back/Forward without a durable chat URL).
-    // ChatWorkspace lives in chat/layout.tsx so this replace does NOT remount us.
+    // Always update Next.js App Router. ChatWorkspace lives in chat/layout.tsx so
+    // this replace does NOT remount us / wipe the transcript.
     if (window.location.pathname !== target) {
       router.replace(target);
     }
@@ -170,36 +144,54 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      await refreshHistory();
+      setHydrating(true);
+      let listed: { id: string; title: string; pinned?: boolean }[] = [];
+      try {
+        const res = await api.listConversations();
+        listed = res.conversations || [];
+        if (!cancelled) setHistory(listed);
+      } catch {
+        // ignore
+      }
+      if (cancelled) return;
+
       const resumeId =
         routeConversationId && UUID_RE.test(routeConversationId)
           ? routeConversationId
           : undefined;
 
       if (resumeId) {
-        // Already hydrated this conversation in-memory (first-message create → URL update).
-        // Do NOT wipe the live transcript.
+        // Already hydrated this conversation in-memory (first-message / New Chat → URL update).
         if (loadedIdRef.current === resumeId && turnsRef.current.length > 0) {
           setConversationIdState(resumeId);
-          writeActiveConversationId(resumeId);
+          writeActiveConversationHint(resumeId);
           setHydrating(false);
           return;
         }
-        setHydrating(true);
         try {
           const data = await api.getConversation(resumeId);
           if (cancelled) return;
           setConversationIdState(resumeId);
-          writeActiveConversationId(resumeId);
+          writeActiveConversationHint(resumeId);
           loadedIdRef.current = resumeId;
           setTurns(mapMessagesToTurns(data.messages || []));
           setError(null);
         } catch {
-          writeActiveConversationId(undefined);
+          writeActiveConversationHint(undefined);
           loadedIdRef.current = undefined;
           if (!cancelled) {
             setError('Conversation not found or inaccessible.');
             setTurns([]);
+            // Fall through to server resume instead of inventing a blank chat.
+            try {
+              const fallback = await resolveResumeConversationId();
+              if (!cancelled && fallback && fallback !== resumeId) {
+                router.replace(chatConversationPath(fallback));
+                return;
+              }
+            } catch {
+              // ignore
+            }
             router.replace(APP_ROUTES.chat);
           }
         } finally {
@@ -208,14 +200,23 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
         return;
       }
 
-      // Bare /app/chat: resume durable hint only — never invent a "latest" conversation.
-      const cached = readActiveConversationId();
-      if (cached) {
-        if (!cancelled) {
-          setHydrating(true);
-          router.replace(chatConversationPath(cached));
+      // Bare /app/chat: DB resume is authoritative. Never create a conversation here.
+      // Never show blank "new chat" when the user already has conversations in History.
+      try {
+        let serverId = await resolveResumeConversationId();
+        if (!serverId) {
+          const first = listed[0]?.id;
+          if (typeof first === 'string' && UUID_RE.test(first)) serverId = first;
         }
-        return;
+        if (cancelled) return;
+        if (serverId) {
+          writeActiveConversationHint(serverId);
+          router.replace(chatConversationPath(serverId));
+          // Keep hydrating=true until the id-route effect loads messages.
+          return;
+        }
+      } catch {
+        // ignore — show empty only when no owned conversations exist
       }
 
       if (!cancelled) {
@@ -230,9 +231,9 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
     };
   }, [routeConversationId]);
 
-  // Keep resume hint fresh while this workspace is mounted (survives Approvals navigation).
+  // Keep resume hint fresh while this workspace is mounted.
   useEffect(() => {
-    if (conversationId) writeActiveConversationId(conversationId);
+    if (conversationId) writeActiveConversationHint(conversationId);
   }, [conversationId]);
 
   async function approveAndRunFromChat(turnIndex: number, ids: string[]) {
@@ -590,15 +591,23 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
   }
 
   async function startNewChat() {
-    loadedIdRef.current = undefined;
-    setConversationIdState(undefined);
-    writeActiveConversationId(undefined);
-    setTurns([]);
     setError(null);
-    setHydrating(false);
     setPendingAttachments([]);
     lastUserMessageRef.current = '';
-    router.push(APP_ROUTES.chat);
+    setHydrating(true);
+    try {
+      // Explicit New Chat is the ONLY navigation path that creates a conversation.
+      const created = await api.createConversation('New conversation');
+      const id = created.conversation.id;
+      loadedIdRef.current = id;
+      setTurns([]);
+      writeActiveConversationHint(id);
+      setConversationIdState(id);
+      router.replace(chatConversationPath(id));
+    } catch (err) {
+      setError((err as Error).message || 'Could not start a new chat.');
+      setHydrating(false);
+    }
   }
 
   async function deleteConversation(id: string) {

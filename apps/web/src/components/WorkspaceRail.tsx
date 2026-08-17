@@ -7,15 +7,28 @@ import { useEffect, useState } from 'react';
 import { LayoutGrid, MessageSquare, ShieldCheck, Plug, Settings, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { APP_ROUTES, chatResumeHref } from '@/lib/routes';
+import { resolveChatHref } from '@/lib/activeConversation';
 import { api } from '@/lib/api';
 
 export function WorkspaceRail() {
   const pathname = usePathname();
   const [pendingApprovals, setPendingApprovals] = useState(0);
-  const [chatHref, setChatHref] = useState<string>(APP_ROUTES.chat);
+  const [chatHref, setChatHref] = useState<string>(() => chatResumeHref());
 
   useEffect(() => {
+    let cancelled = false;
     setChatHref(chatResumeHref());
+    (async () => {
+      try {
+        const href = await resolveChatHref();
+        if (!cancelled) setChatHref(href);
+      } catch {
+        // ignore
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [pathname]);
 
   const ITEMS = [

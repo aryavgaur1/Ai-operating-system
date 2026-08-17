@@ -193,6 +193,36 @@ async function liveChecks() {
   assert.ok(msgsB.length >= 2, 'tab B should have its own messages');
   pass('multi-conversation isolation (tab A / tab B)');
 
+  // Activate A, then resume must return A (not B) even though B is more recent by create
+  const actA = await json(
+    await fetch(`${API}/conversations/${beforeId}/activate`, { method: 'POST', headers: auth, body: '{}' })
+  );
+  assert.ok(actA.status < 400, `activate failed: ${JSON.stringify(actA.body).slice(0, 200)}`);
+  const resume1 = await json(await fetch(`${API}/conversations/resume`, { headers: auth }));
+  const resumeId1 =
+    resume1.body?.conversationId ?? resume1.body?.data?.conversationId ?? null;
+  assert.strictEqual(resumeId1, beforeId, `resume after activate A expected ${beforeId} got ${resumeId1}`);
+  pass(`GET /conversations/resume → active ${resumeId1}`);
+
+  // Activate B via GET (marks active), resume → B
+  await fetch(`${API}/conversations/${otherId}`, { headers: auth });
+  const resume2 = await json(await fetch(`${API}/conversations/resume`, { headers: auth }));
+  const resumeId2 =
+    resume2.body?.conversationId ?? resume2.body?.data?.conversationId ?? null;
+  assert.strictEqual(resumeId2, otherId, `resume after open B expected ${otherId} got ${resumeId2}`);
+  pass(`GET /conversations/resume → switched active ${resumeId2}`);
+
+  // Bare resume never creates
+  const listBefore = await json(await fetch(`${API}/conversations`, { headers: auth }));
+  const convsBefore = listBefore.body?.conversations || listBefore.body?.data?.conversations || [];
+  const countConvs = convsBefore.length;
+  await fetch(`${API}/conversations/resume`, { headers: auth });
+  await fetch(`${API}/conversations/resume`, { headers: auth });
+  const listAfter = await json(await fetch(`${API}/conversations`, { headers: auth }));
+  const convsAfter = listAfter.body?.conversations || listAfter.body?.data?.conversations || [];
+  assert.strictEqual(convsAfter.length, countConvs, 'resume must not create conversations');
+  pass('resume does not create conversations');
+
   console.log(
     JSON.stringify({
       BEFORE_conversationId: beforeId,
@@ -200,6 +230,8 @@ async function liveChecks() {
       BEFORE_message_count: countBefore,
       AFTER_message_count: msgsA.length,
       OTHER_conversationId: otherId,
+      RESUME_active_then_A: resumeId1,
+      RESUME_after_B: resumeId2,
     })
   );
 }

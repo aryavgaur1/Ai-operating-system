@@ -45,8 +45,8 @@ export function readCachedConversationId(): string | undefined {
 }
 
 /**
- * Chat nav target: resume last conversation when known so Nav/Approvals never
- * dump the user on empty bare /app/chat.
+ * Sync helper for Link href — prefer browser hint; bare /app/chat still
+ * server-resolves on mount via GET /conversations/resume.
  */
 export function chatResumeHref(): string {
   const id = readCachedConversationId();
