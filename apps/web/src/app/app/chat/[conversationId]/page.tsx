@@ -1,11 +1,4 @@
-'use client';
-
-import { useParams } from 'next/navigation';
-import { ChatWorkspace } from '@/components/ChatWorkspace';
-
-/** URL-stable conversation — /app/chat/:conversationId */
+/** /app/chat/:conversationId — identity handled by chat/layout.tsx ChatWorkspace. */
 export default function ChatConversationPage() {
-  const params = useParams();
-  const id = typeof params?.conversationId === 'string' ? params.conversationId : undefined;
-  return <ChatWorkspace routeConversationId={id} />;
+  return null;
 }

@@ -117,6 +117,7 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
   const [turns, setTurns] = useState<Turn[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [hydrating, setHydrating] = useState(Boolean(routeConversationId));
   const [statusLine, setStatusLine] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
@@ -136,8 +137,11 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
   const abortRef = useRef<AbortController | null>(null);
   const lastUserMessageRef = useRef<string>('');
   const recognitionRef = useRef<any>(null);
+  const loadedIdRef = useRef<string | undefined>(undefined);
+  const turnsRef = useRef<Turn[]>([]);
+  turnsRef.current = turns;
 
-  function setConversationId(id: string | undefined, opts?: { hardNavigate?: boolean }) {
+  function setConversationId(id: string | undefined) {
     setConversationIdState(id);
     writeActiveConversationId(id);
     if (!id) {
@@ -146,15 +150,12 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
     }
     const target = chatConversationPath(id);
     if (typeof window === 'undefined') return;
-    if (window.location.pathname === target) return;
-
-    // Avoid remounting ChatWorkspace mid-stream (that wiped the live transcript).
-    // Soft-update the URL; hard navigate only when explicitly requested (e.g. after stream).
-    if (!opts?.hardNavigate && !routeConversationId) {
-      window.history.replaceState(window.history.state, '', target);
-      return;
+    // Always update Next.js App Router — never soft replaceState (that desynced the router
+    // and skipped hardNavigate, leaving Nav/Back/Forward without a durable chat URL).
+    // ChatWorkspace lives in chat/layout.tsx so this replace does NOT remount us.
+    if (window.location.pathname !== target) {
+      router.replace(target);
     }
-    router.replace(target);
   }
 
   async function refreshHistory() {
@@ -176,41 +177,63 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
           : undefined;
 
       if (resumeId) {
+        // Already hydrated this conversation in-memory (first-message create → URL update).
+        // Do NOT wipe the live transcript.
+        if (loadedIdRef.current === resumeId && turnsRef.current.length > 0) {
+          setConversationIdState(resumeId);
+          writeActiveConversationId(resumeId);
+          setHydrating(false);
+          return;
+        }
+        setHydrating(true);
         try {
           const data = await api.getConversation(resumeId);
           if (cancelled) return;
           setConversationIdState(resumeId);
           writeActiveConversationId(resumeId);
+          loadedIdRef.current = resumeId;
           setTurns(mapMessagesToTurns(data.messages || []));
-          return;
+          setError(null);
         } catch {
           writeActiveConversationId(undefined);
+          loadedIdRef.current = undefined;
           if (!cancelled) {
             setError('Conversation not found or inaccessible.');
             setTurns([]);
             router.replace(APP_ROUTES.chat);
           }
-          return;
+        } finally {
+          if (!cancelled) setHydrating(false);
         }
+        return;
       }
 
-      // Bare /app/chat: resume last known conversation instead of wiping history.
-      // localStorage/sessionStorage are convenience only — we still load from the database.
+      // Bare /app/chat: resume durable hint only — never invent a "latest" conversation.
       const cached = readActiveConversationId();
       if (cached) {
-        if (!cancelled) router.replace(chatConversationPath(cached));
+        if (!cancelled) {
+          setHydrating(true);
+          router.replace(chatConversationPath(cached));
+        }
         return;
       }
 
       if (!cancelled) {
+        loadedIdRef.current = undefined;
         setConversationIdState(undefined);
         setTurns([]);
+        setHydrating(false);
       }
     })();
     return () => {
       cancelled = true;
     };
   }, [routeConversationId]);
+
+  // Keep resume hint fresh while this workspace is mounted (survives Approvals navigation).
+  useEffect(() => {
+    if (conversationId) writeActiveConversationId(conversationId);
+  }, [conversationId]);
 
   async function approveAndRunFromChat(turnIndex: number, ids: string[]) {
     if (!ids.length || approvingTurn !== null) return;
@@ -318,8 +341,18 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
     abortRef.current = controller;
 
     try {
+      // Create + bind conversation BEFORE streaming so URL is canonical and Approvals can link.
+      // Layout-owned ChatWorkspace survives router.replace — no mid-stream remount wipe.
+      let activeId = conversationId;
+      if (!activeId) {
+        const created = await api.createConversation(payload.slice(0, 80));
+        activeId = created.conversation.id;
+        loadedIdRef.current = activeId;
+        setConversationId(activeId);
+      }
+
       const result = await api.streamMessage(payload, {
-        conversationId,
+        conversationId: activeId,
         attachmentIds: attachmentIds.length ? attachmentIds : undefined,
         signal: controller.signal,
         onEvent: (event) => {
@@ -343,7 +376,10 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
             );
           }
           if (event.type === 'error') setError(event.message);
-          if (event.type === 'conversation') setConversationId(event.conversationId, { hardNavigate: false });
+          if (event.type === 'conversation') {
+            loadedIdRef.current = event.conversationId;
+            setConversationId(event.conversationId);
+          }
           if (event.type === 'done') {
             setTurns((prev) => {
               const next = [...prev];
@@ -358,13 +394,15 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
               return next;
             });
             if (event.result.conversationId) {
-              setConversationId(event.result.conversationId, { hardNavigate: true });
+              loadedIdRef.current = event.result.conversationId;
+              setConversationId(event.result.conversationId);
             }
           }
         },
       });
       if (result?.conversationId) {
-        setConversationId(result.conversationId, { hardNavigate: true });
+        loadedIdRef.current = result.conversationId;
+        setConversationId(result.conversationId);
       }
       refreshHistory();
     } catch (err) {
@@ -552,10 +590,12 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
   }
 
   async function startNewChat() {
+    loadedIdRef.current = undefined;
     setConversationIdState(undefined);
     writeActiveConversationId(undefined);
     setTurns([]);
     setError(null);
+    setHydrating(false);
     setPendingAttachments([]);
     lastUserMessageRef.current = '';
     router.push(APP_ROUTES.chat);
@@ -614,6 +654,13 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
           </div>
 
           <div className="thin-scroll flex-1 space-y-4 overflow-y-auto pr-1">
+            {hydrating ? (
+              <div className="flex h-full min-h-[240px] flex-col items-center justify-center gap-3 text-sm text-neutral-400">
+                <RefreshCw size={18} className="animate-spin text-accent" />
+                Loading conversation…
+              </div>
+            ) : (
+              <>
             <AnimatePresence initial={false}>
               {turns.map((turn, i) => (
                 <motion.div
@@ -775,6 +822,8 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
                   action plan.
                 </p>
               </div>
+            )}
+              </>
             )}
 
             {loading && (

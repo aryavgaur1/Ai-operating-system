@@ -372,6 +372,11 @@ export const api = {
   },
 
   listConversations: () => request<{ conversations: any[] }>('/conversations'),
+  createConversation: (title?: string) =>
+    request<{ conversation: { id: string; title: string } }>('/conversations', {
+      method: 'POST',
+      body: JSON.stringify(title ? { title } : {}),
+    }),
   getConversation: (id: string) => request<{ conversation: any; messages: any[] }>(`/conversations/${id}`),
   updateConversation: (id: string, payload: Record<string, unknown>) =>
     request<{ conversation: any }>(`/conversations/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),

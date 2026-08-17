@@ -40,13 +40,18 @@ export function Nav() {
   const [pendingApprovals, setPendingApprovals] = useState(0);
   const [newUsers24h, setNewUsers24h] = useState(0);
   const [liveNotifs, setLiveNotifs] = useState<{ id: string; text: string; time: string; href?: string }[]>([]);
+  const [chatHref, setChatHref] = useState<string>(APP_ROUTES.chat);
   const notifRef = useRef<HTMLDivElement | null>(null);
   const profileRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    setChatHref(chatResumeHref());
+  }, [pathname]);
 
   const LINKS = [
     STATIC_LINKS[0],
     STATIC_LINKS[1],
-    { href: chatResumeHref(), label: 'Chat', icon: MessageSquare, matchPrefix: APP_ROUTES.chat },
+    { href: chatHref, label: 'Chat', icon: MessageSquare, matchPrefix: APP_ROUTES.chat },
     STATIC_LINKS[2],
   ];
 

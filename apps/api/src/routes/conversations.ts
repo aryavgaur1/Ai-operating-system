@@ -19,6 +19,24 @@ conversationsRouter.get(
   })
 );
 
+/** Explicit create — used so the client can navigate to /app/chat/:id BEFORE the first turn. */
+conversationsRouter.post(
+  '/',
+  asyncHandler(async (req, res) => {
+    const titleHint = typeof req.body?.title === 'string' ? req.body.title : 'New conversation';
+    const id = await ensureConversation({
+      organizationId: req.user!.organizationId,
+      userId: req.user!.id,
+      titleHint,
+    });
+    const { rows } = await query(
+      `select id, title, pinned, created_at, updated_at from conversations where id = $1`,
+      [id]
+    );
+    ok(res, { conversation: rows[0] }, 'Conversation created');
+  })
+);
+
 conversationsRouter.get(
   '/:id',
   asyncHandler(async (req, res) => {

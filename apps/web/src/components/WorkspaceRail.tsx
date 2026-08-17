@@ -12,7 +12,11 @@ import { api } from '@/lib/api';
 export function WorkspaceRail() {
   const pathname = usePathname();
   const [pendingApprovals, setPendingApprovals] = useState(0);
-  const chatHref = chatResumeHref();
+  const [chatHref, setChatHref] = useState<string>(APP_ROUTES.chat);
+
+  useEffect(() => {
+    setChatHref(chatResumeHref());
+  }, [pathname]);
 
   const ITEMS = [
     { href: APP_ROUTES.dashboard, label: 'Dashboard', icon: LayoutGrid, matchPrefix: APP_ROUTES.dashboard },
