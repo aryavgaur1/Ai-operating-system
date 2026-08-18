@@ -31,13 +31,20 @@ export function getEmailDiagnostics() {
   return {
     configured: Boolean(emailCredentials() || resendApiKey()),
     provider: resendApiKey() ? ('resend' as const) : emailCredentials() ? ('smtp' as const) : ('none' as const),
+    resendKeyPresent: Boolean(resendApiKey()),
     last: lastEmailDiag,
     activeProfile: _activeProfile,
   };
 }
 
 function resendApiKey(): string | null {
-  const key = (process.env.RESEND_API_KEY ?? '').trim();
+  // Accept common aliases / accidental quoting from Railway paste.
+  const raw =
+    process.env.RESEND_API_KEY ??
+    process.env.RESEND_KEY ??
+    process.env.RESEND_TOKEN ??
+    '';
+  const key = String(raw).trim().replace(/^["']|["']$/g, '');
   return key || null;
 }
 
@@ -51,6 +58,8 @@ function emailCredentials(): { user: string; pass: string } | null {
 function mailFromAddress(): string {
   const from = (process.env.EMAIL_FROM ?? '').trim();
   if (from) return from;
+  // Resend rejects unverified Gmail "from" addresses — use Resend test sender unless overridden.
+  if (resendApiKey()) return 'Nexora OS <onboarding@resend.dev>';
   const user = (process.env.EMAIL_USER ?? '').trim();
   if (user) return `Nexora OS <${user}>`;
   return 'Nexora OS <onboarding@resend.dev>';
@@ -567,17 +576,22 @@ export const mailer = {
     const workspace = escapeHtml(opts.workspaceName);
     const role = escapeHtml(opts.role);
     const expires = escapeHtml(opts.expiresAt.toUTCString());
+    const subject = `Nexora OS — You've been invited to join ${opts.workspaceName}`;
     return send(
       opts.to,
-      `You're invited to join ${opts.workspaceName} on Nexora`,
+      subject,
       baseTemplate(
-        'NEXORA',
-        `<p>You've been invited to join:</p>
-         <p style="font-size:18px;font-weight:600;color:#e2e8f0;">${workspace}</p>
-         <p>Invited by: <strong>${inviter}</strong><br/>Role: <strong>${role}</strong></p>
-         <p>This invitation expires on <strong>${expires}</strong> and can only be accepted with this email address.</p>
+        'Nexora OS',
+        `<p style="font-size:16px;color:#e2e8f0;margin:0 0 16px;">You've been invited to join a team workspace.</p>
+         <p style="font-size:20px;font-weight:650;color:#ffffff;margin:0 0 20px;">${workspace}</p>
+         <table style="width:100%;font-size:14px;color:#cbd5e1;margin:0 0 20px;border-collapse:collapse;">
+           <tr><td style="padding:6px 0;color:#94a3b8;width:110px;">Invited by</td><td style="padding:6px 0;"><strong>${inviter}</strong></td></tr>
+           <tr><td style="padding:6px 0;color:#94a3b8;">Role</td><td style="padding:6px 0;"><strong>${role}</strong></td></tr>
+           <tr><td style="padding:6px 0;color:#94a3b8;">Expires</td><td style="padding:6px 0;">${expires}</td></tr>
+         </table>
+         <p>This invitation can only be accepted with this email address.</p>
          ${ctaButton(acceptUrl, 'ACCESS WORKSPACE')}
-         <p style="font-size:12px;color:#94a3b8;word-break:break-all;">Or paste this link:<br/>${escapeHtml(acceptUrl)}</p>`
+         <p style="font-size:12px;color:#94a3b8;word-break:break-all;margin-top:20px;">Or paste this link:<br/>${escapeHtml(acceptUrl)}</p>`
       ),
       acceptUrl
     );
