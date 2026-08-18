@@ -9,6 +9,7 @@ import {
   isAuthPath,
   isOnboardingPath,
   isPublicPath,
+  isSafeNextPath,
   LOGIN,
 } from '@/lib/routes';
 
@@ -58,7 +59,7 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
       }
       if (token && isAuthPath(pathname) && !hasAuthAction) {
         const next = params.get('next');
-        router.replace(next && next.startsWith('/app') ? next : APP_HOME);
+        router.replace(isSafeNextPath(next) ? next! : APP_HOME);
         return;
       }
 

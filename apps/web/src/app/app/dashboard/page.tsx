@@ -20,6 +20,7 @@ import { GlassCard, Reveal, StaggerGroup, fadeUp } from '@/components/motion';
 import { SparkArea, WeekBars } from '@/components/charts';
 import { cn } from '@/lib/utils';
 import { chatConversationPath, chatResumeHref } from '@/lib/routes';
+import { DashboardWorkspacePanel } from '@/components/DashboardWorkspacePanel';
 
 const sprintPlans = {
   'Sprint 1-2': {
@@ -139,6 +140,10 @@ export default function DashboardPage() {
         <p className="max-w-2xl text-sm leading-6 text-neutral-400">
           Everything Nexora is watching, syncing, and proposing — organized in one live command surface.
         </p>
+      </Reveal>
+
+      <Reveal>
+        <DashboardWorkspacePanel />
       </Reveal>
 
       {error && (

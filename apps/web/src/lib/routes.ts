@@ -24,6 +24,11 @@ export const APP_ROUTES = {
   profile: '/app/profile',
 } as const;
 
+/** Secure invitation acceptance URL (raw token — never the DB hash). */
+export function inviteAcceptPath(token: string): string {
+  return `/invite/${encodeURIComponent(token)}`;
+}
+
 /** Stable chat URL — conversation ID survives Approvals navigation and reload. */
 export function chatConversationPath(conversationId: string): string {
   return `${APP_ROUTES.chat}/${encodeURIComponent(conversationId)}`;
@@ -92,6 +97,16 @@ export function isMarketingPath(pathname: string | null | undefined): boolean {
   return MARKETING_ROUTES.some((p) => (p === '/' ? pathname === '/' : pathname === p || pathname.startsWith(`${p}/`)));
 }
 
+export function isInvitePath(pathname: string | null | undefined): boolean {
+  return Boolean(pathname?.startsWith('/invite'));
+}
+
 export function isPublicPath(pathname: string | null | undefined): boolean {
-  return isMarketingPath(pathname) || isAuthPath(pathname);
+  return isMarketingPath(pathname) || isAuthPath(pathname) || isInvitePath(pathname);
+}
+
+/** Safe post-login redirect targets (app + invite acceptance). */
+export function isSafeNextPath(next: string | null | undefined): boolean {
+  if (!next) return false;
+  return next.startsWith('/app') || next.startsWith('/invite/');
 }

@@ -9,9 +9,19 @@ import { APP_ROUTES } from '@/lib/routes';
 import { useWorkspaces } from '@/components/WorkspaceProvider';
 import type { WorkspaceListItem } from '@/lib/api';
 
-export function WorkspaceSwitcher() {
+/**
+ * Visible workspace switcher in the authenticated shell.
+ * Data from GET /workspaces only — never hardcoded teams.
+ */
+export function WorkspaceSwitcher({
+  defaultOpen = false,
+  compact = false,
+}: {
+  defaultOpen?: boolean;
+  compact?: boolean;
+} = {}) {
   const { workspaces, current, loading, error, activate, createTeam, refresh } = useWorkspaces();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   const [createOpen, setCreateOpen] = useState(false);
   const [teamName, setTeamName] = useState('');
   const [busy, setBusy] = useState(false);
@@ -28,7 +38,7 @@ export function WorkspaceSwitcher() {
 
   const personal = workspaces.filter((w) => w.kind === 'personal');
   const teams = workspaces.filter((w) => w.kind === 'team');
-  const activeLabel = current?.name || (loading ? 'Loading…' : 'Workspace');
+  const activeLabel = current?.name || (loading ? 'Loading…' : 'Select workspace');
   const activeKind = current?.kind;
 
   async function onSelect(ws: WorkspaceListItem) {
@@ -49,7 +59,7 @@ export function WorkspaceSwitcher() {
     e.preventDefault();
     const name = teamName.trim();
     if (name.length < 2) {
-      setActionError('Team name must be at least 2 characters');
+      setActionError('Workspace name must be at least 2 characters');
       return;
     }
     setBusy(true);
@@ -59,10 +69,9 @@ export function WorkspaceSwitcher() {
       setTeamName('');
       setCreateOpen(false);
       setOpen(false);
-      // Activate the new team so the UI reflects it immediately
       await activate(created.id);
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : 'Could not create team');
+      setActionError(err instanceof Error ? err.message : 'Could not create workspace');
     } finally {
       setBusy(false);
     }
@@ -76,26 +85,37 @@ export function WorkspaceSwitcher() {
           setOpen((v) => !v);
           if (!open) void refresh();
         }}
-        className="flex max-w-[220px] items-center gap-2 rounded-2xl border border-white/10 bg-black/25 px-3 py-2 text-left transition hover:border-white/20 hover:bg-black/40"
+        className={cn(
+          'flex items-center gap-2 rounded-2xl border border-accent/35 bg-accent/10 text-left transition hover:border-accent/55 hover:bg-accent/15',
+          compact ? 'max-w-[200px] px-2.5 py-1.5' : 'min-w-[180px] max-w-[260px] px-3 py-2'
+        )}
         aria-expanded={open}
         aria-haspopup="listbox"
+        aria-label="Workspace switcher"
       >
         <span
           className={cn(
-            'flex h-7 w-7 shrink-0 items-center justify-center rounded-xl',
-            activeKind === 'team' ? 'bg-accent/20 text-accent' : 'bg-white/10 text-neutral-300'
+            'flex shrink-0 items-center justify-center rounded-xl',
+            compact ? 'h-6 w-6' : 'h-8 w-8',
+            activeKind === 'team' ? 'bg-accent/25 text-accent' : 'bg-white/10 text-neutral-200'
           )}
         >
-          {activeKind === 'team' ? <Building2 size={14} /> : <UserRound size={14} />}
+          {activeKind === 'team' ? <Building2 size={compact ? 12 : 15} /> : <UserRound size={compact ? 12 : 15} />}
         </span>
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-xs font-medium text-white">{activeLabel}</span>
-          <span className="block text-[10px] uppercase tracking-[0.16em] text-neutral-500">
-            {activeKind === 'team' ? 'Team' : activeKind === 'personal' ? 'Personal' : 'Workspace'}
-            {current?.role ? ` · ${current.role}` : ''}
+          <span className="block text-[9px] font-semibold uppercase tracking-[0.18em] text-accent2">
+            Workspace
           </span>
+          <span className="block truncate text-xs font-semibold text-white sm:text-sm">{activeLabel}</span>
+          {!compact && (
+            <span className="hidden text-[10px] uppercase tracking-[0.14em] text-neutral-500 sm:block">
+              {activeKind === 'team' ? 'Team' : activeKind === 'personal' ? 'Personal' : '—'}
+              {current?.role ? ` · ${current.role}` : ''}
+              {current ? ' · Active' : ''}
+            </span>
+          )}
         </span>
-        <ChevronDown size={14} className={cn('shrink-0 text-neutral-500 transition', open && 'rotate-180')} />
+        <ChevronDown size={14} className={cn('shrink-0 text-accent transition', open && 'rotate-180')} />
       </button>
 
       <AnimatePresence>
@@ -105,7 +125,7 @@ export function WorkspaceSwitcher() {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 6, scale: 0.98 }}
             transition={{ duration: 0.18 }}
-            className="glass-strong absolute left-0 top-[calc(100%+8px)] z-[60] w-[300px] overflow-hidden rounded-[22px] border border-white/10 p-2 shadow-soft"
+            className="glass-strong absolute left-0 top-[calc(100%+8px)] z-[60] w-[320px] overflow-hidden rounded-[22px] border border-accent/25 p-2 shadow-soft"
             role="listbox"
           >
             {(error || actionError) && (
@@ -115,7 +135,7 @@ export function WorkspaceSwitcher() {
             )}
 
             <p className="px-2 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-neutral-500">
-              Workspace
+              Your workspaces
             </p>
             <p className="px-2 pb-2 text-[10px] uppercase tracking-[0.16em] text-neutral-600">Personal</p>
             {loading && personal.length === 0 ? (
@@ -145,18 +165,21 @@ export function WorkspaceSwitcher() {
                   setCreateOpen(true);
                   setActionError(null);
                 }}
-                className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-sm text-accent hover:bg-accent/10"
+                className="flex w-full items-center gap-2 rounded-xl bg-accent/15 px-3 py-3 text-sm font-semibold text-accent hover:bg-accent/25"
               >
-                <Plus size={14} />
+                <Plus size={16} />
                 Create Team Workspace
               </button>
             ) : (
               <form onSubmit={onCreate} className="space-y-2 px-1 pb-1">
+                <label className="block px-1 text-[10px] uppercase tracking-[0.14em] text-neutral-500">
+                  Workspace name
+                </label>
                 <input
                   autoFocus
                   value={teamName}
                   onChange={(e) => setTeamName(e.target.value)}
-                  placeholder="Team name"
+                  placeholder="e.g. Acme"
                   className="w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none placeholder:text-neutral-600 focus:border-accent/40"
                   disabled={busy}
                 />
@@ -164,15 +187,15 @@ export function WorkspaceSwitcher() {
                   <button
                     type="submit"
                     disabled={busy}
-                    className="flex-1 rounded-full bg-accent px-3 py-1.5 text-xs font-semibold text-[#04101f] disabled:opacity-50"
+                    className="flex-1 rounded-full bg-accent px-3 py-2 text-xs font-semibold text-[#04101f] disabled:opacity-50"
                   >
-                    {busy ? 'Creating…' : 'Create'}
+                    {busy ? 'Creating…' : 'Create Workspace'}
                   </button>
                   <button
                     type="button"
                     disabled={busy}
                     onClick={() => setCreateOpen(false)}
-                    className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-neutral-300"
+                    className="rounded-full border border-white/10 px-3 py-2 text-xs text-neutral-300"
                   >
                     Cancel
                   </button>
@@ -183,9 +206,9 @@ export function WorkspaceSwitcher() {
             <Link
               href={APP_ROUTES.workspaceSettings}
               onClick={() => setOpen(false)}
-              className="mt-1 flex w-full items-center rounded-xl px-3 py-2 text-xs text-neutral-400 hover:bg-white/5 hover:text-white"
+              className="mt-1 flex w-full items-center rounded-xl px-3 py-2.5 text-xs font-medium text-neutral-300 hover:bg-white/5 hover:text-white"
             >
-              Workspace settings
+              Workspace settings · Members · Invites
             </Link>
           </motion.div>
         )}
@@ -212,7 +235,7 @@ function WorkspaceRow({
       onClick={() => onSelect(ws)}
       className={cn(
         'flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left transition',
-        ws.isActive ? 'bg-white/10' : 'hover:bg-white/5'
+        ws.isActive ? 'bg-accent/15 ring-1 ring-accent/30' : 'hover:bg-white/5'
       )}
     >
       <span

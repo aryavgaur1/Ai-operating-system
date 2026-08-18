@@ -238,7 +238,8 @@ export const mailer = {
     rawToken: string;
     expiresAt: Date;
   }): Promise<EmailDeliveryResult> => {
-    const acceptUrl = `${webAppUrl()}/app/invitations/accept?token=${encodeURIComponent(opts.rawToken)}`;
+    // Public invite URL — raw token in path only (never the DB hash)
+    const acceptUrl = `${webAppUrl()}/invite/${encodeURIComponent(opts.rawToken)}`;
     const inviter = opts.inviterName ? escapeHtml(opts.inviterName) : 'A teammate';
     const workspace = escapeHtml(opts.workspaceName);
     const role = escapeHtml(opts.role);
@@ -250,7 +251,7 @@ export const mailer = {
         'Team invitation',
         `<p>${inviter} invited you to join <strong>${workspace}</strong> as <strong>${role}</strong>.</p>
          <p>This invitation expires on <strong>${expires}</strong> and can only be accepted with this email address.</p>
-         ${ctaButton(acceptUrl, 'Accept invitation')}
+         ${ctaButton(acceptUrl, 'Accept Workspace Invitation')}
          <p style="font-size:12px;color:#94a3b8;word-break:break-all;">Or paste this link:<br/>${escapeHtml(acceptUrl)}</p>`
       ),
       acceptUrl

@@ -10,7 +10,7 @@ import {
   type InvitationPublic,
   type WorkspaceMember,
 } from '@/lib/api';
-import { APP_ROUTES } from '@/lib/routes';
+import { APP_ROUTES, inviteAcceptPath } from '@/lib/routes';
 import { cn } from '@/lib/utils';
 
 function formatDate(iso: string) {
@@ -87,9 +87,7 @@ export default function WorkspaceSettingsPage() {
         );
         if (res.acceptToken) {
           const origin = typeof window !== 'undefined' ? window.location.origin : '';
-          setLastAcceptLink(
-            `${origin}${APP_ROUTES.invitationAccept}?token=${encodeURIComponent(res.acceptToken)}`
-          );
+          setLastAcceptLink(`${origin}${inviteAcceptPath(res.acceptToken)}`);
         }
       }
       await loadTeamData();
@@ -128,9 +126,7 @@ export default function WorkspaceSettingsPage() {
         setMessage(`Invitation resent. Email not delivered (${res.email.mode}).`);
         if (res.acceptToken) {
           const origin = typeof window !== 'undefined' ? window.location.origin : '';
-          setLastAcceptLink(
-            `${origin}${APP_ROUTES.invitationAccept}?token=${encodeURIComponent(res.acceptToken)}`
-          );
+          setLastAcceptLink(`${origin}${inviteAcceptPath(res.acceptToken)}`);
         }
       }
       await loadTeamData();

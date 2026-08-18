@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { api, googleLoginUrl, setAccessToken } from '@/lib/api';
+import { isSafeNextPath } from '@/lib/routes';
 
 export default function LoginInner() {
   const router = useRouter();
@@ -53,7 +54,7 @@ export default function LoginInner() {
       const data = await api.login({ email, password, rememberMe });
       setAccessToken(data.accessToken || data.token);
       const next = search.get('next');
-      router.replace(next && next.startsWith('/app') ? next : '/app/dashboard');
+      router.replace(isSafeNextPath(next) ? next! : '/app/dashboard');
     } catch (err: any) {
       setError(err.message || 'Login failed');
     } finally {
