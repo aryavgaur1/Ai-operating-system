@@ -585,7 +585,12 @@ export const api = {
 };
 
 export function googleLoginUrl() {
-  return `${API_URL}/auth/google/start`;
+  const origin =
+    typeof window !== 'undefined' && window.location?.origin
+      ? window.location.origin
+      : '';
+  const q = origin ? `?returnOrigin=${encodeURIComponent(origin)}` : '';
+  return `${API_URL}/auth/google/start${q}`;
 }
 
 export function oauthConnectUrl(tool: 'slack' | 'notion' | 'jira'): string | null {

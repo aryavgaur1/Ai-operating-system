@@ -45,7 +45,12 @@ function loadEnvFromWorkspaceRoot(): void {
 loadEnvFromWorkspaceRoot();
 
 const SAAS_MODE = (process.env.SAAS_MODE ?? 'true') === 'true';
-const WEB_APP_URL = (process.env.WEB_APP_URL ?? 'http://localhost:3000').replace(/\/$/, '');
+const WEB_APP_URL = (
+  process.env.WEB_APP_URL ??
+  (process.env.RAILWAY_ENVIRONMENT || process.env.NODE_ENV === 'production'
+    ? 'https://ai-lilac-phi.vercel.app'
+    : 'http://localhost:3000')
+).replace(/\/$/, '');
 const EXTRA_ORIGINS = (process.env.CORS_ORIGINS ?? '')
   .split(',')
   .map((s) => s.trim().replace(/\/$/, ''))

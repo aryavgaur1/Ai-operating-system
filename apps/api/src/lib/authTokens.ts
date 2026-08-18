@@ -12,8 +12,55 @@ export function randomToken(bytes = 32): string {
   return crypto.randomBytes(bytes).toString('hex');
 }
 
+/** Canonical production web app (Vercel). Never default to Netlify. */
+export const CANONICAL_WEB_APP_URL = 'https://ai-lilac-phi.vercel.app';
+
 export function webAppUrl(): string {
-  return (process.env.WEB_APP_URL ?? process.env.NEXT_PUBLIC_API_URL?.replace(':4000', ':3000') ?? 'http://localhost:3000').replace(/\/$/, '');
+  const fromEnv = (process.env.WEB_APP_URL ?? '').trim().replace(/\/$/, '');
+  // Prefer env when set, but never silently keep a stale Netlify default in code paths
+  // that omit WEB_APP_URL — product lives on Vercel.
+  if (fromEnv) return fromEnv;
+  if (process.env.NODE_ENV === 'production' || process.env.RAILWAY_ENVIRONMENT) {
+    return CANONICAL_WEB_APP_URL;
+  }
+  return (
+    process.env.NEXT_PUBLIC_API_URL?.replace(':4000', ':3000') ?? 'http://localhost:3000'
+  ).replace(/\/$/, '');
+}
+
+/** Origins allowed for post-login / OAuth return redirects. */
+export function allowedWebOrigins(): string[] {
+  const extras = (process.env.CORS_ORIGINS ?? '')
+    .split(',')
+    .map((s) => s.trim().replace(/\/$/, ''))
+    .filter(Boolean);
+  return Array.from(
+    new Set([
+      webAppUrl(),
+      CANONICAL_WEB_APP_URL,
+      'https://try-nexora.netlify.app',
+      'http://localhost:3000',
+      'http://127.0.0.1:3000',
+      ...extras,
+    ])
+  );
+}
+
+export function resolveReturnOrigin(candidate: string | null | undefined): string {
+  const raw = String(candidate || '').trim().replace(/\/$/, '');
+  if (!raw) return webAppUrl();
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return webAppUrl();
+    const origin = u.origin;
+    const allowed = allowedWebOrigins();
+    if (allowed.includes(origin)) return origin;
+    if (/^https:\/\/[a-z0-9-]+\.vercel\.app$/i.test(origin)) return origin;
+    if (/^https:\/\/[a-z0-9-]+\.netlify\.app$/i.test(origin)) return origin;
+  } catch {
+    // ignore
+  }
+  return webAppUrl();
 }
 
 /** Cross-site SPA (Netlify) → API (Railway) needs SameSite=None; Secure. */
