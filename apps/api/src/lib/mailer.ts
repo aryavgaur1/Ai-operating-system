@@ -123,7 +123,7 @@ async function verifyWithTimeout(transporter: nodemailer.Transporter): Promise<v
 
 export type EmailDeliveryResult = {
   delivered: boolean;
-  mode: 'smtp' | 'resend' | 'console_fallback' | 'failed';
+  mode: 'smtp' | 'resend' | 'resend_relay' | 'console_fallback' | 'failed';
   errorCode?: string;
   profile?: string;
 };
@@ -391,6 +391,63 @@ async function sendViaProfiles(
   return { delivered: false, mode: 'failed', errorCode: errors.join('|') || 'unknown' };
 }
 
+async function deliverInviteViaWebRelay(rawToken: string): Promise<EmailDeliveryResult> {
+  const relayBase = (process.env.EMAIL_RELAY_URL || webAppUrl()).replace(/\/$/, '');
+  const url = `${relayBase}/api/internal/deliver-invite`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20_000);
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: rawToken }),
+    });
+    const text = await res.text();
+    let parsed: any = null;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      // ignore
+    }
+    if (!res.ok || !parsed?.ok) {
+      const errorCode = String(parsed?.error || `relay_http_${res.status}`);
+      lastEmailDiag = {
+        at: new Date().toISOString(),
+        delivered: false,
+        mode: 'failed',
+        profile: 'resend_relay',
+        errorCode,
+      };
+      logger.error('email.failed', { profile: 'resend_relay', code: errorCode, message: text.slice(0, 200) });
+      return { delivered: false, mode: 'failed', errorCode, profile: 'resend_relay' };
+    }
+    _activeProfile = 'resend_relay';
+    lastEmailDiag = {
+      at: new Date().toISOString(),
+      delivered: true,
+      mode: 'resend',
+      profile: 'resend_relay',
+      errorCode: null,
+    };
+    logger.info('email.sent', { profile: 'resend_relay' });
+    return { delivered: true, mode: 'resend_relay', profile: 'resend_relay' };
+  } catch (err) {
+    const e = err as Error & { name?: string };
+    const errorCode = e.name === 'AbortError' ? 'ETIMEDOUT' : 'relay_error';
+    lastEmailDiag = {
+      at: new Date().toISOString(),
+      delivered: false,
+      mode: 'failed',
+      profile: 'resend_relay',
+      errorCode,
+    };
+    return { delivered: false, mode: 'failed', errorCode, profile: 'resend_relay' };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function send(
   to: string,
   subject: string,
@@ -404,39 +461,27 @@ async function send(
   }
 
   const creds = emailCredentials();
-  if (!creds) {
-    if (!resendApiKey()) {
-      logger.info('email.console_fallback', { to, subject, debugLink: debugLink || null });
-      lastEmailDiag = {
-        at: new Date().toISOString(),
-        delivered: false,
-        mode: 'console_fallback',
-        errorCode: 'not_configured',
-      };
-      return { delivered: false, mode: 'console_fallback' };
+  if (creds) {
+    const result = await sendViaProfiles(creds, {
+      from: mailFromAddress(),
+      to,
+      subject,
+      html,
+    });
+    if (result.delivered) {
+      logger.info('email.sent', { to, subject, profile: result.profile });
+      return result;
     }
-    if (debugLink) console.log(`[email:failed-fallback] ${subject} → ${to}\nLink: ${debugLink}`);
-    return {
-      delivered: false,
-      mode: 'failed',
-      errorCode: lastEmailDiag?.errorCode || 'failed',
-      profile: 'resend',
-    };
+  } else if (!resendApiKey()) {
+    logger.info('email.console_fallback', { to, subject, debugLink: debugLink || null });
   }
 
-  const result = await sendViaProfiles(creds, {
-    from: mailFromAddress(),
-    to,
-    subject,
-    html,
-  });
-  if (!result.delivered && debugLink) {
-    console.log(`[email:failed-fallback] ${subject} → ${to}\nLink: ${debugLink}`);
-  }
-  if (result.delivered) {
-    logger.info('email.sent', { to, subject, profile: result.profile });
-  }
-  return result;
+  if (debugLink) console.log(`[email:failed-fallback] ${subject} → ${to}\nLink: ${debugLink}`);
+  return {
+    delivered: false,
+    mode: resendApiKey() || creds ? 'failed' : 'console_fallback',
+    errorCode: lastEmailDiag?.errorCode || (resendApiKey() || creds ? 'failed' : 'not_configured'),
+  };
 }
 
 export const mailer = {
@@ -584,7 +629,7 @@ export const mailer = {
       )
     ),
 
-  sendWorkspaceInvitation: (opts: {
+  sendWorkspaceInvitation: async (opts: {
     to: string;
     workspaceName: string;
     inviterName: string | null;
@@ -598,7 +643,7 @@ export const mailer = {
     const role = escapeHtml(opts.role);
     const expires = escapeHtml(opts.expiresAt.toUTCString());
     const subject = `Nexora OS — You've been invited to join ${opts.workspaceName}`;
-    return send(
+    const first = await send(
       opts.to,
       subject,
       baseTemplate(
@@ -616,5 +661,9 @@ export const mailer = {
       ),
       acceptUrl
     );
+    if (first.delivered) return first;
+    // Railway often cannot reach Gmail SMTP / may miss RESEND_API_KEY on the running service.
+    // Fall back to Vercel HTTPS relay (Resend) using the invite token.
+    return deliverInviteViaWebRelay(opts.rawToken);
   },
 };

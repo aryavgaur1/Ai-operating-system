@@ -460,6 +460,8 @@ export interface InvitationPreview {
   expiresAt: string;
   expired: boolean;
   acceptable: boolean;
+  invitedByDisplayName?: string | null;
+  invitedByEmail?: string | null;
 }
 
 async function loadInvitationByRawToken(rawToken: string, client?: PoolClient) {
@@ -482,14 +484,18 @@ async function loadInvitationByRawToken(rawToken: string, client?: PoolClient) {
     token_hash: string;
     organization_name: string;
     organization_kind: string;
+    invited_by_display_name: string | null;
+    invited_by_email: string | null;
   }>(
     client,
     `select i.id, i.organization_id, i.email, i.role, i.status, i.expires_at,
             i.invited_by_user_id, i.accepted_at, i.accepted_by_user_id, i.created_at,
             i.token_hash,
-            o.name as organization_name, o.kind as organization_kind
+            o.name as organization_name, o.kind as organization_kind,
+            u.display_name as invited_by_display_name, u.email as invited_by_email
      from organization_invitations i
      join organizations o on o.id = i.organization_id
+     left join users u on u.id = i.invited_by_user_id
      where i.token_hash = $1`,
     [tokenHash]
   );
@@ -518,6 +524,8 @@ export async function previewInvitation(rawToken: string): Promise<InvitationPre
     expiresAt: expiresAt.toISOString(),
     expired,
     acceptable,
+    invitedByDisplayName: row.invited_by_display_name ?? null,
+    invitedByEmail: row.invited_by_email ?? null,
   };
 }
 
