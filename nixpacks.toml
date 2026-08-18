@@ -1,0 +1,4 @@
+# Railway sets NODE_ENV=production, which makes bare `npm ci` omit
+# typescript/@types and breaks the API build (`tsc: not found`).
+[phases.install]
+cmds = ["npm ci --include=dev"]
