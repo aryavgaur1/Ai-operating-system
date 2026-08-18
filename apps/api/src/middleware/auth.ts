@@ -3,6 +3,10 @@ import jwt from 'jsonwebtoken';
 import type { ActingUser } from '@enterprise-ai-os/shared';
 import { query } from '@enterprise-ai-os/stores';
 import { isPlatformAdminEmail } from '../lib/platformAdmin';
+import {
+  MembershipAuthorizationError,
+  resolveAuthorizedOrganization,
+} from '../lib/workspaceAuth';
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -15,7 +19,7 @@ declare global {
 
 interface JwtPayload {
   sub: string;
-  org: string;
+  org?: string;
   typ?: string;
 }
 
@@ -46,36 +50,81 @@ export function verifyToken(token: string): JwtPayload {
   return jwt.verify(token, getJwtSecret()) as JwtPayload;
 }
 
-async function loadActingUser(userId: string): Promise<ActingUser | null> {
+const DEFAULT_PERMISSIONS: ActingUser['permissions'] = [
+  { tool: 'slack', resourceType: 'channel', resourceId: '*', accessLevel: 'write' },
+  { tool: 'notion', resourceType: 'page', resourceId: '*', accessLevel: 'write' },
+  { tool: 'jira', resourceType: 'project', resourceId: '*', accessLevel: 'write' },
+  { tool: 'gmail', resourceType: 'mailbox', resourceId: '*', accessLevel: 'write' },
+  { tool: 'salesforce', resourceType: 'object', resourceId: '*', accessLevel: 'write' },
+];
+
+/**
+ * Load acting user with membership-authoritative organization + role.
+ * JWT org is validated against organization_memberships (fail closed).
+ * Legacy users.role = super_admin is preserved for platform gates only;
+ * tenant access still requires an active membership for the org claim.
+ */
+export async function loadActingUser(
+  userId: string,
+  jwtOrganizationId?: string | null
+): Promise<ActingUser | null> {
   const result = await query<{
     id: string;
     email: string;
     display_name: string | null;
-    role: ActingUser['role'];
+    role: string;
     organization_id: string;
+    active_organization_id: string | null;
     is_verified: boolean;
     is_suspended: boolean;
   }>(
-    `select id, email, display_name, role, organization_id, is_verified, is_suspended
+    `select id, email, display_name, role, organization_id, active_organization_id,
+            is_verified, is_suspended
      from users where id = $1`,
     [userId]
   );
   const row = result.rows[0];
   if (!row) return null;
+
+  let authorized: { organizationId: string; membership: { role: ActingUser['role'] } };
+  try {
+    authorized = await resolveAuthorizedOrganization({
+      userId: row.id,
+      homeOrganizationId: row.organization_id,
+      activeOrganizationId: row.active_organization_id,
+      jwtOrganizationId,
+    });
+  } catch (err) {
+    if (err instanceof MembershipAuthorizationError) {
+      return null;
+    }
+    throw err;
+  }
+
+  // Preserve platform super_admin for existing gates; tenant org still membership-bound.
+  const role: ActingUser['role'] =
+    row.role === 'super_admin' ? 'super_admin' : (authorized.membership.role as ActingUser['role']);
+
   return {
     id: row.id,
     email: row.email,
     displayName: row.display_name ?? undefined,
-    organizationId: row.organization_id,
-    role: row.role,
+    organizationId: authorized.organizationId,
+    role,
     isVerified: row.is_verified,
     isSuspended: row.is_suspended,
-    permissions: [{ tool: 'slack', resourceType: 'channel', resourceId: '*', accessLevel: 'write' },
-      { tool: 'notion', resourceType: 'page', resourceId: '*', accessLevel: 'write' },
-      { tool: 'jira', resourceType: 'project', resourceId: '*', accessLevel: 'write' },
-      { tool: 'gmail', resourceType: 'mailbox', resourceId: '*', accessLevel: 'write' },
-      { tool: 'salesforce', resourceType: 'object', resourceId: '*', accessLevel: 'write' }],
+    permissions: DEFAULT_PERMISSIONS,
   };
+}
+
+function membershipFailResponse(res: Response, err: MembershipAuthorizationError): void {
+  const status = err.code === 'organization_not_found' ? 404 : 403;
+  res.status(status).json({
+    success: false,
+    message: err.message,
+    data: null,
+    error: err.code,
+  });
 }
 
 /** Optional auth — attaches user when token present, never 401s. */
@@ -92,7 +141,7 @@ export async function optionalAuthenticate(req: Request, _res: Response, next: N
       next();
       return;
     }
-    const user = await loadActingUser(payload.sub);
+    const user = await loadActingUser(payload.sub, payload.org);
     if (user && !user.isSuspended) req.user = user;
   } catch {
     // ignore invalid token for optional auth
@@ -113,13 +162,50 @@ export async function authenticate(req: Request, res: Response, next: NextFuncti
       res.status(401).json({ success: false, message: 'Unauthorized', data: null, error: 'invalid_token_type' });
       return;
     }
-    const user = await loadActingUser(payload.sub);
-    if (!user) {
+
+    // Explicit membership resolution so clients get fail-closed error codes.
+    const base = await query<{
+      id: string;
+      organization_id: string;
+      active_organization_id: string | null;
+      is_suspended: boolean;
+    }>(
+      `select id, organization_id, active_organization_id, is_suspended from users where id = $1`,
+      [payload.sub]
+    );
+    const row = base.rows[0];
+    if (!row) {
       res.status(401).json({ success: false, message: 'Unauthorized', data: null, error: 'user_not_found' });
       return;
     }
-    if (user.isSuspended) {
+    if (row.is_suspended) {
       res.status(403).json({ success: false, message: 'Account suspended', data: null, error: 'suspended' });
+      return;
+    }
+
+    try {
+      await resolveAuthorizedOrganization({
+        userId: row.id,
+        homeOrganizationId: row.organization_id,
+        activeOrganizationId: row.active_organization_id,
+        jwtOrganizationId: payload.org,
+      });
+    } catch (err) {
+      if (err instanceof MembershipAuthorizationError) {
+        membershipFailResponse(res, err);
+        return;
+      }
+      throw err;
+    }
+
+    const user = await loadActingUser(payload.sub, payload.org);
+    if (!user) {
+      res.status(403).json({
+        success: false,
+        message: 'Active organization membership required.',
+        data: null,
+        error: 'membership_required',
+      });
       return;
     }
     req.user = user;
@@ -147,6 +233,10 @@ export function requireVerified(req: Request, res: Response, next: NextFunction)
   next();
 }
 
+/**
+ * Workspace role gate — uses membership-resolved ActingUser.role.
+ * Platform email admin is separate (requireAdmin); do not use it for tenant roles.
+ */
 export function requireRole(...roles: ActingUser['role'][]) {
   return (req: Request, res: Response, next: NextFunction): void => {
     if (!req.user) {
@@ -158,11 +248,21 @@ export function requireRole(...roles: ActingUser['role'][]) {
       return;
     }
     if (!roles.includes(req.user.role)) {
-      res.status(403).json({ success: false, message: 'Forbidden — insufficient role.', data: null, error: 'forbidden' });
+      res.status(403).json({
+        success: false,
+        message: 'Forbidden — insufficient role.',
+        data: null,
+        error: 'forbidden',
+      });
       return;
     }
     next();
   };
+}
+
+/** Owner/admin-only workspace operations (membership roles). */
+export function requireWorkspaceAdmin(req: Request, res: Response, next: NextFunction): void {
+  return requireRole('owner', 'admin')(req, res, next);
 }
 
 export function requireAdmin(req: Request, res: Response, next: NextFunction): void {
@@ -170,7 +270,7 @@ export function requireAdmin(req: Request, res: Response, next: NextFunction): v
     res.status(401).json({ success: false, message: 'Unauthorized', data: null, error: 'unauthorized' });
     return;
   }
-  // Platform admin is email-gated (founder only), not just any org admin role.
+  // Platform admin is email-gated (founder only), not tenant org admin role.
   if (!isPlatformAdminEmail(req.user.email)) {
     res.status(403).json({ success: false, message: 'Admin access required', data: null, error: 'forbidden' });
     return;

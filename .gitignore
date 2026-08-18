@@ -7,3 +7,4 @@ apps/api/data/
 .npm-cache/
 *.tsbuildinfo
 .vercel
+.tmp-p05-b1-counts.json

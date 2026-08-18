@@ -46,7 +46,18 @@ function baseTemplate(title: string, bodyHtml: string): string {
 </body></html>`;
 }
 
-async function send(to: string, subject: string, html: string, debugLink?: string): Promise<void> {
+export type EmailDeliveryResult = {
+  /** True only when SMTP accepted the message. Console fallback is NOT delivery. */
+  delivered: boolean;
+  mode: 'smtp' | 'console_fallback' | 'failed';
+};
+
+async function send(
+  to: string,
+  subject: string,
+  html: string,
+  debugLink?: string
+): Promise<EmailDeliveryResult> {
   const transporter = getTransporter();
   if (!transporter) {
     logger.info('email.console_fallback', { to, subject, debugLink: debugLink || null });
@@ -55,18 +66,21 @@ async function send(to: string, subject: string, html: string, debugLink?: strin
     console.log(`Subject: ${subject}`);
     if (debugLink) console.log(`Link:    ${debugLink}`);
     console.log('================================================================================\n');
-    return;
+    // Invitation created ≠ email delivered. Callers must not claim "sent".
+    return { delivered: false, mode: 'console_fallback' };
   }
   try {
     const from = process.env.EMAIL_USER;
     await transporter.sendMail({ from: `Nexora OS <${from}>`, to, subject, html });
     logger.info('email.sent', { to, subject });
+    return { delivered: true, mode: 'smtp' };
   } catch (err) {
     logger.error('email.failed', { to, subject, message: (err as Error).message });
     // Still surface links in logs so reset/verify never silently fails
     if (debugLink) {
       console.log(`[email:failed-fallback] ${subject} → ${to}\nLink: ${debugLink}`);
     }
+    return { delivered: false, mode: 'failed' };
   }
 }
 
@@ -211,4 +225,35 @@ export const mailer = {
       'Your Nexora account was deleted',
       baseTemplate('Account deleted', `<p>Your Nexora account and workspace data have been deleted as requested.</p>`)
     ),
+
+  /**
+   * Team workspace invitation. Returns delivery status — never invents success
+   * when SMTP is unset or send fails.
+   */
+  sendWorkspaceInvitation: (opts: {
+    to: string;
+    workspaceName: string;
+    inviterName: string | null;
+    role: string;
+    rawToken: string;
+    expiresAt: Date;
+  }): Promise<EmailDeliveryResult> => {
+    const acceptUrl = `${webAppUrl()}/app/invitations/accept?token=${encodeURIComponent(opts.rawToken)}`;
+    const inviter = opts.inviterName ? escapeHtml(opts.inviterName) : 'A teammate';
+    const workspace = escapeHtml(opts.workspaceName);
+    const role = escapeHtml(opts.role);
+    const expires = escapeHtml(opts.expiresAt.toUTCString());
+    return send(
+      opts.to,
+      `You're invited to join ${opts.workspaceName} on Nexora`,
+      baseTemplate(
+        'Team invitation',
+        `<p>${inviter} invited you to join <strong>${workspace}</strong> as <strong>${role}</strong>.</p>
+         <p>This invitation expires on <strong>${expires}</strong> and can only be accepted with this email address.</p>
+         ${ctaButton(acceptUrl, 'Accept invitation')}
+         <p style="font-size:12px;color:#94a3b8;word-break:break-all;">Or paste this link:<br/>${escapeHtml(acceptUrl)}</p>`
+      ),
+      acceptUrl
+    );
+  },
 };

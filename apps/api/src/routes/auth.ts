@@ -3,6 +3,8 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { query } from '@enterprise-ai-os/stores';
 import { authenticate, getJwtSecret, requireRole, verifyToken } from '../middleware/auth';
+import { ensurePersonalMembership, getMembership } from '../lib/workspaceAuth';
+import { membershipErrorToAppError, resolveWorkspaceContext } from '../lib/workspaceService';
 import { mailer } from '../lib/mailer';
 import { logger } from '../lib/logger';
 import { AppError, ok, asyncHandler } from '../lib/errors';
@@ -100,19 +102,20 @@ authRouter.post(
     const slug = `${slugify(name)}-${Math.random().toString(36).slice(2, 8)}`;
 
     const orgCreated = await query<{ id: string }>(
-      'insert into organizations (name, slug) values ($1, $2) returning id',
+      `insert into organizations (name, slug, kind) values ($1, $2, 'personal') returning id`,
       [name, slug]
     );
     const organizationId = orgCreated.rows[0].id;
     const passwordHash = await bcrypt.hash(password, 12);
 
     const created = await query<UserProfileRow>(
-      `insert into users (organization_id, email, display_name, role, password_hash, is_verified, auth_provider)
-       values ($1, $2, $3, 'owner', $4, false, 'email')
+      `insert into users (organization_id, active_organization_id, email, display_name, role, password_hash, is_verified, auth_provider)
+       values ($1, $1, $2, $3, 'owner', $4, false, 'email')
        returning id, email, display_name, role, organization_id, created_at, last_login, is_verified, is_suspended`,
       [organizationId, String(email).toLowerCase(), displayName ?? null, passwordHash]
     );
     const user = created.rows[0];
+    await ensurePersonalMembership({ userId: user.id, organizationId, role: 'owner' });
     await ensureProfile(user.id);
     Object.assign(user, await ensurePlatformAdminRole(user));
 
@@ -272,12 +275,33 @@ authRouter.get(
       `select avatar_url, timezone, language, preferences from user_profiles where user_id = $1`,
       [row.id]
     );
-    const org = await query(`select name, slug from organizations where id = $1`, [row.organization_id]);
 
+    let workspace;
+    try {
+      workspace = await resolveWorkspaceContext(req.user!.id);
+    } catch (err) {
+      membershipErrorToAppError(err);
+    }
+    const membership = await getMembership(req.user!.id, workspace.organizationId);
+
+    const serialized = serializeUserProfile(row);
     ok(res, {
-      user: serializeUserProfile(row),
+      user: {
+        ...serialized,
+        organizationId: workspace.organizationId,
+        role: req.user!.role === 'super_admin' ? 'super_admin' : workspace.role,
+      },
       profile: profile.rows[0] ?? null,
-      workspace: org.rows[0] ?? null,
+      workspace: {
+        id: workspace.organizationId,
+        name: workspace.name,
+        slug: workspace.slug,
+        kind: workspace.kind,
+        role: workspace.role,
+        status: membership?.status ?? workspace.status,
+        isPersonalHome: workspace.isPersonalHome,
+      },
+      homeOrganizationId: row.organization_id,
     });
   })
 );
@@ -574,17 +598,18 @@ authRouter.get('/google/callback', async (req, res) => {
     if (!user) {
       const name = `${profile.name || profile.email.split('@')[0]}'s Workspace`;
       const slug = `${slugify(name)}-${Math.random().toString(36).slice(2, 8)}`;
-      const org = await query<{ id: string }>(`insert into organizations (name, slug) values ($1, $2) returning id`, [
-        name,
-        slug,
-      ]);
+      const org = await query<{ id: string }>(
+        `insert into organizations (name, slug, kind) values ($1, $2, 'personal') returning id`,
+        [name, slug]
+      );
       userResult = await query<UserProfileRow>(
-        `insert into users (organization_id, email, display_name, role, is_verified, auth_provider, google_sub, last_login)
-         values ($1, $2, $3, 'owner', true, 'google', $4, now())
+        `insert into users (organization_id, active_organization_id, email, display_name, role, is_verified, auth_provider, google_sub, last_login)
+         values ($1, $1, $2, $3, 'owner', true, 'google', $4, now())
          returning id, email, display_name, role, organization_id, created_at, last_login, is_verified, is_suspended`,
         [org.rows[0].id, profile.email.toLowerCase(), profile.name ?? null, profile.sub]
       );
       user = userResult.rows[0];
+      await ensurePersonalMembership({ userId: user.id, organizationId: org.rows[0].id, role: 'owner' });
       await ensureProfile(user.id);
       Object.assign(user, await ensurePlatformAdminRole(user));
       if (profile.picture) {

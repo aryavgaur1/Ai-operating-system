@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import type { CookieOptions, Response } from 'express';
 import { query } from '@enterprise-ai-os/stores';
 import { signAccessToken, signRefreshToken } from '../middleware/auth';
+import { assertActiveMembership } from './workspaceAuth';
 
 export function hashToken(raw: string): string {
   return crypto.createHash('sha256').update(raw).digest('hex');
@@ -78,11 +79,25 @@ export async function rotateRefreshToken(
 
   await query(`update refresh_tokens set revoked_at = now() where token_hash = $1`, [tokenHash]);
 
-  const user = await query<{ organization_id: string }>(`select organization_id from users where id = $1`, [
-    row.user_id,
-  ]);
-  const orgId = user.rows[0]?.organization_id;
-  if (!orgId) return null;
+  const user = await query<{ organization_id: string; active_organization_id: string | null }>(
+    `select organization_id, active_organization_id from users where id = $1`,
+    [row.user_id]
+  );
+  const homeOrg = user.rows[0]?.organization_id;
+  if (!homeOrg) return null;
+
+  // Prefer active org only when membership is active; else home (membership-validated at authenticate).
+  let orgId = user.rows[0]?.active_organization_id || homeOrg;
+  try {
+    await assertActiveMembership(row.user_id, orgId);
+  } catch {
+    orgId = homeOrg;
+    try {
+      await assertActiveMembership(row.user_id, orgId);
+    } catch {
+      return null;
+    }
+  }
 
   const session = await issueSession(res, row.user_id, orgId, opts);
   return {

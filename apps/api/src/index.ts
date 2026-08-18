@@ -19,6 +19,8 @@ import { oauthSlackRouter } from './routes/oauth-slack';
 import { oauthJiraRouter } from './routes/oauth-jira';
 import { conversationsRouter } from './routes/conversations';
 import { dashboardRouter } from './routes/dashboard';
+import { workspacesRouter } from './routes/workspaces';
+import { invitationsAuthRouter, invitationsPublicRouter } from './routes/invitations';
 import { errorMiddleware } from './lib/errors';
 import { isLiveMode } from '@enterprise-ai-os/connectors';
 
@@ -175,6 +177,9 @@ app.post('/internal/bootstrap-notion', async (req, res) => {
   }
 });
 
+// Public invitation preview (no auth) — never returns token_hash
+app.use('/invitations', invitationsPublicRouter);
+
 // Authenticated app routes
 app.use(authenticate);
 app.use('/chat', chatRouter);
@@ -183,6 +188,8 @@ app.use('/integrations/slack', slackRouter);
 app.use('/integrations', integrationsRouter);
 app.use('/conversations', conversationsRouter);
 app.use('/dashboard', dashboardRouter);
+app.use('/workspaces', workspacesRouter);
+app.use('/invitations', invitationsAuthRouter);
 app.use('/admin', adminRouter);
 
 app.use(errorMiddleware);
