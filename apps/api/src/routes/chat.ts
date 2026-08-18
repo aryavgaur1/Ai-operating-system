@@ -5,6 +5,7 @@ import { streamNexoraTurn, runNexoraTurn, wantsProductKnowledge, type Attachment
 import { query } from '@enterprise-ai-os/stores';
 import { getStores } from '../ingestion/pipeline';
 import { persistChatTurn, ensureConversation } from './conversations';
+import { assertConversationAccess } from '../lib/conversationAccess';
 import { requireVerified } from '../middleware/auth';
 import { AppError, asyncHandler, ok } from '../lib/errors';
 import { withUserConnectorContext } from '../lib/withUserConnectors';
@@ -127,11 +128,7 @@ async function loadHistory(
 ): Promise<Array<{ role: 'user' | 'assistant'; content: string }>> {
   if (!conversationId) return [];
   try {
-    const conv = await query(
-      `select id from conversations where id = $1 and organization_id = $2 and user_id = $3`,
-      [conversationId, organizationId, userId]
-    );
-    if (!conv.rows[0]) return [];
+    await assertConversationAccess({ organizationId, userId, conversationId });
     const messages = await query<{ role: string; content: string }>(
       `select role, content from messages where conversation_id = $1 order by created_at desc limit 16`,
       [conversationId]

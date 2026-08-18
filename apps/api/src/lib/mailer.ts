@@ -248,10 +248,12 @@ export const mailer = {
       opts.to,
       `You're invited to join ${opts.workspaceName} on Nexora`,
       baseTemplate(
-        'Team invitation',
-        `<p>${inviter} invited you to join <strong>${workspace}</strong> as <strong>${role}</strong>.</p>
+        'NEXORA',
+        `<p>You've been invited to join:</p>
+         <p style="font-size:18px;font-weight:600;color:#e2e8f0;">${workspace}</p>
+         <p>Invited by: <strong>${inviter}</strong><br/>Role: <strong>${role}</strong></p>
          <p>This invitation expires on <strong>${expires}</strong> and can only be accepted with this email address.</p>
-         ${ctaButton(acceptUrl, 'Accept Workspace Invitation')}
+         ${ctaButton(acceptUrl, 'ACCESS WORKSPACE')}
          <p style="font-size:12px;color:#94a3b8;word-break:break-all;">Or paste this link:<br/>${escapeHtml(acceptUrl)}</p>`
       ),
       acceptUrl

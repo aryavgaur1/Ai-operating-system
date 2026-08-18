@@ -1,27 +1,30 @@
 import { Router } from 'express';
 import { query } from '@enterprise-ai-os/stores';
 import { AppError, ok, asyncHandler } from '../lib/errors';
+import {
+  assertConversationAccess,
+  findRecentAccessibleConversation,
+  getOrganizationKind,
+  listAccessibleConversations,
+} from '../lib/conversationAccess';
+import { assertActiveMembership } from '../lib/workspaceAuth';
 
 export const conversationsRouter = Router();
 
 conversationsRouter.get(
   '/',
   asyncHandler(async (req, res) => {
-    const { rows } = await query(
-      `select id, title, pinned, created_at, updated_at
-       from conversations
-       where organization_id = $1 and user_id = $2
-       order by pinned desc, updated_at desc
-       limit 100`,
-      [req.user!.organizationId, req.user!.id]
-    );
-    ok(res, { conversations: rows });
+    const conversations = await listAccessibleConversations({
+      organizationId: req.user!.organizationId,
+      userId: req.user!.id,
+    });
+    ok(res, { conversations });
   })
 );
 
 /**
  * Authoritative resume target for Chat navigation / bare /app/chat.
- * Order: users.active_conversation_id (if owned) → most recently updated conversation.
+ * Order: user_workspace_state → users.active_conversation_id (personal) → recent accessible.
  * Never creates a conversation.
  */
 conversationsRouter.get(
@@ -29,39 +32,60 @@ conversationsRouter.get(
   asyncHandler(async (req, res) => {
     const orgId = req.user!.organizationId;
     const userId = req.user!.id;
+    await assertActiveMembership(userId, orgId);
 
-    // Preferred active id (migration 013). If column missing, skip to recent.
+    // Per-(user, org) workspace state (migration 014)
     try {
-      const active = await query<{ active_conversation_id: string | null }>(
-        `select active_conversation_id from users where id = $1 and organization_id = $2`,
+      const state = await query<{ active_conversation_id: string | null }>(
+        `select active_conversation_id from user_workspace_state
+         where user_id = $1 and organization_id = $2`,
         [userId, orgId]
       );
-      const preferred = active.rows[0]?.active_conversation_id || null;
+      const preferred = state.rows[0]?.active_conversation_id || null;
       if (preferred) {
-        const owned = await query(
-          `select id from conversations
-           where id = $1 and organization_id = $2 and user_id = $3`,
-          [preferred, orgId, userId]
-        );
-        if (owned.rows[0]) {
-          ok(res, { conversationId: preferred, source: 'active' });
+        try {
+          await assertConversationAccess({
+            organizationId: orgId,
+            userId,
+            conversationId: preferred,
+          });
+          ok(res, { conversationId: preferred, source: 'workspace_state' });
           return;
+        } catch {
+          // stale pointer — fall through
         }
       }
     } catch (err: any) {
-      // undefined_column — deploy before migrate; recent fallback still works
+      if (err?.code !== '42P01') throw err; // undefined_table before migrate
+    }
+
+    // Legacy users.active_conversation_id (personal home path)
+    try {
+      const active = await query<{ active_conversation_id: string | null }>(
+        `select active_conversation_id from users where id = $1`,
+        [userId]
+      );
+      const preferred = active.rows[0]?.active_conversation_id || null;
+      if (preferred) {
+        try {
+          await assertConversationAccess({
+            organizationId: orgId,
+            userId,
+            conversationId: preferred,
+          });
+          ok(res, { conversationId: preferred, source: 'active' });
+          return;
+        } catch {
+          // not accessible in this org
+        }
+      }
+    } catch (err: any) {
       if (err?.code !== '42703') throw err;
     }
 
-    const recent = await query<{ id: string }>(
-      `select id from conversations
-       where organization_id = $1 and user_id = $2
-       order by updated_at desc
-       limit 1`,
-      [orgId, userId]
-    );
-    if (recent.rows[0]) {
-      ok(res, { conversationId: recent.rows[0].id, source: 'recent' });
+    const recent = await findRecentAccessibleConversation({ organizationId: orgId, userId });
+    if (recent) {
+      ok(res, { conversationId: recent, source: 'recent' });
       return;
     }
 
@@ -107,10 +131,14 @@ conversationsRouter.post(
 conversationsRouter.get(
   '/:id',
   asyncHandler(async (req, res) => {
+    await assertConversationAccess({
+      organizationId: req.user!.organizationId,
+      userId: req.user!.id,
+      conversationId: req.params.id,
+    });
     const conv = await query(
-      `select id, title, pinned, created_at, updated_at from conversations
-       where id = $1 and organization_id = $2 and user_id = $3`,
-      [req.params.id, req.user!.organizationId, req.user!.id]
+      `select id, title, pinned, created_at, updated_at from conversations where id = $1`,
+      [req.params.id]
     );
     if (!conv.rows[0]) throw new AppError('Conversation not found', 404);
     await activateConversationForUser({
@@ -130,15 +158,20 @@ conversationsRouter.get(
 conversationsRouter.patch(
   '/:id',
   asyncHandler(async (req, res) => {
+    await assertConversationAccess({
+      organizationId: req.user!.organizationId,
+      userId: req.user!.id,
+      conversationId: req.params.id,
+    });
     const { title, pinned } = req.body ?? {};
     const { rows } = await query(
       `update conversations set
          title = coalesce($1, title),
          pinned = coalesce($2, pinned),
          updated_at = now()
-       where id = $3 and organization_id = $4 and user_id = $5
+       where id = $3 and organization_id = $4
        returning id, title, pinned, created_at, updated_at`,
-      [title ?? null, pinned ?? null, req.params.id, req.user!.organizationId, req.user!.id]
+      [title ?? null, pinned ?? null, req.params.id, req.user!.organizationId]
     );
     if (!rows[0]) throw new AppError('Conversation not found', 404);
     ok(res, { conversation: rows[0] });
@@ -148,10 +181,24 @@ conversationsRouter.patch(
 conversationsRouter.delete(
   '/:id',
   asyncHandler(async (req, res) => {
-    const result = await query(
-      `delete from conversations where id = $1 and organization_id = $2 and user_id = $3`,
-      [req.params.id, req.user!.organizationId, req.user!.id]
-    );
+    await assertConversationAccess({
+      organizationId: req.user!.organizationId,
+      userId: req.user!.id,
+      conversationId: req.params.id,
+    });
+    // Personal: only creator can delete (access already requires user_id).
+    // Team: any active member may delete a shared thread (org-scoped).
+    const kind = await getOrganizationKind(req.user!.organizationId);
+    const result =
+      kind === 'team'
+        ? await query(`delete from conversations where id = $1 and organization_id = $2`, [
+            req.params.id,
+            req.user!.organizationId,
+          ])
+        : await query(
+            `delete from conversations where id = $1 and organization_id = $2 and user_id = $3`,
+            [req.params.id, req.user!.organizationId, req.user!.id]
+          );
     if (result.rowCount === 0) throw new AppError('Conversation not found', 404);
     ok(res, null, 'Conversation deleted');
   })
@@ -175,6 +222,11 @@ export async function persistChatTurn(opts: {
     );
     conversationId = created.rows[0].id;
   } else {
+    await assertConversationAccess({
+      organizationId: opts.organizationId,
+      userId: opts.userId,
+      conversationId,
+    });
     await query(`update conversations set updated_at = now() where id = $1`, [conversationId]);
   }
 
@@ -205,13 +257,13 @@ export async function ensureConversation(opts: {
   conversationId?: string;
   titleHint?: string;
 }): Promise<string> {
+  await assertActiveMembership(opts.userId, opts.organizationId);
   if (opts.conversationId) {
-    const { rows } = await query(
-      `select id from conversations
-       where id = $1 and organization_id = $2 and user_id = $3`,
-      [opts.conversationId, opts.organizationId, opts.userId]
-    );
-    if (!rows[0]) throw new AppError('Conversation not found', 404);
+    await assertConversationAccess({
+      organizationId: opts.organizationId,
+      userId: opts.userId,
+      conversationId: opts.conversationId,
+    });
     await query(`update conversations set updated_at = now() where id = $1`, [opts.conversationId]);
     await activateConversationForUser({
       organizationId: opts.organizationId,
@@ -235,19 +287,31 @@ export async function ensureConversation(opts: {
   return id;
 }
 
-/** Mark conversation as the user's active resume target (DB authority). */
+/** Mark conversation as the user's active resume target for this workspace (DB authority). */
 export async function activateConversationForUser(opts: {
   organizationId: string;
   userId: string;
   conversationId: string;
 }): Promise<void> {
-  const owned = await query(
-    `select id from conversations
-     where id = $1 and organization_id = $2 and user_id = $3`,
-    [opts.conversationId, opts.organizationId, opts.userId]
-  );
-  if (!owned.rows[0]) throw new AppError('Conversation not found', 404);
+  await assertConversationAccess({
+    organizationId: opts.organizationId,
+    userId: opts.userId,
+    conversationId: opts.conversationId,
+  });
   await query(`update conversations set updated_at = now() where id = $1`, [opts.conversationId]);
+
+  await query(
+    `insert into user_workspace_state (user_id, organization_id, active_conversation_id, updated_at)
+     values ($1, $2, $3, now())
+     on conflict (user_id, organization_id) do update
+       set active_conversation_id = excluded.active_conversation_id,
+           updated_at = now()`,
+    [opts.userId, opts.organizationId, opts.conversationId]
+  ).catch((err: any) => {
+    if (err?.code !== '42P01') throw err;
+  });
+
+  // Legacy personal pointer — only when this org is the user's personal home
   try {
     await query(
       `update users set active_conversation_id = $1
@@ -255,7 +319,6 @@ export async function activateConversationForUser(opts: {
       [opts.conversationId, opts.userId, opts.organizationId]
     );
   } catch (err: any) {
-    // undefined_column — updated_at bump above still powers "recent" resume
     if (err?.code !== '42703') throw err;
   }
 }
@@ -269,12 +332,11 @@ export async function appendAssistantMessage(opts: {
   toolCalls?: unknown;
 }): Promise<void> {
   if (opts.userId) {
-    const owned = await query(
-      `select id from conversations
-       where id = $1 and organization_id = $2 and user_id = $3`,
-      [opts.conversationId, opts.organizationId, opts.userId]
-    );
-    if (!owned.rows[0]) throw new AppError('Conversation not found', 404);
+    await assertConversationAccess({
+      organizationId: opts.organizationId,
+      userId: opts.userId,
+      conversationId: opts.conversationId,
+    });
   } else {
     const owned = await query(
       `select id from conversations where id = $1 and organization_id = $2`,
