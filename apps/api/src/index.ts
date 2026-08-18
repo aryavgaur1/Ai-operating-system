@@ -23,6 +23,8 @@ import { workspacesRouter } from './routes/workspaces';
 import { invitationsAuthRouter, invitationsPublicRouter } from './routes/invitations';
 import { errorMiddleware } from './lib/errors';
 import { isLiveMode } from '@enterprise-ai-os/connectors';
+import { getEmailDiagnostics, probeSmtpConnectivity } from './lib/mailer';
+import { webAppUrl as resolveCanonicalWebAppUrl } from './lib/authTokens';
 
 function loadEnvFromWorkspaceRoot(): void {
   const candidates = [process.cwd(), __dirname];
@@ -111,7 +113,13 @@ app.use('/oauth/notion', oauthNotionRouter);
 app.use('/oauth/slack', oauthSlackRouter);
 app.use('/oauth/jira', oauthJiraRouter);
 
-app.get('/health', (_req, res) =>
+app.get('/health', async (req, res) => {
+  const probe = String(req.query.probeSmtp || '') === '1';
+  let smtpProbe: { ok: boolean; profile?: string; errorCode?: string } | undefined;
+  if (probe) {
+    smtpProbe = await probeSmtpConnectivity();
+  }
+  const email = getEmailDiagnostics();
   res.json({
     ok: true,
     service: 'enterprise-ai-os-api',
@@ -122,14 +130,16 @@ app.get('/health', (_req, res) =>
       process.env.COMMIT_REF ||
       null,
     deployedAt: process.env.RAILWAY_DEPLOYMENT_ID || null,
-    // Honest mailer readiness — never claims delivery; only whether SMTP env is present.
-    emailConfigured: Boolean(
-      process.env.EMAIL_USER?.trim() && process.env.EMAIL_PASS?.trim().replace(/\s+/g, '')
-    ),
-    // Same origin used for invite/OAuth links (Netlify env values are remapped above).
-    webAppUrl: WEB_APP_URL,
-  })
-);
+    emailConfigured: email.configured,
+    // Prefer runtime resolver (remaps retired Netlify) over raw env mirror.
+    webAppUrl: resolveCanonicalWebAppUrl() || WEB_APP_URL,
+    emailSmtp: {
+      activeProfile: email.activeProfile,
+      last: email.last,
+      ...(smtpProbe ? { probe: smtpProbe } : {}),
+    },
+  });
+});
 
 /**
  * One-shot founder bootstrap: attach platform NOTION_API_KEY to founder user rows.

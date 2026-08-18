@@ -2,9 +2,38 @@ import nodemailer from 'nodemailer';
 import { logger } from './logger';
 import { webAppUrl } from './authTokens';
 
-let _transporter: nodemailer.Transporter | null = null;
+type SmtpProfile = {
+  label: string;
+  port: number;
+  secure: boolean;
+  requireTLS?: boolean;
+};
 
 const SMTP_TIMEOUT_MS = 12_000;
+const SMTP_PROFILES: SmtpProfile[] = [
+  { label: 'gmail-465', port: 465, secure: true },
+  { label: 'gmail-587', port: 587, secure: false, requireTLS: true },
+];
+
+let _transporter: nodemailer.Transporter | null = null;
+let _activeProfile: string | null = null;
+
+/** Last SMTP outcome for /health (no secrets, no message bodies). */
+let lastEmailDiag: {
+  at: string;
+  delivered: boolean;
+  mode: 'smtp' | 'console_fallback' | 'failed' | 'verify';
+  profile?: string | null;
+  errorCode?: string | null;
+} | null = null;
+
+export function getEmailDiagnostics() {
+  return {
+    configured: Boolean(emailCredentials()),
+    last: lastEmailDiag,
+    activeProfile: _activeProfile,
+  };
+}
 
 function emailCredentials(): { user: string; pass: string } | null {
   const user = (process.env.EMAIL_USER ?? '').trim();
@@ -13,28 +42,100 @@ function emailCredentials(): { user: string; pass: string } | null {
   return { user, pass };
 }
 
-function getTransporter(): nodemailer.Transporter | null {
-  const creds = emailCredentials();
-  if (!creds) return null;
-  if (!_transporter) {
-    // Explicit Gmail SMTP + hard timeouts. `service: 'gmail'` alone can hang for minutes
-    // on Railway when SMTP is blocked/slow, which freezes invite create/resend.
-    _transporter = nodemailer.createTransport({
-      host: 'smtp.gmail.com',
-      port: 465,
-      secure: true,
-      auth: { user: creds.user, pass: creds.pass },
-      connectionTimeout: SMTP_TIMEOUT_MS,
-      greetingTimeout: SMTP_TIMEOUT_MS,
-      socketTimeout: SMTP_TIMEOUT_MS,
-      tls: { minVersion: 'TLSv1.2' },
-    });
-  }
-  return _transporter;
+function buildTransport(profile: SmtpProfile, creds: { user: string; pass: string }) {
+  return nodemailer.createTransport({
+    host: 'smtp.gmail.com',
+    port: profile.port,
+    secure: profile.secure,
+    requireTLS: profile.requireTLS,
+    auth: { user: creds.user, pass: creds.pass },
+    connectionTimeout: SMTP_TIMEOUT_MS,
+    greetingTimeout: SMTP_TIMEOUT_MS,
+    socketTimeout: SMTP_TIMEOUT_MS,
+    tls: { minVersion: 'TLSv1.2' },
+  });
 }
 
 function resetTransporter() {
   _transporter = null;
+  _activeProfile = null;
+}
+
+async function sendMailWithTimeout(
+  transporter: nodemailer.Transporter,
+  mail: nodemailer.SendMailOptions
+): Promise<nodemailer.SentMessageInfo> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      transporter.sendMail(mail),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(Object.assign(new Error('SMTP send timed out'), { code: 'ETIMEDOUT' })),
+          SMTP_TIMEOUT_MS + 2_000
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function verifyWithTimeout(transporter: nodemailer.Transporter): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      transporter.verify(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(Object.assign(new Error('SMTP verify timed out'), { code: 'ETIMEDOUT' })),
+          SMTP_TIMEOUT_MS + 2_000
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/** Probe Gmail SMTP from this runtime (used by /health). Never logs secrets. */
+export async function probeSmtpConnectivity(): Promise<{
+  ok: boolean;
+  profile?: string;
+  errorCode?: string;
+}> {
+  const creds = emailCredentials();
+  if (!creds) return { ok: false, errorCode: 'not_configured' };
+
+  for (const profile of SMTP_PROFILES) {
+    const transporter = buildTransport(profile, creds);
+    try {
+      await verifyWithTimeout(transporter);
+      _transporter = transporter;
+      _activeProfile = profile.label;
+      lastEmailDiag = {
+        at: new Date().toISOString(),
+        delivered: true,
+        mode: 'verify',
+        profile: profile.label,
+        errorCode: null,
+      };
+      return { ok: true, profile: profile.label };
+    } catch (err) {
+      const e = err as Error & { code?: string; responseCode?: number };
+      const errorCode = e.code || (e.responseCode ? `smtp_${e.responseCode}` : 'unknown');
+      logger.warn('email.smtp_probe_failed', { profile: profile.label, code: errorCode, message: e.message });
+      lastEmailDiag = {
+        at: new Date().toISOString(),
+        delivered: false,
+        mode: 'verify',
+        profile: profile.label,
+        errorCode,
+      };
+    }
+  }
+  resetTransporter();
+  return { ok: false, errorCode: lastEmailDiag?.errorCode || 'unreachable' };
 }
 
 function escapeHtml(value: string): string {
@@ -67,30 +168,53 @@ function baseTemplate(title: string, bodyHtml: string): string {
 }
 
 export type EmailDeliveryResult = {
-  /** True only when SMTP accepted the message. Console fallback is NOT delivery. */
   delivered: boolean;
   mode: 'smtp' | 'console_fallback' | 'failed';
   errorCode?: string;
+  profile?: string;
 };
 
-async function sendMailWithTimeout(
-  transporter: nodemailer.Transporter,
+async function sendViaProfiles(
+  creds: { user: string; pass: string },
   mail: nodemailer.SendMailOptions
-): Promise<nodemailer.SentMessageInfo> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      transporter.sendMail(mail),
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(
-          () => reject(Object.assign(new Error('SMTP send timed out'), { code: 'ETIMEDOUT' })),
-          SMTP_TIMEOUT_MS + 2_000
-        );
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
+): Promise<EmailDeliveryResult> {
+  const errors: string[] = [];
+  for (const profile of SMTP_PROFILES) {
+    const transporter = buildTransport(profile, creds);
+    try {
+      await sendMailWithTimeout(transporter, mail);
+      _transporter = transporter;
+      _activeProfile = profile.label;
+      lastEmailDiag = {
+        at: new Date().toISOString(),
+        delivered: true,
+        mode: 'smtp',
+        profile: profile.label,
+        errorCode: null,
+      };
+      return { delivered: true, mode: 'smtp', profile: profile.label };
+    } catch (err) {
+      const e = err as Error & { code?: string; responseCode?: number };
+      const errorCode = e.code || (e.responseCode ? `smtp_${e.responseCode}` : 'unknown');
+      errors.push(`${profile.label}:${errorCode}`);
+      logger.error('email.failed', {
+        to: mail.to,
+        subject: mail.subject,
+        profile: profile.label,
+        message: e.message,
+        code: errorCode,
+      });
+      lastEmailDiag = {
+        at: new Date().toISOString(),
+        delivered: false,
+        mode: 'failed',
+        profile: profile.label,
+        errorCode,
+      };
+    }
   }
+  resetTransporter();
+  return { delivered: false, mode: 'failed', errorCode: errors.join('|') || 'unknown' };
 }
 
 async function send(
@@ -99,41 +223,30 @@ async function send(
   html: string,
   debugLink?: string
 ): Promise<EmailDeliveryResult> {
-  const transporter = getTransporter();
   const creds = emailCredentials();
-  if (!transporter || !creds) {
+  if (!creds) {
     logger.info('email.console_fallback', { to, subject, debugLink: debugLink || null });
-    console.log('\n========== NEXORA EMAIL (dev fallback — EMAIL_USER/EMAIL_PASS not set) ==========');
-    console.log(`To:      ${to}`);
-    console.log(`Subject: ${subject}`);
-    if (debugLink) console.log(`Link:    ${debugLink}`);
-    console.log('================================================================================\n');
+    lastEmailDiag = {
+      at: new Date().toISOString(),
+      delivered: false,
+      mode: 'console_fallback',
+      errorCode: 'not_configured',
+    };
     return { delivered: false, mode: 'console_fallback' };
   }
-  try {
-    await sendMailWithTimeout(transporter, {
-      from: `Nexora OS <${creds.user}>`,
-      to,
-      subject,
-      html,
-    });
-    logger.info('email.sent', { to, subject });
-    return { delivered: true, mode: 'smtp' };
-  } catch (err) {
-    const e = err as Error & { code?: string; responseCode?: number };
-    const errorCode = e.code || (e.responseCode ? `smtp_${e.responseCode}` : 'unknown');
-    logger.error('email.failed', {
-      to,
-      subject,
-      message: e.message,
-      code: errorCode,
-    });
-    resetTransporter();
-    if (debugLink) {
-      console.log(`[email:failed-fallback] ${subject} → ${to}\nLink: ${debugLink}`);
-    }
-    return { delivered: false, mode: 'failed', errorCode };
+  const result = await sendViaProfiles(creds, {
+    from: `Nexora OS <${creds.user}>`,
+    to,
+    subject,
+    html,
+  });
+  if (!result.delivered && debugLink) {
+    console.log(`[email:failed-fallback] ${subject} → ${to}\nLink: ${debugLink}`);
   }
+  if (result.delivered) {
+    logger.info('email.sent', { to, subject, profile: result.profile });
+  }
+  return result;
 }
 
 export const mailer = {
@@ -278,10 +391,6 @@ export const mailer = {
       baseTemplate('Account deleted', `<p>Your Nexora account and workspace data have been deleted as requested.</p>`)
     ),
 
-  /**
-   * Team workspace invitation. Returns delivery status — never invents success
-   * when SMTP is unset or send fails.
-   */
   sendWorkspaceInvitation: (opts: {
     to: string;
     workspaceName: string;
