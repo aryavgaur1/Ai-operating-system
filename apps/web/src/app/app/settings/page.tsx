@@ -1,11 +1,13 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Bell, LogOut, Palette, ShieldCheck, User } from 'lucide-react';
 import { GlassCard, Reveal, StaggerGroup } from '@/components/motion';
 import { cn } from '@/lib/utils';
 import { api, setAccessToken } from '@/lib/api';
+import { APP_ROUTES } from '@/lib/routes';
 
 const POLICY_CARDS = [
   {
@@ -193,13 +195,15 @@ export default function SettingsPage() {
           </div>
           <div className="mt-5 grid gap-3 text-sm">
             <div className="flex items-center justify-between rounded-xl border border-white/8 bg-black/20 px-3.5 py-2.5">
-              <span className="text-neutral-300">Workspace name</span>
+              <span className="text-neutral-300">Active workspace</span>
               <span className="text-neutral-500">{workspace}</span>
             </div>
-            <div className="flex items-center justify-between rounded-xl border border-white/8 bg-black/20 px-3.5 py-2.5">
-              <span className="text-neutral-300">Plan</span>
-              <span className="text-neutral-500">Personal SaaS</span>
-            </div>
+            <Link
+              href={APP_ROUTES.workspaceSettings}
+              className="rounded-full bg-accent px-4 py-2.5 text-center text-xs font-semibold text-[#04101f]"
+            >
+              Open workspace settings · members · invites
+            </Link>
             <label className="block">
               <span className="mb-1.5 block text-xs text-neutral-500">Current password</span>
               <input type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} className="w-full rounded-xl border border-white/10 bg-black/20 px-3.5 py-2.5 text-sm" />

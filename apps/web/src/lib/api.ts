@@ -222,6 +222,83 @@ export interface AuthUser {
   isSuspended: boolean;
 }
 
+export type WorkspaceKind = 'personal' | 'team';
+export type MembershipRole = 'owner' | 'admin' | 'member';
+export type MembershipStatus = 'active' | 'inactive' | 'removed';
+
+export interface WorkspaceListItem {
+  id: string;
+  name: string;
+  slug: string;
+  kind: WorkspaceKind;
+  role: MembershipRole;
+  status: MembershipStatus;
+  isPersonalHome: boolean;
+  isActive: boolean;
+}
+
+export interface WorkspaceContextDto {
+  organizationId: string;
+  name: string;
+  slug: string;
+  kind: WorkspaceKind;
+  role: MembershipRole;
+  status: MembershipStatus;
+  isPersonalHome: boolean;
+}
+
+export interface WorkspaceSummary {
+  id: string;
+  name: string;
+  slug: string;
+  kind: WorkspaceKind;
+  role: MembershipRole;
+  status: MembershipStatus;
+  isPersonalHome: boolean;
+}
+
+export interface WorkspaceMember {
+  userId: string;
+  email: string;
+  displayName: string | null;
+  role: MembershipRole;
+  status: MembershipStatus;
+  createdAt: string;
+}
+
+export interface InvitationPublic {
+  id: string;
+  organizationId: string;
+  email: string;
+  role: MembershipRole;
+  status: string;
+  expiresAt: string;
+  invitedByUserId: string;
+  invitedByEmail?: string | null;
+  invitedByDisplayName?: string | null;
+  acceptedAt: string | null;
+  acceptedByUserId: string | null;
+  createdAt: string;
+}
+
+export interface InvitationPreview {
+  invitationId: string;
+  organizationId: string;
+  organizationName: string;
+  organizationKind: string;
+  email: string;
+  role: MembershipRole;
+  status: string;
+  expiresAt: string;
+  expired: boolean;
+  acceptable: boolean;
+}
+
+export interface EmailDeliveryResult {
+  delivered: boolean;
+  mode: 'smtp' | 'console_fallback' | 'failed';
+}
+
 function persistSessionTokens(data: { accessToken?: string; token?: string; refreshToken?: string }) {
   const access = data.accessToken || data.token;
   if (access) setAccessToken(access);
@@ -256,7 +333,13 @@ export const api = {
     }
     return null;
   },
-  me: () => request<{ user: AuthUser; profile: any; workspace: any }>('/auth/me'),
+  me: () =>
+    request<{
+      user: AuthUser;
+      profile: any;
+      workspace: WorkspaceSummary | null;
+      homeOrganizationId?: string;
+    }>('/auth/me'),
   updateMe: (payload: Record<string, unknown>) =>
     request<null>('/auth/me', { method: 'PATCH', body: JSON.stringify(payload) }),
   changePassword: (payload: Record<string, unknown>) =>
@@ -414,6 +497,72 @@ export const api = {
     }),
   getDashboard: () => request<any>('/dashboard'),
   getHealth: () => request<HealthCheck>('/health'),
+
+  // ---- P0.5 workspaces / invitations (real backend only) ----
+  listWorkspaces: () => request<{ workspaces: WorkspaceListItem[] }>('/workspaces'),
+  currentWorkspace: () => request<{ workspace: WorkspaceContextDto }>('/workspaces/current'),
+  createTeamWorkspace: (name: string) =>
+    request<{ workspace: WorkspaceListItem }>(
+      '/workspaces',
+      { method: 'POST', body: JSON.stringify({ name }) }
+    ),
+  activateWorkspace: async (organizationId: string) => {
+    const data = await request<{
+      workspace: WorkspaceContextDto;
+      accessToken: string;
+      refreshToken: string;
+      token: string;
+    }>(`/workspaces/${encodeURIComponent(organizationId)}/activate`, { method: 'POST' });
+    persistSessionTokens(data);
+    return data;
+  },
+  listWorkspaceMembers: (organizationId: string) =>
+    request<{ members: WorkspaceMember[] }>(
+      `/workspaces/${encodeURIComponent(organizationId)}/members`
+    ),
+  listInvitations: (organizationId: string) =>
+    request<{ invitations: InvitationPublic[] }>(
+      `/workspaces/${encodeURIComponent(organizationId)}/invitations`
+    ),
+  createInvitation: (
+    organizationId: string,
+    payload: { email: string; role: 'member' | 'admin' }
+  ) =>
+    request<{
+      invitation: InvitationPublic;
+      email: EmailDeliveryResult;
+      acceptToken?: string;
+    }>(`/workspaces/${encodeURIComponent(organizationId)}/invitations`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  revokeInvitation: (organizationId: string, invitationId: string) =>
+    request<{ invitation: InvitationPublic }>(
+      `/workspaces/${encodeURIComponent(organizationId)}/invitations/${encodeURIComponent(invitationId)}/revoke`,
+      { method: 'POST' }
+    ),
+  resendInvitation: (organizationId: string, invitationId: string) =>
+    request<{
+      invitation: InvitationPublic;
+      email: EmailDeliveryResult;
+      acceptToken?: string;
+    }>(
+      `/workspaces/${encodeURIComponent(organizationId)}/invitations/${encodeURIComponent(invitationId)}/resend`,
+      { method: 'POST' }
+    ),
+  previewInvitation: (token: string) =>
+    request<{ invitation: InvitationPreview }>(`/invitations/${encodeURIComponent(token)}`),
+  acceptInvitation: (token: string) =>
+    request<{
+      invitation: InvitationPublic;
+      membership: {
+        organizationId: string;
+        userId: string;
+        role: MembershipRole;
+        status: 'active';
+      };
+      alreadyMember: boolean;
+    }>(`/invitations/${encodeURIComponent(token)}/accept`, { method: 'POST' }),
 
   adminMetrics: () => request<any>('/admin/metrics'),
   adminUsers: (search?: string) =>

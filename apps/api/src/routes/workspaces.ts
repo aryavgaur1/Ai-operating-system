@@ -10,6 +10,7 @@ import {
 } from '../lib/invitationService';
 import {
   createTeamWorkspace,
+  listWorkspaceMembers,
   listWorkspacesForUser,
   membershipErrorToAppError,
   resolveWorkspaceContext,
@@ -101,6 +102,26 @@ workspacesRouter.post(
   '/activate',
   asyncHandler(async () => {
     throw new AppError('organizationId is required', 422);
+  })
+);
+
+/**
+ * GET /workspaces/:organizationId/members
+ * Any active member may list active members (real DB rows only).
+ */
+workspacesRouter.get(
+  '/:organizationId/members',
+  asyncHandler(async (req, res) => {
+    try {
+      const members = await listWorkspaceMembers({
+        actorUserId: req.user!.id,
+        organizationId: req.params.organizationId,
+      });
+      ok(res, { members });
+    } catch (err) {
+      if (err instanceof MembershipAuthorizationError) membershipErrorToAppError(err);
+      throw err;
+    }
   })
 );
 

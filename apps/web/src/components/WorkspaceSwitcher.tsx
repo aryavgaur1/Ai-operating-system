@@ -1,0 +1,236 @@
+'use client';
+
+import { useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
+import { AnimatePresence, motion } from 'framer-motion';
+import { Building2, Check, ChevronDown, Plus, UserRound } from 'lucide-react';
+import { cn } from '@/lib/utils';
+import { APP_ROUTES } from '@/lib/routes';
+import { useWorkspaces } from '@/components/WorkspaceProvider';
+import type { WorkspaceListItem } from '@/lib/api';
+
+export function WorkspaceSwitcher() {
+  const { workspaces, current, loading, error, activate, createTeam, refresh } = useWorkspaces();
+  const [open, setOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [teamName, setTeamName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const ref = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    function onClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener('mousedown', onClick);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, []);
+
+  const personal = workspaces.filter((w) => w.kind === 'personal');
+  const teams = workspaces.filter((w) => w.kind === 'team');
+  const activeLabel = current?.name || (loading ? 'Loading…' : 'Workspace');
+  const activeKind = current?.kind;
+
+  async function onSelect(ws: WorkspaceListItem) {
+    if (ws.isActive || busy) return;
+    setBusy(true);
+    setActionError(null);
+    try {
+      await activate(ws.id);
+      setOpen(false);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Could not switch workspace');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onCreate(e: React.FormEvent) {
+    e.preventDefault();
+    const name = teamName.trim();
+    if (name.length < 2) {
+      setActionError('Team name must be at least 2 characters');
+      return;
+    }
+    setBusy(true);
+    setActionError(null);
+    try {
+      const created = await createTeam(name);
+      setTeamName('');
+      setCreateOpen(false);
+      setOpen(false);
+      // Activate the new team so the UI reflects it immediately
+      await activate(created.id);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Could not create team');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => {
+          setOpen((v) => !v);
+          if (!open) void refresh();
+        }}
+        className="flex max-w-[220px] items-center gap-2 rounded-2xl border border-white/10 bg-black/25 px-3 py-2 text-left transition hover:border-white/20 hover:bg-black/40"
+        aria-expanded={open}
+        aria-haspopup="listbox"
+      >
+        <span
+          className={cn(
+            'flex h-7 w-7 shrink-0 items-center justify-center rounded-xl',
+            activeKind === 'team' ? 'bg-accent/20 text-accent' : 'bg-white/10 text-neutral-300'
+          )}
+        >
+          {activeKind === 'team' ? <Building2 size={14} /> : <UserRound size={14} />}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-xs font-medium text-white">{activeLabel}</span>
+          <span className="block text-[10px] uppercase tracking-[0.16em] text-neutral-500">
+            {activeKind === 'team' ? 'Team' : activeKind === 'personal' ? 'Personal' : 'Workspace'}
+            {current?.role ? ` · ${current.role}` : ''}
+          </span>
+        </span>
+        <ChevronDown size={14} className={cn('shrink-0 text-neutral-500 transition', open && 'rotate-180')} />
+      </button>
+
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ opacity: 0, y: 8, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 6, scale: 0.98 }}
+            transition={{ duration: 0.18 }}
+            className="glass-strong absolute left-0 top-[calc(100%+8px)] z-[60] w-[300px] overflow-hidden rounded-[22px] border border-white/10 p-2 shadow-soft"
+            role="listbox"
+          >
+            {(error || actionError) && (
+              <p className="mb-2 rounded-xl bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+                {actionError || error}
+              </p>
+            )}
+
+            <p className="px-2 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-neutral-500">
+              Workspace
+            </p>
+            <p className="px-2 pb-2 text-[10px] uppercase tracking-[0.16em] text-neutral-600">Personal</p>
+            {loading && personal.length === 0 ? (
+              <p className="px-3 py-2 text-xs text-neutral-500">Loading…</p>
+            ) : personal.length === 0 ? (
+              <p className="px-3 py-2 text-xs text-neutral-500">No personal workspace returned.</p>
+            ) : (
+              personal.map((ws) => (
+                <WorkspaceRow key={ws.id} ws={ws} busy={busy} onSelect={onSelect} />
+              ))
+            )}
+
+            <div className="my-2 h-px bg-white/8" />
+            <p className="px-2 pb-2 text-[10px] uppercase tracking-[0.16em] text-neutral-600">Teams</p>
+            {teams.length === 0 ? (
+              <p className="px-3 py-2 text-xs text-neutral-500">You don&apos;t belong to a team yet.</p>
+            ) : (
+              teams.map((ws) => <WorkspaceRow key={ws.id} ws={ws} busy={busy} onSelect={onSelect} />)
+            )}
+
+            <div className="my-2 h-px bg-white/8" />
+            {!createOpen ? (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  setCreateOpen(true);
+                  setActionError(null);
+                }}
+                className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-sm text-accent hover:bg-accent/10"
+              >
+                <Plus size={14} />
+                Create Team Workspace
+              </button>
+            ) : (
+              <form onSubmit={onCreate} className="space-y-2 px-1 pb-1">
+                <input
+                  autoFocus
+                  value={teamName}
+                  onChange={(e) => setTeamName(e.target.value)}
+                  placeholder="Team name"
+                  className="w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none placeholder:text-neutral-600 focus:border-accent/40"
+                  disabled={busy}
+                />
+                <div className="flex gap-2">
+                  <button
+                    type="submit"
+                    disabled={busy}
+                    className="flex-1 rounded-full bg-accent px-3 py-1.5 text-xs font-semibold text-[#04101f] disabled:opacity-50"
+                  >
+                    {busy ? 'Creating…' : 'Create'}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setCreateOpen(false)}
+                    className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-neutral-300"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            )}
+
+            <Link
+              href={APP_ROUTES.workspaceSettings}
+              onClick={() => setOpen(false)}
+              className="mt-1 flex w-full items-center rounded-xl px-3 py-2 text-xs text-neutral-400 hover:bg-white/5 hover:text-white"
+            >
+              Workspace settings
+            </Link>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+function WorkspaceRow({
+  ws,
+  busy,
+  onSelect,
+}: {
+  ws: WorkspaceListItem;
+  busy: boolean;
+  onSelect: (ws: WorkspaceListItem) => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="option"
+      aria-selected={ws.isActive}
+      disabled={busy}
+      onClick={() => onSelect(ws)}
+      className={cn(
+        'flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left transition',
+        ws.isActive ? 'bg-white/10' : 'hover:bg-white/5'
+      )}
+    >
+      <span
+        className={cn(
+          'flex h-8 w-8 shrink-0 items-center justify-center rounded-xl',
+          ws.kind === 'team' ? 'bg-accent/15 text-accent' : 'bg-white/8 text-neutral-300'
+        )}
+      >
+        {ws.kind === 'team' ? <Building2 size={14} /> : <UserRound size={14} />}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-sm text-white">{ws.name}</span>
+        <span className="block text-[10px] uppercase tracking-[0.14em] text-neutral-500">
+          {ws.kind === 'personal' ? 'Personal' : 'Team'} · {ws.role}
+          {ws.isActive ? ' · Active' : ''}
+        </span>
+      </span>
+      {ws.isActive && <Check size={14} className="shrink-0 text-accent2" />}
+    </button>
+  );
+}

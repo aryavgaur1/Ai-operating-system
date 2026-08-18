@@ -30,6 +30,8 @@ export interface InvitationPublic {
   status: InvitationStatus;
   expiresAt: string;
   invitedByUserId: string;
+  invitedByEmail?: string | null;
+  invitedByDisplayName?: string | null;
   acceptedAt: string | null;
   acceptedByUserId: string | null;
   createdAt: string;
@@ -60,6 +62,8 @@ function serializeInvitation(row: {
   accepted_at: Date | string | null;
   accepted_by_user_id: string | null;
   created_at: Date | string;
+  invited_by_email?: string | null;
+  invited_by_display_name?: string | null;
 }): InvitationPublic {
   return {
     id: row.id,
@@ -69,6 +73,8 @@ function serializeInvitation(row: {
     status: row.status as InvitationStatus,
     expiresAt: new Date(row.expires_at).toISOString(),
     invitedByUserId: row.invited_by_user_id,
+    invitedByEmail: row.invited_by_email ?? null,
+    invitedByDisplayName: row.invited_by_display_name ?? null,
     acceptedAt: row.accepted_at ? new Date(row.accepted_at).toISOString() : null,
     acceptedByUserId: row.accepted_by_user_id,
     createdAt: new Date(row.created_at).toISOString(),
@@ -297,11 +303,13 @@ export async function listInvitations(opts: {
   await loadTeamOrganization(organizationId);
 
   const { rows } = await query(
-    `select id, organization_id, email, role, status, expires_at,
-            invited_by_user_id, accepted_at, accepted_by_user_id, created_at
-     from organization_invitations
-     where organization_id = $1
-     order by created_at desc`,
+    `select i.id, i.organization_id, i.email, i.role, i.status, i.expires_at,
+            i.invited_by_user_id, i.accepted_at, i.accepted_by_user_id, i.created_at,
+            u.email as invited_by_email, u.display_name as invited_by_display_name
+     from organization_invitations i
+     left join users u on u.id = i.invited_by_user_id
+     where i.organization_id = $1
+     order by i.created_at desc`,
     [organizationId]
   );
   return rows.map(serializeInvitation);

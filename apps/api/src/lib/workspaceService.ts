@@ -248,6 +248,54 @@ export async function selectActiveWorkspace(opts: {
   };
 }
 
+export interface WorkspaceMember {
+  userId: string;
+  email: string;
+  displayName: string | null;
+  role: MembershipRole;
+  status: MembershipStatus;
+  createdAt: string;
+}
+
+/**
+ * List active members of an organization the caller belongs to.
+ * Required for Team settings UI — reads organization_memberships (no fake data).
+ */
+export async function listWorkspaceMembers(opts: {
+  actorUserId: string;
+  organizationId: string;
+}): Promise<WorkspaceMember[]> {
+  const organizationId = assertUuid(opts.organizationId);
+  await assertActiveMembership(opts.actorUserId, organizationId);
+
+  const { rows } = await query<{
+    user_id: string;
+    email: string;
+    display_name: string | null;
+    role: string;
+    status: string;
+    created_at: Date | string;
+  }>(
+    `select m.user_id, u.email, u.display_name, m.role, m.status, m.created_at
+     from organization_memberships m
+     join users u on u.id = m.user_id
+     where m.organization_id = $1 and m.status = 'active'
+     order by
+       case m.role when 'owner' then 0 when 'admin' then 1 else 2 end,
+       lower(coalesce(u.display_name, u.email))`,
+    [organizationId]
+  );
+
+  return rows.map((r) => ({
+    userId: r.user_id,
+    email: r.email,
+    displayName: r.display_name,
+    role: r.role as MembershipRole,
+    status: r.status as MembershipStatus,
+    createdAt: new Date(r.created_at).toISOString(),
+  }));
+}
+
 export function membershipErrorToAppError(err: unknown): never {
   if (err instanceof MembershipAuthorizationError) {
     const status =

@@ -12,6 +12,8 @@ export const APP_ROUTES = {
   approvals: '/app/approvals',
   integrations: '/app/integrations',
   settings: '/app/settings',
+  workspaceSettings: '/app/settings/workspace',
+  invitationAccept: '/app/invitations/accept',
   admin: '/app/admin',
   onboarding: '/app/onboarding',
   memory: '/app/memory',

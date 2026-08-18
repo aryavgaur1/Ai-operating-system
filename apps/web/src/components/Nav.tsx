@@ -21,6 +21,7 @@ import { api, clearSession } from '@/lib/api';
 import { APP_HOME, APP_ROUTES, LOGIN, chatResumeHref } from '@/lib/routes';
 import { resolveChatHref } from '@/lib/activeConversation';
 import { isPlatformAdminEmail } from '@/lib/platformAdmin';
+import { WorkspaceSwitcher } from '@/components/WorkspaceSwitcher';
 
 const STATIC_LINKS = [
   { href: APP_ROUTES.dashboard, label: 'Dashboard', icon: LayoutGrid },
@@ -195,6 +196,8 @@ export function Nav() {
           </span>
         </Link>
 
+        <WorkspaceSwitcher />
+
         <nav className="hidden items-center gap-1 rounded-full border border-white/8 bg-black/20 p-1 md:flex">
           {LINKS.map((link) => {
             const matchPrefix = 'matchPrefix' in link && link.matchPrefix ? link.matchPrefix : link.href;
@@ -357,7 +360,7 @@ export function Nav() {
                     </Link>
                   )}
                   <Link
-                    href={APP_ROUTES.settings}
+                    href={APP_ROUTES.workspaceSettings}
                     onClick={() => setProfileOpen(false)}
                     className="flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-sm text-neutral-300 transition hover:bg-white/5 hover:text-white"
                   >
