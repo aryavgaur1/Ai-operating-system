@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { AnimatePresence, motion } from 'framer-motion';
+import { motion } from 'framer-motion';
 import {
   Bell,
   LayoutGrid,
@@ -14,8 +14,10 @@ import {
   Settings,
   Sparkles,
   User,
+  Users,
 } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { cn } from '@/lib/utils';
 import { api, clearSession } from '@/lib/api';
 import { APP_HOME, APP_ROUTES, LOGIN, chatResumeHref } from '@/lib/routes';
@@ -43,8 +45,13 @@ export function Nav() {
   const [newUsers24h, setNewUsers24h] = useState(0);
   const [liveNotifs, setLiveNotifs] = useState<{ id: string; text: string; time: string; href?: string }[]>([]);
   const [chatHref, setChatHref] = useState<string>(() => chatResumeHref());
-  const notifRef = useRef<HTMLDivElement | null>(null);
-  const profileRef = useRef<HTMLDivElement | null>(null);
+  const [mounted, setMounted] = useState(false);
+  const [notifCoords, setNotifCoords] = useState<{ top: number; right: number } | null>(null);
+  const [profileCoords, setProfileCoords] = useState<{ top: number; right: number } | null>(null);
+  const notifButtonRef = useRef<HTMLButtonElement | null>(null);
+  const profileButtonRef = useRef<HTMLButtonElement | null>(null);
+  const notifMenuRef = useRef<HTMLDivElement | null>(null);
+  const profileMenuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -138,14 +145,79 @@ export function Nav() {
     };
   }, [email]);
 
+  useEffect(() => setMounted(true), []);
+
+  useEffect(() => {
+    function onCloseOthers(e: Event) {
+      const detail = (e as CustomEvent<string>).detail;
+      if (detail !== 'notif') setNotifOpen(false);
+      if (detail !== 'profile') setProfileOpen(false);
+    }
+    window.addEventListener('nexora:close-overlays', onCloseOthers as EventListener);
+    return () => window.removeEventListener('nexora:close-overlays', onCloseOthers as EventListener);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!notifOpen) return;
+    function place() {
+      const el = notifButtonRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      setNotifCoords({ top: r.bottom + 8, right: Math.max(8, window.innerWidth - r.right) });
+    }
+    place();
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
+    return () => {
+      window.removeEventListener('resize', place);
+      window.removeEventListener('scroll', place, true);
+    };
+  }, [notifOpen]);
+
+  useLayoutEffect(() => {
+    if (!profileOpen) return;
+    function place() {
+      const el = profileButtonRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      setProfileCoords({ top: r.bottom + 8, right: Math.max(8, window.innerWidth - r.right) });
+    }
+    place();
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
+    return () => {
+      window.removeEventListener('resize', place);
+      window.removeEventListener('scroll', place, true);
+    };
+  }, [profileOpen]);
+
   useEffect(() => {
     function onClick(e: MouseEvent) {
-      if (notifRef.current && !notifRef.current.contains(e.target as Node)) setNotifOpen(false);
-      if (profileRef.current && !profileRef.current.contains(e.target as Node)) setProfileOpen(false);
+      const t = e.target as Node;
+      if (notifOpen) {
+        if (!notifButtonRef.current?.contains(t) && !notifMenuRef.current?.contains(t)) {
+          setNotifOpen(false);
+        }
+      }
+      if (profileOpen) {
+        if (!profileButtonRef.current?.contains(t) && !profileMenuRef.current?.contains(t)) {
+          setProfileOpen(false);
+        }
+      }
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        setNotifOpen(false);
+        setProfileOpen(false);
+      }
     }
     document.addEventListener('mousedown', onClick);
-    return () => document.removeEventListener('mousedown', onClick);
-  }, []);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onClick);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [notifOpen, profileOpen]);
 
   async function signOut() {
     setProfileOpen(false);
@@ -167,8 +239,111 @@ export function Nav() {
   const isAdmin = isPlatformAdminEmail(email);
   const notifDot = pendingApprovals > 0 || newUsers24h > 0;
 
+  const notifMenu =
+    mounted &&
+    notifOpen &&
+    notifCoords &&
+    createPortal(
+      <motion.div
+        ref={notifMenuRef}
+        initial={{ opacity: 0, y: -8, scale: 0.97 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        transition={{ duration: 0.16 }}
+        style={{ top: notifCoords.top, right: notifCoords.right }}
+        className="menu-panel fixed z-[300] w-80 rounded-2xl p-2"
+      >
+        <div className="px-3 py-2 text-xs uppercase tracking-[0.2em] text-neutral-500">Notifications</div>
+        <div className="space-y-1">
+          {liveNotifs.map((n) =>
+            n.href ? (
+              <Link
+                key={n.id}
+                href={n.href}
+                onClick={() => setNotifOpen(false)}
+                className="block rounded-xl px-3 py-2.5 text-sm transition hover:bg-white/5"
+              >
+                <div className="text-neutral-200">{n.text}</div>
+                <div className="mt-0.5 text-[11px] text-neutral-500">{n.time}</div>
+              </Link>
+            ) : (
+              <div key={n.id} className="rounded-xl px-3 py-2.5 text-sm">
+                <div className="text-neutral-200">{n.text}</div>
+                <div className="mt-0.5 text-[11px] text-neutral-500">{n.time}</div>
+              </div>
+            )
+          )}
+        </div>
+      </motion.div>,
+      document.body
+    );
+
+  const profileMenu =
+    mounted &&
+    profileOpen &&
+    profileCoords &&
+    createPortal(
+      <motion.div
+        ref={profileMenuRef}
+        initial={{ opacity: 0, y: -8, scale: 0.97 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        transition={{ duration: 0.16 }}
+        style={{ top: profileCoords.top, right: profileCoords.right }}
+        className="menu-panel fixed z-[300] w-64 rounded-2xl p-2"
+      >
+        <div className="flex items-center gap-3 px-3 py-3">
+          <span className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-accent/60 to-violet/60 text-xs font-semibold text-white">
+            {initials}
+          </span>
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold text-white">{displayName}</div>
+            <div className="truncate text-xs text-neutral-500">{role.replace('_', ' ')}</div>
+          </div>
+        </div>
+        <div className="my-1 h-px bg-white/10" />
+        <Link
+          href={APP_ROUTES.settings}
+          onClick={() => setProfileOpen(false)}
+          className="flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-sm text-neutral-300 transition hover:bg-white/5 hover:text-white"
+        >
+          <User size={14} /> Account settings
+        </Link>
+        {isAdmin && (
+          <Link
+            href={APP_ROUTES.admin}
+            onClick={() => setProfileOpen(false)}
+            className="flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-sm text-neutral-300 transition hover:bg-white/5 hover:text-white"
+          >
+            <ShieldCheck size={14} /> Admin panel
+            {newUsers24h > 0 ? ` · ${newUsers24h} new` : ''}
+          </Link>
+        )}
+        <Link
+          href={APP_ROUTES.workspaceSettings}
+          onClick={() => setProfileOpen(false)}
+          className="flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-sm text-neutral-300 transition hover:bg-white/5 hover:text-white"
+        >
+          <Settings size={14} /> Workspace settings
+        </Link>
+        <Link
+          href={APP_ROUTES.workspaceSettings}
+          onClick={() => setProfileOpen(false)}
+          className="flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-sm text-neutral-300 transition hover:bg-white/5 hover:text-white"
+        >
+          <Users size={14} /> Members & invites
+        </Link>
+        <div className="my-1 h-px bg-white/10" />
+        <button
+          onClick={signOut}
+          className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-sm text-rose-300 transition hover:bg-rose-500/10"
+        >
+          <LogOut size={14} /> Sign out
+        </button>
+      </motion.div>,
+      document.body
+    );
+
   return (
-    <div className="sticky top-4 z-50 px-4 sm:px-6">
+    <div className="sticky top-4 z-[200] overflow-visible px-4 sm:px-6">
       {!isVerified && (
         <div className="mx-auto mb-2 flex max-w-7xl items-center justify-between gap-3 rounded-2xl border border-amber-500/25 bg-amber-500/10 px-4 py-2 text-xs text-amber-100">
           <span>Verify your email to unlock chat and approvals.</span>
@@ -185,7 +360,7 @@ export function Nav() {
         initial={{ opacity: 0, y: -16 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
-        className="glass-strong mx-auto flex max-w-7xl items-center gap-3 rounded-[26px] px-4 py-3 sm:px-5"
+        className="glass-strong relative z-[200] mx-auto flex max-w-7xl items-center gap-3 overflow-visible rounded-[26px] px-4 py-3 sm:px-5"
       >
         <Link href={APP_HOME} className="flex shrink-0 items-center gap-2.5">
           <span className="relative inline-flex h-9 w-9 items-center justify-center rounded-2xl bg-gradient-to-br from-accent/30 to-accent2/20 text-accent shadow-glow">
@@ -267,118 +442,48 @@ export function Nav() {
             </Link>
           )}
 
-          <div ref={notifRef} className="relative">
+          <div className="relative">
             <button
+              ref={notifButtonRef}
               onClick={() => {
-                setNotifOpen((v) => !v);
-                setProfileOpen(false);
+                setNotifOpen((v) => {
+                  const next = !v;
+                  if (next) {
+                    window.dispatchEvent(new CustomEvent('nexora:close-overlays', { detail: 'notif' }));
+                    setProfileOpen(false);
+                  }
+                  return next;
+                });
               }}
               className="relative flex h-9 w-9 items-center justify-center rounded-full border border-white/8 bg-white/5 text-neutral-300 transition hover:border-accent/40 hover:text-white"
             >
               <Bell size={15} />
               {notifDot ? <span className="absolute right-2 top-2 h-1.5 w-1.5 rounded-full bg-accent2" /> : null}
             </button>
-            <AnimatePresence>
-              {notifOpen && (
-                <motion.div
-                  initial={{ opacity: 0, y: -8, scale: 0.97 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, y: -8, scale: 0.97 }}
-                  transition={{ duration: 0.18 }}
-                  className="glass-strong absolute right-0 top-12 w-80 rounded-2xl p-2 shadow-soft"
-                >
-                  <div className="px-3 py-2 text-xs uppercase tracking-[0.2em] text-neutral-500">Notifications</div>
-                  <div className="space-y-1">
-                    {liveNotifs.map((n) =>
-                      n.href ? (
-                        <Link
-                          key={n.id}
-                          href={n.href}
-                          onClick={() => setNotifOpen(false)}
-                          className="block rounded-xl px-3 py-2.5 text-sm transition hover:bg-white/5"
-                        >
-                          <div className="text-neutral-200">{n.text}</div>
-                          <div className="mt-0.5 text-[11px] text-neutral-500">{n.time}</div>
-                        </Link>
-                      ) : (
-                        <div key={n.id} className="rounded-xl px-3 py-2.5 text-sm">
-                          <div className="text-neutral-200">{n.text}</div>
-                          <div className="mt-0.5 text-[11px] text-neutral-500">{n.time}</div>
-                        </div>
-                      )
-                    )}
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
           </div>
 
-          <div ref={profileRef} className="relative">
+          <div className="relative">
             <button
+              ref={profileButtonRef}
               onClick={() => {
-                setProfileOpen((v) => !v);
-                setNotifOpen(false);
+                setProfileOpen((v) => {
+                  const next = !v;
+                  if (next) {
+                    window.dispatchEvent(new CustomEvent('nexora:close-overlays', { detail: 'profile' }));
+                    setNotifOpen(false);
+                  }
+                  return next;
+                });
               }}
               className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-accent/60 to-violet/60 text-xs font-semibold text-white shadow-glow"
             >
               {initials}
             </button>
-            <AnimatePresence>
-              {profileOpen && (
-                <motion.div
-                  initial={{ opacity: 0, y: -8, scale: 0.97 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, y: -8, scale: 0.97 }}
-                  transition={{ duration: 0.18 }}
-                  className="glass-strong absolute right-0 top-12 w-64 rounded-2xl p-2 shadow-soft"
-                >
-                  <div className="flex items-center gap-3 px-3 py-3">
-                    <span className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-accent/60 to-violet/60 text-xs font-semibold text-white">
-                      {initials}
-                    </span>
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-semibold text-white">{displayName}</div>
-                      <div className="truncate text-xs text-neutral-500">{role.replace('_', ' ')}</div>
-                    </div>
-                  </div>
-                  <div className="my-1 h-px bg-white/8" />
-                  <Link
-                    href={APP_ROUTES.settings}
-                    onClick={() => setProfileOpen(false)}
-                    className="flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-sm text-neutral-300 transition hover:bg-white/5 hover:text-white"
-                  >
-                    <User size={14} /> Account settings
-                  </Link>
-                  {isAdmin && (
-                    <Link
-                      href={APP_ROUTES.admin}
-                      onClick={() => setProfileOpen(false)}
-                      className="flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-sm text-neutral-300 transition hover:bg-white/5 hover:text-white"
-                    >
-                      <ShieldCheck size={14} /> Admin panel
-                      {newUsers24h > 0 ? ` · ${newUsers24h} new` : ''}
-                    </Link>
-                  )}
-                  <Link
-                    href={APP_ROUTES.workspaceSettings}
-                    onClick={() => setProfileOpen(false)}
-                    className="flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-sm text-neutral-300 transition hover:bg-white/5 hover:text-white"
-                  >
-                    <Settings size={14} /> Workspace settings
-                  </Link>
-                  <div className="my-1 h-px bg-white/8" />
-                  <button
-                    onClick={signOut}
-                    className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-sm text-rose-300 transition hover:bg-rose-500/10"
-                  >
-                    <LogOut size={14} /> Sign out
-                  </button>
-                </motion.div>
-              )}
-            </AnimatePresence>
           </div>
         </div>
       </motion.header>
+      {notifMenu}
+      {profileMenu}
 
       <nav className="glass mx-auto mt-3 flex max-w-7xl items-center gap-1 overflow-x-auto rounded-2xl p-1.5 md:hidden">
         {LINKS.map((link) => {

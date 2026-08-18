@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import Link from 'next/link';
-import { AnimatePresence, motion } from 'framer-motion';
+import { motion } from 'framer-motion';
 import { Building2, Check, ChevronDown, Plus, UserRound } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { APP_ROUTES } from '@/lib/routes';
@@ -26,15 +27,59 @@ export function WorkspaceSwitcher({
   const [teamName, setTeamName] = useState('');
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
-  const ref = useRef<HTMLDivElement | null>(null);
+  const [mounted, setMounted] = useState(false);
+  const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => setMounted(true), []);
 
   useEffect(() => {
+    function onCloseOthers(e: Event) {
+      const detail = (e as CustomEvent<string>).detail;
+      if (detail !== 'workspace') setOpen(false);
+    }
+    window.addEventListener('nexora:close-overlays', onCloseOthers as EventListener);
+    return () => window.removeEventListener('nexora:close-overlays', onCloseOthers as EventListener);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    function place() {
+      const el = buttonRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      const width = 320;
+      const left = Math.min(Math.max(8, r.left), window.innerWidth - width - 8);
+      setCoords({ top: r.bottom + 8, left });
+    }
+    place();
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
+    return () => {
+      window.removeEventListener('resize', place);
+      window.removeEventListener('scroll', place, true);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
     function onClick(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node;
+      if (buttonRef.current?.contains(t)) return;
+      if (menuRef.current?.contains(t)) return;
+      setOpen(false);
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setOpen(false);
     }
     document.addEventListener('mousedown', onClick);
-    return () => document.removeEventListener('mousedown', onClick);
-  }, []);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onClick);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
 
   const personal = workspaces.filter((w) => w.kind === 'personal');
   const teams = workspaces.filter((w) => w.kind === 'team');
@@ -77,13 +122,118 @@ export function WorkspaceSwitcher({
     }
   }
 
+  const menu =
+    mounted &&
+    open &&
+    coords &&
+    createPortal(
+      <motion.div
+          ref={menuRef}
+          initial={{ opacity: 0, y: 8, scale: 0.98 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          transition={{ duration: 0.16 }}
+          style={{ top: coords.top, left: coords.left }}
+          className="menu-panel fixed z-[300] w-[320px] max-h-[min(70vh,520px)] overflow-y-auto rounded-[22px] border border-accent/30 p-2"
+          role="listbox"
+        >
+          {(error || actionError) && (
+            <p className="mb-2 rounded-xl bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+              {actionError || error}
+            </p>
+          )}
+
+          <p className="px-2 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-neutral-500">
+            Your workspaces
+          </p>
+          <p className="px-2 pb-2 text-[10px] uppercase tracking-[0.16em] text-neutral-600">Personal</p>
+          {loading && personal.length === 0 ? (
+            <p className="px-3 py-2 text-xs text-neutral-500">Loading…</p>
+          ) : personal.length === 0 ? (
+            <p className="px-3 py-2 text-xs text-neutral-500">No personal workspace returned.</p>
+          ) : (
+            personal.map((ws) => <WorkspaceRow key={ws.id} ws={ws} busy={busy} onSelect={onSelect} />)
+          )}
+
+          <div className="my-2 h-px bg-white/10" />
+          <p className="px-2 pb-2 text-[10px] uppercase tracking-[0.16em] text-neutral-600">Teams</p>
+          {teams.length === 0 ? (
+            <p className="px-3 py-2 text-xs text-neutral-500">You don&apos;t belong to a team yet.</p>
+          ) : (
+            teams.map((ws) => <WorkspaceRow key={ws.id} ws={ws} busy={busy} onSelect={onSelect} />)
+          )}
+
+          <div className="my-2 h-px bg-white/10" />
+          {!createOpen ? (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                setCreateOpen(true);
+                setActionError(null);
+              }}
+              className="flex w-full items-center gap-2 rounded-xl bg-accent/15 px-3 py-3 text-sm font-semibold text-accent hover:bg-accent/25"
+            >
+              <Plus size={16} />
+              Create Team Workspace
+            </button>
+          ) : (
+            <form onSubmit={onCreate} className="space-y-2 px-1 pb-1">
+              <label className="block px-1 text-[10px] uppercase tracking-[0.14em] text-neutral-500">
+                Workspace name
+              </label>
+              <input
+                autoFocus
+                value={teamName}
+                onChange={(e) => setTeamName(e.target.value)}
+                placeholder="e.g. Acme"
+                className="w-full rounded-xl border border-white/10 bg-black/50 px-3 py-2 text-sm text-white outline-none placeholder:text-neutral-600 focus:border-accent/40"
+                disabled={busy}
+              />
+              <div className="flex gap-2">
+                <button
+                  type="submit"
+                  disabled={busy}
+                  className="flex-1 rounded-full bg-accent px-3 py-2 text-xs font-semibold text-[#04101f] disabled:opacity-50"
+                >
+                  {busy ? 'Creating…' : 'Create Workspace'}
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setCreateOpen(false)}
+                  className="rounded-full border border-white/10 px-3 py-2 text-xs text-neutral-300"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          )}
+
+          <Link
+            href={APP_ROUTES.workspaceSettings}
+            onClick={() => setOpen(false)}
+            className="mt-1 flex w-full items-center rounded-xl px-3 py-2.5 text-xs font-medium text-neutral-300 hover:bg-white/5 hover:text-white"
+          >
+            Workspace settings · Members · Invites
+          </Link>
+        </motion.div>,
+      document.body
+    );
+
   return (
-    <div ref={ref} className="relative">
+    <div className="relative">
       <button
+        ref={buttonRef}
         type="button"
         onClick={() => {
-          setOpen((v) => !v);
-          if (!open) void refresh();
+          setOpen((v) => {
+            const next = !v;
+            if (next) {
+              window.dispatchEvent(new CustomEvent('nexora:close-overlays', { detail: 'workspace' }));
+              void refresh();
+            }
+            return next;
+          });
         }}
         className={cn(
           'flex items-center gap-2 rounded-2xl border border-accent/35 bg-accent/10 text-left transition hover:border-accent/55 hover:bg-accent/15',
@@ -117,102 +267,7 @@ export function WorkspaceSwitcher({
         </span>
         <ChevronDown size={14} className={cn('shrink-0 text-accent transition', open && 'rotate-180')} />
       </button>
-
-      <AnimatePresence>
-        {open && (
-          <motion.div
-            initial={{ opacity: 0, y: 8, scale: 0.98 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 6, scale: 0.98 }}
-            transition={{ duration: 0.18 }}
-            className="glass-strong absolute left-0 top-[calc(100%+8px)] z-[60] w-[320px] overflow-hidden rounded-[22px] border border-accent/25 p-2 shadow-soft"
-            role="listbox"
-          >
-            {(error || actionError) && (
-              <p className="mb-2 rounded-xl bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
-                {actionError || error}
-              </p>
-            )}
-
-            <p className="px-2 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-neutral-500">
-              Your workspaces
-            </p>
-            <p className="px-2 pb-2 text-[10px] uppercase tracking-[0.16em] text-neutral-600">Personal</p>
-            {loading && personal.length === 0 ? (
-              <p className="px-3 py-2 text-xs text-neutral-500">Loading…</p>
-            ) : personal.length === 0 ? (
-              <p className="px-3 py-2 text-xs text-neutral-500">No personal workspace returned.</p>
-            ) : (
-              personal.map((ws) => (
-                <WorkspaceRow key={ws.id} ws={ws} busy={busy} onSelect={onSelect} />
-              ))
-            )}
-
-            <div className="my-2 h-px bg-white/8" />
-            <p className="px-2 pb-2 text-[10px] uppercase tracking-[0.16em] text-neutral-600">Teams</p>
-            {teams.length === 0 ? (
-              <p className="px-3 py-2 text-xs text-neutral-500">You don&apos;t belong to a team yet.</p>
-            ) : (
-              teams.map((ws) => <WorkspaceRow key={ws.id} ws={ws} busy={busy} onSelect={onSelect} />)
-            )}
-
-            <div className="my-2 h-px bg-white/8" />
-            {!createOpen ? (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => {
-                  setCreateOpen(true);
-                  setActionError(null);
-                }}
-                className="flex w-full items-center gap-2 rounded-xl bg-accent/15 px-3 py-3 text-sm font-semibold text-accent hover:bg-accent/25"
-              >
-                <Plus size={16} />
-                Create Team Workspace
-              </button>
-            ) : (
-              <form onSubmit={onCreate} className="space-y-2 px-1 pb-1">
-                <label className="block px-1 text-[10px] uppercase tracking-[0.14em] text-neutral-500">
-                  Workspace name
-                </label>
-                <input
-                  autoFocus
-                  value={teamName}
-                  onChange={(e) => setTeamName(e.target.value)}
-                  placeholder="e.g. Acme"
-                  className="w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none placeholder:text-neutral-600 focus:border-accent/40"
-                  disabled={busy}
-                />
-                <div className="flex gap-2">
-                  <button
-                    type="submit"
-                    disabled={busy}
-                    className="flex-1 rounded-full bg-accent px-3 py-2 text-xs font-semibold text-[#04101f] disabled:opacity-50"
-                  >
-                    {busy ? 'Creating…' : 'Create Workspace'}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => setCreateOpen(false)}
-                    className="rounded-full border border-white/10 px-3 py-2 text-xs text-neutral-300"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </form>
-            )}
-
-            <Link
-              href={APP_ROUTES.workspaceSettings}
-              onClick={() => setOpen(false)}
-              className="mt-1 flex w-full items-center rounded-xl px-3 py-2.5 text-xs font-medium text-neutral-300 hover:bg-white/5 hover:text-white"
-            >
-              Workspace settings · Members · Invites
-            </Link>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {menu}
     </div>
   );
 }
