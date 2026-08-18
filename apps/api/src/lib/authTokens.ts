@@ -15,11 +15,22 @@ export function randomToken(bytes = 32): string {
 /** Canonical production web app (Vercel). Never default to Netlify. */
 export const CANONICAL_WEB_APP_URL = 'https://ai-lilac-phi.vercel.app';
 
+/** Old Netlify host — treat as retired; never redirect users here. */
+const RETIRED_NETLIFY_ORIGIN = 'https://try-nexora.netlify.app';
+
 export function webAppUrl(): string {
   const fromEnv = (process.env.WEB_APP_URL ?? '').trim().replace(/\/$/, '');
-  // Prefer env when set, but never silently keep a stale Netlify default in code paths
-  // that omit WEB_APP_URL — product lives on Vercel.
-  if (fromEnv) return fromEnv;
+  // Prefer env when set, but never send users to the retired Netlify URL even if
+  // Railway still has WEB_APP_URL=try-nexora.netlify.app.
+  if (fromEnv) {
+    if (
+      fromEnv === RETIRED_NETLIFY_ORIGIN ||
+      /^https:\/\/[a-z0-9-]+\.netlify\.app$/i.test(fromEnv)
+    ) {
+      return CANONICAL_WEB_APP_URL;
+    }
+    return fromEnv;
+  }
   if (process.env.NODE_ENV === 'production' || process.env.RAILWAY_ENVIRONMENT) {
     return CANONICAL_WEB_APP_URL;
   }
