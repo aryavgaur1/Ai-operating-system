@@ -66,6 +66,29 @@ export default function WorkspaceSettingsPage() {
     void loadTeamData();
   }, [loadTeamData]);
 
+  function applyInviteResult(
+    res: {
+      invitation: InvitationPublic;
+      email: { delivered: boolean; mode: string };
+      acceptToken?: string;
+    },
+    verb: 'created' | 'resent'
+  ) {
+    if (res.email.delivered) {
+      setMessage(
+        `Invitation ${verb} and email delivered to ${res.invitation.email}. They should click “Accept Workspace Invitation” in that email (opens /invite/…).`
+      );
+      return;
+    }
+    setMessage(
+      `Invitation ${verb}, but email was not delivered (${res.email.mode}). Share the accept link below, or set EMAIL_USER / EMAIL_PASS on the API and resend.`
+    );
+    if (res.acceptToken) {
+      const origin = typeof window !== 'undefined' ? window.location.origin : '';
+      setLastAcceptLink(`${origin}${inviteAcceptPath(res.acceptToken)}`);
+    }
+  }
+
   async function onInvite(e: FormEvent) {
     e.preventDefault();
     if (!orgId || !canManage) return;
@@ -79,17 +102,8 @@ export default function WorkspaceSettingsPage() {
         role: inviteRole,
       });
       setInviteEmail('');
-      if (res.email.delivered) {
-        setMessage('Invitation created and email delivered.');
-      } else {
-        setMessage(
-          `Invitation created. Email was not delivered (${res.email.mode}). Use the accept link below.`
-        );
-        if (res.acceptToken) {
-          const origin = typeof window !== 'undefined' ? window.location.origin : '';
-          setLastAcceptLink(`${origin}${inviteAcceptPath(res.acceptToken)}`);
-        }
-      }
+      // createInvitation auto-resends when a pending invite already exists
+      applyInviteResult(res, 'created');
       await loadTeamData();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Invite failed');
@@ -116,19 +130,12 @@ export default function WorkspaceSettingsPage() {
   async function onResend(id: string) {
     if (!orgId || !canManage) return;
     setBusy(true);
+    setMessage(null);
     setError(null);
     setLastAcceptLink(null);
     try {
       const res = await api.resendInvitation(orgId, id);
-      if (res.email.delivered) {
-        setMessage('Invitation resent and email delivered.');
-      } else {
-        setMessage(`Invitation resent. Email not delivered (${res.email.mode}).`);
-        if (res.acceptToken) {
-          const origin = typeof window !== 'undefined' ? window.location.origin : '';
-          setLastAcceptLink(`${origin}${inviteAcceptPath(res.acceptToken)}`);
-        }
-      }
+      applyInviteResult(res, 'resent');
       await loadTeamData();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Resend failed');
@@ -323,7 +330,11 @@ export default function WorkspaceSettingsPage() {
                     </button>
                   </form>
                   <p className="mt-3 text-xs text-neutral-500">
-                    Owner cannot be assigned by invitation. Backend enforces email binding and expiry.
+                    Invitee gets an email with a join link to{' '}
+                    <code className="text-neutral-400">/invite/…</code>. They sign in (or create an
+                    account) with that same email, then click <strong>Let me in</strong>. Inviting an
+                    email that is already pending re-sends a fresh link. Owner cannot be assigned by
+                    invitation.
                   </p>
                 </GlassCard>
               </Reveal>

@@ -102,7 +102,7 @@ function RegisterInner() {
         </form>
 
         <a
-          href={googleLoginUrl()}
+          href={googleLoginUrl(next)}
           className="mt-3 flex w-full items-center justify-center rounded-full border border-white/10 bg-white/5 px-4 py-2.5 text-sm text-neutral-200"
         >
           Continue with Google

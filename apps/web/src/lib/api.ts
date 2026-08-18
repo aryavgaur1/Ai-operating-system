@@ -54,9 +54,11 @@ async function refreshAccessToken(): Promise<string | null> {
 function redirectToLogin() {
   if (typeof window === 'undefined') return;
   clearSession();
-  const next = window.location.pathname.startsWith('/app')
-    ? `?next=${encodeURIComponent(window.location.pathname)}`
-    : '';
+  const path = window.location.pathname;
+  const next =
+    path.startsWith('/app') || path.startsWith('/invite/')
+      ? `?next=${encodeURIComponent(path)}`
+      : '';
   window.location.href = `/login${next}`;
 }
 
@@ -79,7 +81,10 @@ async function request<T>(path: string, init?: RequestInit, retry = true): Promi
     const refreshed = await refreshAccessToken();
     if (refreshed) return request<T>(path, init, false);
     // Session truly dead — bounce to login (except when already on auth pages)
-    if (typeof window !== 'undefined' && window.location.pathname.startsWith('/app')) {
+    if (
+      typeof window !== 'undefined' &&
+      (window.location.pathname.startsWith('/app') || window.location.pathname.startsWith('/invite/'))
+    ) {
       redirectToLogin();
     }
   }
@@ -584,12 +589,23 @@ export const api = {
   adminChatbotAnalytics: () => request<any>('/admin/chatbot/analytics'),
 };
 
-export function googleLoginUrl() {
+export function googleLoginUrl(next?: string | null) {
+  const params = new URLSearchParams();
   const origin =
     typeof window !== 'undefined' && window.location?.origin
       ? window.location.origin
       : '';
-  const q = origin ? `?returnOrigin=${encodeURIComponent(origin)}` : '';
+  if (origin) params.set('returnOrigin', origin);
+  const safeNext = typeof next === 'string' ? next.trim() : '';
+  if (
+    safeNext &&
+    safeNext.startsWith('/') &&
+    !safeNext.startsWith('//') &&
+    (safeNext.startsWith('/app') || safeNext.startsWith('/invite/'))
+  ) {
+    params.set('next', safeNext);
+  }
+  const q = params.toString() ? `?${params.toString()}` : '';
   return `${API_URL}/auth/google/start${q}`;
 }
 

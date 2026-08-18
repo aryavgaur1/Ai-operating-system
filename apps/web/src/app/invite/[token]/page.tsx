@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useEffect, useState } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { Building2, CheckCircle2, LogIn, UserPlus } from 'lucide-react';
@@ -25,6 +25,7 @@ function InviteAcceptInner() {
   const [workspaceName, setWorkspaceName] = useState<string | null>(null);
   const [authed, setAuthed] = useState(false);
   const [meEmail, setMeEmail] = useState<string | null>(null);
+  const autoAcceptStarted = useRef(false);
 
   const nextPath = inviteAcceptPath(token);
 
@@ -95,6 +96,25 @@ function InviteAcceptInner() {
     Boolean(authed && preview && meEmail) &&
     meEmail!.trim().toLowerCase() !== preview!.email.trim().toLowerCase();
 
+  // Wait for /me email before auto-join so we never accept under the wrong identity.
+  const canJoin =
+    Boolean(
+      authed &&
+        meEmail &&
+        preview?.acceptable &&
+        !emailMismatch &&
+        !done &&
+        !busy
+    );
+
+  // After sign-in/register with ?next=/invite/..., join automatically when identity matches.
+  useEffect(() => {
+    if (!canJoin || autoAcceptStarted.current) return;
+    autoAcceptStarted.current = true;
+    void onAccept();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once when ready to join
+  }, [canJoin]);
+
   return (
     <div className="flex min-h-screen items-center justify-center px-4 py-12">
       <GlassCard className="w-full max-w-lg p-8" hoverLift={false}>
@@ -102,6 +122,9 @@ function InviteAcceptInner() {
         <h1 className="font-display mt-2 text-2xl font-semibold text-white">
           You&apos;re invited to join a workspace
         </h1>
+        <p className="mt-2 text-sm text-neutral-400">
+          Open the invite link from your email, sign in with the invited address, then join.
+        </p>
 
         {loading && <p className="mt-6 text-sm text-neutral-400">Loading invitation…</p>}
 
@@ -153,19 +176,21 @@ function InviteAcceptInner() {
 
             {!authed && (
               <p className="rounded-xl border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs text-amber-50">
-                Sign in or create an account with <strong>{preview.email}</strong> to accept. The
+                Sign in or create an account with <strong>{preview.email}</strong> to join. The
                 invitation is bound to that email identity.
               </p>
             )}
 
-            {authed && !emailMismatch ? (
+            {authed && !meEmail ? (
+              <p className="text-sm text-neutral-400">Checking your account…</p>
+            ) : authed && !emailMismatch ? (
               <button
                 type="button"
                 disabled={busy || !preview.acceptable}
                 onClick={() => void onAccept()}
                 className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-accent px-5 py-3 text-sm font-semibold text-[#04101f] disabled:opacity-50"
               >
-                {busy ? 'Accepting…' : 'Accept Invitation'}
+                {busy ? 'Joining…' : 'Let me in'}
               </button>
             ) : (
               <div className="flex flex-col gap-2 sm:flex-row">
@@ -175,7 +200,7 @@ function InviteAcceptInner() {
                   className="inline-flex flex-1 items-center justify-center gap-2 rounded-full bg-accent px-5 py-3 text-sm font-semibold text-[#04101f]"
                 >
                   <LogIn size={16} />
-                  Sign in to accept
+                  Sign in to join
                 </button>
                 <button
                   type="button"
@@ -190,7 +215,8 @@ function InviteAcceptInner() {
 
             {!preview.acceptable && (
               <p className="text-xs text-neutral-500">
-                This invitation cannot be accepted (expired, revoked, or already used).
+                This invitation cannot be accepted (expired, revoked, or already used). Ask the
+                workspace owner to resend a fresh invite email.
               </p>
             )}
           </div>
@@ -207,7 +233,7 @@ function InviteAcceptInner() {
                 href={APP_ROUTES.workspaceSettings}
                 className="inline-flex rounded-full bg-accent px-5 py-2.5 text-sm font-semibold text-[#04101f]"
               >
-                Open workspace settings
+                Open workspace
               </Link>
               <Link
                 href={APP_ROUTES.dashboard}

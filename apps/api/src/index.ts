@@ -122,6 +122,10 @@ app.get('/health', (_req, res) =>
       process.env.COMMIT_REF ||
       null,
     deployedAt: process.env.RAILWAY_DEPLOYMENT_ID || null,
+    // Honest mailer readiness — never claims delivery; only whether SMTP env is present.
+    emailConfigured: Boolean(process.env.EMAIL_USER?.trim() && process.env.EMAIL_PASS?.trim()),
+    // Same origin used for invite/OAuth links (Netlify env values are remapped above).
+    webAppUrl: WEB_APP_URL,
   })
 );
 

@@ -217,7 +217,7 @@ async function main() {
     snapshot = await takeSnapshot();
 
     // 1. Owner can invite
-    const invite1 = await createInvitation({
+    let invite1 = await createInvitation({
       actorUserId: ownerId,
       organizationId: teamOrgId,
       email: inviteeEmail,
@@ -319,18 +319,17 @@ async function main() {
     );
     console.log('PASS 15 existing member cannot receive invitation');
 
-    // Duplicate pending blocked
-    await expectThrow(
-      () =>
-        createInvitation({
-          actorUserId: ownerId,
-          organizationId: teamOrgId,
-          email: inviteeEmail,
-          role: 'member',
-        }),
-      409,
-      'duplicate pending'
-    );
+    // Duplicate pending → resend (fresh token + re-email), not a hard 409
+    const dup = await createInvitation({
+      actorUserId: ownerId,
+      organizationId: teamOrgId,
+      email: inviteeEmail,
+      role: 'member',
+    });
+    assert(dup.invitation.status === 'pending', 'duplicate pending becomes resent pending');
+    assert(dup.rawToken && dup.rawToken !== invite1.rawToken, 'resend issues a new raw token');
+    invite1 = dup;
+    console.log('PASS 14b duplicate pending auto-resends');
 
     // 9. Wrong authenticated email cannot accept
     await expectThrow(

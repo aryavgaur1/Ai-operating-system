@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { useEffect, useState } from 'react';
-import { LayoutGrid, MessageSquare, ShieldCheck, Plug, Settings, Sparkles } from 'lucide-react';
+import { LayoutGrid, MessageSquare, ShieldCheck, Plug, Users, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { APP_ROUTES, chatResumeHref } from '@/lib/routes';
 import { resolveChatHref } from '@/lib/activeConversation';
@@ -102,12 +102,12 @@ export function WorkspaceRail() {
           href={APP_ROUTES.workspaceSettings}
           className={cn(
             'group relative flex h-10 w-10 items-center justify-center rounded-2xl transition-all',
-            pathname?.startsWith(APP_ROUTES.workspaceSettings) || pathname === APP_ROUTES.settings
+            pathname?.startsWith(APP_ROUTES.workspaceSettings)
               ? 'bg-accent/15 text-accent shadow-[0_0_0_1px_rgba(91,157,255,0.3)]'
               : 'text-neutral-500 hover:bg-white/5 hover:text-white'
           )}
         >
-          <Settings size={16} />
+          <Users size={16} />
           <span className="pointer-events-none absolute left-full ml-3 top-1/2 -translate-y-1/2 whitespace-nowrap rounded-lg border border-white/10 bg-[#0b0d12] px-2.5 py-1.5 text-xs text-neutral-200 opacity-0 shadow-soft transition-all group-hover:opacity-100">
             Workspace
           </span>

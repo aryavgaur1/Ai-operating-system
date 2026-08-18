@@ -17,6 +17,8 @@ export default function LoginInner() {
   const [mode, setMode] = useState<'login' | 'forgot' | 'reset'>('login');
   const [loading, setLoading] = useState(false);
   const resetToken = search.get('reset');
+  const next = search.get('next');
+  const registerHref = next ? `/register?next=${encodeURIComponent(next)}` : '/register';
 
   useEffect(() => {
     if (resetToken) setMode('reset');
@@ -53,7 +55,6 @@ export default function LoginInner() {
       }
       const data = await api.login({ email, password, rememberMe });
       setAccessToken(data.accessToken || data.token);
-      const next = search.get('next');
       router.replace(isSafeNextPath(next) ? next! : '/app/dashboard');
     } catch (err: any) {
       setError(err.message || 'Login failed');
@@ -100,12 +101,12 @@ export default function LoginInner() {
 
         {mode === 'login' && (
           <>
-            <a href={googleLoginUrl()} className="mt-3 flex w-full items-center justify-center rounded-full border border-white/10 bg-white/5 px-4 py-2.5 text-sm text-neutral-200">
+            <a href={googleLoginUrl(next)} className="mt-3 flex w-full items-center justify-center rounded-full border border-white/10 bg-white/5 px-4 py-2.5 text-sm text-neutral-200">
               Continue with Google
             </a>
             <div className="mt-4 flex justify-between text-xs text-neutral-500">
               <button type="button" className="hover:text-white" onClick={() => setMode('forgot')}>Forgot password?</button>
-              <Link href="/register" className="hover:text-white">Create account</Link>
+              <Link href={registerHref} className="hover:text-white">Create account</Link>
             </div>
           </>
         )}

@@ -242,12 +242,15 @@ export async function createInvitation(opts: {
     throw new AppError('This user is already an active member of this workspace.', 409);
   }
 
+  // Pending invite for same email → resend (new token + re-email). Do not block owners
+  // with a dead-end "already pending" error when they click Invite again.
   const pending = await findPendingInvitation(organizationId, email);
   if (pending) {
-    throw new AppError(
-      'An invitation is already pending for this email. Resend it instead.',
-      409
-    );
+    return resendInvitation({
+      actorUserId: opts.actorUserId,
+      organizationId,
+      invitationId: pending.id,
+    });
   }
 
   const expiresAt = new Date(Date.now() + INVITATION_TTL_MS);
@@ -259,10 +262,8 @@ export async function createInvitation(opts: {
     }
     const pendingAgain = await findPendingInvitation(organizationId, email, client);
     if (pendingAgain) {
-      throw new AppError(
-        'An invitation is already pending for this email. Resend it instead.',
-        409
-      );
+      // Race: another create landed first — resend that invite instead of failing.
+      return null;
     }
     return insertPendingInvitation({
       client,
@@ -273,6 +274,18 @@ export async function createInvitation(opts: {
       expiresAt,
     });
   });
+
+  if (!created) {
+    const again = await findPendingInvitation(organizationId, email);
+    if (!again) {
+      throw new AppError('Could not create invitation. Try again.', 409);
+    }
+    return resendInvitation({
+      actorUserId: opts.actorUserId,
+      organizationId,
+      invitationId: again.id,
+    });
+  }
 
   const emailResult = await deliverInvitationEmail({
     to: email,

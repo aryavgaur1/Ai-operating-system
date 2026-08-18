@@ -237,7 +237,7 @@ export function WorkspaceSwitcher({
         }}
         className={cn(
           'flex items-center gap-2 rounded-2xl border border-accent/35 bg-accent/10 text-left transition hover:border-accent/55 hover:bg-accent/15',
-          compact ? 'max-w-[200px] px-2.5 py-1.5' : 'min-w-[180px] max-w-[260px] px-3 py-2'
+          compact ? 'max-w-[148px] px-2 py-1.5 sm:max-w-[168px]' : 'min-w-[180px] max-w-[260px] px-3 py-2'
         )}
         aria-expanded={open}
         aria-haspopup="listbox"

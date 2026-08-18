@@ -11,7 +11,6 @@ import {
   ShieldCheck,
   Plug,
   Search,
-  Settings,
   Sparkles,
   User,
   Users,
@@ -29,6 +28,7 @@ const STATIC_LINKS = [
   { href: APP_ROUTES.dashboard, label: 'Dashboard', icon: LayoutGrid },
   { href: APP_ROUTES.approvals, label: 'Approvals', icon: ShieldCheck },
   { href: APP_ROUTES.integrations, label: 'Integrations', icon: Plug },
+  { href: APP_ROUTES.workspaceSettings, label: 'Workspace', icon: Users },
 ];
 
 export function Nav() {
@@ -76,6 +76,10 @@ export function Nav() {
     STATIC_LINKS[1],
     { href: chatHref, label: 'Chat', icon: MessageSquare, matchPrefix: APP_ROUTES.chat },
     STATIC_LINKS[2],
+    {
+      ...STATIC_LINKS[3],
+      matchPrefix: APP_ROUTES.workspaceSettings,
+    },
   ];
 
   useEffect(() => {
@@ -322,14 +326,7 @@ export function Nav() {
           onClick={() => setProfileOpen(false)}
           className="flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-sm text-neutral-300 transition hover:bg-white/5 hover:text-white"
         >
-          <Settings size={14} /> Workspace settings
-        </Link>
-        <Link
-          href={APP_ROUTES.workspaceSettings}
-          onClick={() => setProfileOpen(false)}
-          className="flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-sm text-neutral-300 transition hover:bg-white/5 hover:text-white"
-        >
-          <Users size={14} /> Members & invites
+          <Users size={14} /> Workspace · members & invites
         </Link>
         <div className="my-1 h-px bg-white/10" />
         <button
@@ -360,20 +357,22 @@ export function Nav() {
         initial={{ opacity: 0, y: -16 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
-        className="glass-strong relative z-[200] mx-auto flex max-w-7xl items-center gap-3 overflow-visible rounded-[26px] px-4 py-3 sm:px-5"
+        className="glass-strong relative z-[200] mx-auto flex max-w-7xl items-center gap-3 overflow-visible rounded-[26px] px-3 py-2.5 sm:gap-4 sm:px-5 sm:py-3"
       >
-        <Link href={APP_HOME} className="flex shrink-0 items-center gap-2.5">
+        <Link href={APP_HOME} className="flex shrink-0 items-center gap-2.5 pr-1">
           <span className="relative inline-flex h-9 w-9 items-center justify-center rounded-2xl bg-gradient-to-br from-accent/30 to-accent2/20 text-accent shadow-glow">
             <Sparkles size={16} strokeWidth={2.4} />
           </span>
-          <span className="hidden font-display text-sm font-semibold tracking-[0.18em] text-white sm:inline">
+          <span className="hidden font-display text-sm font-semibold tracking-[0.18em] text-white lg:inline">
             NEXORA&nbsp;OS
           </span>
         </Link>
 
-        <WorkspaceSwitcher />
+        <div className="min-w-0 shrink-0">
+          <WorkspaceSwitcher compact />
+        </div>
 
-        <nav className="hidden items-center gap-1 rounded-full border border-white/8 bg-black/20 p-1 md:flex">
+        <nav className="hidden min-w-0 items-center gap-0.5 rounded-full border border-white/8 bg-black/20 p-1 md:flex">
           {LINKS.map((link) => {
             const matchPrefix = 'matchPrefix' in link && link.matchPrefix ? link.matchPrefix : link.href;
             const active = pathname?.startsWith(matchPrefix);
@@ -390,12 +389,12 @@ export function Nav() {
                 )}
                 <span
                   className={cn(
-                    'relative z-10 flex items-center gap-1.5 rounded-full px-3.5 py-2 text-sm transition-colors',
+                    'relative z-10 flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-[13px] transition-colors xl:gap-1.5 xl:px-3.5 xl:py-2 xl:text-sm',
                     active ? 'text-white' : 'text-neutral-400 hover:text-white'
                   )}
                 >
-                  <Icon size={14} />
-                  {link.label}
+                  <Icon size={14} className="shrink-0" />
+                  <span className="whitespace-nowrap">{link.label}</span>
                   {showApprovalBadge ? (
                     <span className="ml-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-400 px-1 text-[9px] font-bold text-black">
                       {pendingApprovals > 9 ? '9+' : pendingApprovals}
@@ -421,11 +420,11 @@ export function Nav() {
         </div>
 
         <div className="ml-auto flex items-center gap-2 md:ml-3">
-          <span className="hidden items-center gap-1.5 rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1.5 text-[11px] uppercase tracking-[0.2em] text-emerald-300 sm:flex">
+          <span className="hidden items-center gap-1.5 rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1.5 text-[11px] uppercase tracking-[0.2em] text-emerald-300 2xl:flex">
             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
             core online
           </span>
-          <span className="hidden items-center rounded-full border border-accent/20 bg-accent/10 px-3 py-1.5 text-[11px] text-accent xl:flex">
+          <span className="hidden items-center rounded-full border border-accent/20 bg-accent/10 px-3 py-1.5 text-[11px] text-accent 2xl:flex">
             18ms latency
           </span>
           {isAdmin && (

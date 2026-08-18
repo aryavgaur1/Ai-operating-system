@@ -462,6 +462,14 @@ function googleLoginFailRedirect(message: string, returnOrigin?: string): string
   return `${base}/login?error=${encodeURIComponent(message)}`;
 }
 
+/** Post-login path after Google — app + invite only (never open redirects). */
+function isSafeGoogleNextPath(next: string | null | undefined): next is string {
+  if (!next) return false;
+  const n = String(next).trim();
+  if (!n.startsWith('/') || n.startsWith('//')) return false;
+  return n.startsWith('/app') || n.startsWith('/invite/');
+}
+
 authRouter.get('/google/start', (req, res) => {
   const clientId = process.env.GOOGLE_CLIENT_ID?.trim();
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim();
@@ -477,9 +485,11 @@ authRouter.get('/google/start', (req, res) => {
       ? req.query.returnOrigin
       : req.get('referer') || undefined
   );
+  const nextPathRaw = typeof req.query.next === 'string' ? req.query.next : undefined;
+  const nextPath = isSafeGoogleNextPath(nextPathRaw) ? nextPathRaw : undefined;
 
   const state = jwt.sign(
-    { typ: 'google_oauth', nonce: randomToken(8), returnOrigin },
+    { typ: 'google_oauth', nonce: randomToken(8), returnOrigin, nextPath },
     getJwtSecret(),
     { expiresIn: '10m' }
   );
@@ -492,7 +502,7 @@ authRouter.get('/google/start', (req, res) => {
   url.searchParams.set('access_type', 'offline');
   url.searchParams.set('prompt', 'consent');
   url.searchParams.set('state', state);
-  logger.info('auth.google.start', { redirect, returnOrigin });
+  logger.info('auth.google.start', { redirect, returnOrigin, nextPath: nextPath || null });
   res.redirect(url.toString());
 });
 
@@ -513,6 +523,7 @@ function errMessage(err: unknown): string {
 
 authRouter.get('/google/callback', async (req, res) => {
   let returnOrigin = webAppUrl();
+  let nextPath: string | undefined;
   const fail = (message: string) => {
     logger.warn('auth.google.callback_failed', { message, queryError: req.query.error, returnOrigin });
     res.redirect(googleLoginFailRedirect(message, returnOrigin));
@@ -534,13 +545,20 @@ authRouter.get('/google/callback', async (req, res) => {
 
     if (state) {
       try {
-        const payload = jwt.verify(state, getJwtSecret()) as { typ?: string; returnOrigin?: string };
+        const payload = jwt.verify(state, getJwtSecret()) as {
+          typ?: string;
+          returnOrigin?: string;
+          nextPath?: string;
+        };
         if (payload.typ && payload.typ !== 'google_oauth') {
           fail('Invalid Google login state. Please try again.');
           return;
         }
         if (payload.returnOrigin) {
           returnOrigin = resolveReturnOrigin(payload.returnOrigin);
+        }
+        if (isSafeGoogleNextPath(payload.nextPath)) {
+          nextPath = payload.nextPath;
         }
       } catch {
         // Older in-flight logins used random state — allow through but log.
@@ -665,8 +683,15 @@ authRouter.get('/google/callback', async (req, res) => {
       ip: (req.header('x-forwarded-for') ?? req.socket.remoteAddress ?? '').toString(),
     });
 
-    const dest = `${returnOrigin}/app/dashboard?token=${encodeURIComponent(session.accessToken)}&refresh=${encodeURIComponent(session.refreshToken)}`;
-    logger.info('auth.google.success', { userId: user.id, email: user.email, returnOrigin });
+    const landing = nextPath || '/app/dashboard';
+    const join = landing.includes('?') ? '&' : '?';
+    const dest = `${returnOrigin}${landing}${join}token=${encodeURIComponent(session.accessToken)}&refresh=${encodeURIComponent(session.refreshToken)}`;
+    logger.info('auth.google.success', {
+      userId: user.id,
+      email: user.email,
+      returnOrigin,
+      nextPath: nextPath || null,
+    });
     res.redirect(dest);
   } catch (err) {
     const message = errMessage(err);
