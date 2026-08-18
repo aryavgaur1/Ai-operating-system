@@ -220,12 +220,32 @@ export async function probeSmtpConnectivity(): Promise<{
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 10_000);
     try {
-      const res = await fetch('https://api.resend.com/api-keys', {
+      // Send-only Resend keys return 401 on /api-keys — that still means the key is present.
+      // Prefer a cheap authenticated domains list; accept restricted_api_key as configured.
+      const res = await fetch('https://api.resend.com/domains', {
         method: 'GET',
         signal: controller.signal,
         headers: { Authorization: `Bearer ${resendApiKey()}` },
       });
-      if (res.status === 401) {
+      const bodyText = await res.text();
+      let parsed: any = null;
+      try {
+        parsed = JSON.parse(bodyText);
+      } catch {
+        // ignore
+      }
+      if (res.ok || parsed?.name === 'restricted_api_key' || res.status === 403) {
+        _activeProfile = 'resend';
+        lastEmailDiag = {
+          at: new Date().toISOString(),
+          delivered: true,
+          mode: 'verify',
+          profile: 'resend',
+          errorCode: null,
+        };
+        return { ok: true, profile: 'resend' };
+      }
+      if (res.status === 401 && parsed?.name !== 'restricted_api_key') {
         lastEmailDiag = {
           at: new Date().toISOString(),
           delivered: false,
@@ -235,6 +255,7 @@ export async function probeSmtpConnectivity(): Promise<{
         };
         return { ok: false, profile: 'resend', errorCode: 'resend_unauthorized' };
       }
+      // Any other response: key reached Resend over HTTPS
       _activeProfile = 'resend';
       lastEmailDiag = {
         at: new Date().toISOString(),
