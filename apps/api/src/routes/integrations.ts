@@ -34,6 +34,8 @@ integrationsRouter.get(
       const workspaceName =
         (typeof meta.teamName === 'string' && meta.teamName) ||
         (typeof meta.workspaceName === 'string' && meta.workspaceName) ||
+        // Gmail: show connected Google account email as workspace name
+        (tool === 'gmail' && typeof meta.googleEmail === 'string' && meta.googleEmail) ||
         undefined;
       const workspaceId =
         (typeof meta.teamId === 'string' && meta.teamId) ||
@@ -49,7 +51,9 @@ integrationsRouter.get(
             ? `${apiBase}/oauth/notion/start?token=${encodeURIComponent(token)}`
             : !notImplemented && tool === 'jira'
               ? `${apiBase}/oauth/jira/start?token=${encodeURIComponent(token)}`
-              : null;
+              : !notImplemented && tool === 'gmail'
+                ? `${apiBase}/oauth/gmail/start?token=${encodeURIComponent(token)}`
+                : null;
 
       const reallyConnected =
         !notImplemented &&

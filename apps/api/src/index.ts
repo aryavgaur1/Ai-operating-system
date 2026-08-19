@@ -17,6 +17,7 @@ import { adminRouter } from './routes/admin';
 import { oauthNotionRouter } from './routes/oauth-notion';
 import { oauthSlackRouter } from './routes/oauth-slack';
 import { oauthJiraRouter } from './routes/oauth-jira';
+import { oauthGmailRouter } from './routes/oauth-gmail';
 import { conversationsRouter } from './routes/conversations';
 import { dashboardRouter } from './routes/dashboard';
 import { workspacesRouter } from './routes/workspaces';
@@ -112,6 +113,7 @@ app.use('/auth', authLimiter, authRouter);
 app.use('/oauth/notion', oauthNotionRouter);
 app.use('/oauth/slack', oauthSlackRouter);
 app.use('/oauth/jira', oauthJiraRouter);
+app.use('/oauth/gmail', oauthGmailRouter);
 
 app.get('/health', async (req, res) => {
   const probe = String(req.query.probeSmtp || '') === '1';

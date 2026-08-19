@@ -10,6 +10,12 @@ export interface ConnectorContext {
   jiraToken?: string;
   jiraCloudId?: string;
   jiraSiteUrl?: string;
+  /** Gmail per-user OAuth access token (NOT the server invitation mailer token). */
+  gmailToken?: string;
+  /** Connected Google account email — for display and From: header only. */
+  gmailEmail?: string | null;
+  /** Set when Gmail refresh failed — actionable message, never secrets. */
+  gmailAuthError?: string;
   /** When true, never fall back to platform .env tokens. */
   saasStrict?: boolean;
   /** Set when Jira refresh failed — actionable message, never secrets. */
@@ -45,4 +51,9 @@ export function hasJiraTokenInContext(): boolean {
   if (ctx.jiraToken?.trim() && ctx.jiraCloudId?.trim()) return true;
   if (ctx.saasStrict) return false;
   return false;
+}
+
+export function hasGmailTokenInContext(): boolean {
+  const ctx = getConnectorContext();
+  return Boolean(ctx.gmailToken?.trim());
 }

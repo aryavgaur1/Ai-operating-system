@@ -38,6 +38,8 @@ export type IntentFamily =
   | 'slack_write'
   | 'slack_read'
   | 'notion'
+  | 'gmail_read'
+  | 'gmail_write'
   | 'launch'
   | 'incident'
   | 'reminder'
@@ -81,6 +83,8 @@ const FAMILY_ALLOWLIST: Record<IntentFamily, ToolName[]> = {
   slack_write: ['slack'],
   slack_read: ['slack'],
   notion: ['notion'],
+  gmail_read: ['gmail'],
+  gmail_write: ['gmail'],
   launch: ['slack', 'notion'],
   incident: ['slack', 'notion', 'jira'],
   reminder: ['slack'],
@@ -175,7 +179,7 @@ function detectRouteAction(query: string): RouteAction {
  * "Post a Slack update about the Notion integration" → Slack only.
  * "Create a Notion page documenting our Jira integration" → Notion only.
  */
-function destinations(query: string): { jira: boolean; slack: boolean; notion: boolean } {
+function destinations(query: string): { jira: boolean; slack: boolean; notion: boolean; gmail: boolean } {
   const t = query.toLowerCase();
 
   const slack =
@@ -194,7 +198,16 @@ function destinations(query: string): { jira: boolean; slack: boolean; notion: b
         /\b(create|open|file|log|track|update|delete|transition|assign|comment|ticket|issue)\b/.test(t)) ||
       (/\b(ticket|issue)\b/.test(t) && !/\b(slack|notion|channel|war\s*room|page|doc|message)\b/.test(t)));
 
-  return { jira, slack, notion };
+  // Gmail destination — explicit email/gmail language not claimed by other systems
+  const gmail =
+    !slack &&
+    !notion &&
+    !jira &&
+    (/\b(gmail|my email|my inbox|my emails)\b/.test(t) ||
+      (/\b(email|e-mail|mail)\b/.test(t) &&
+        /\b(search|find|show|read|get|latest|recent|send|draft|check|look|inbox)\b/.test(t)));
+
+  return { jira, slack, notion, gmail };
 }
 
 function ambiguousClarifyMessage(query: string, dest: ReturnType<typeof destinations>): string {
@@ -258,7 +271,7 @@ export function resolveAuthoritativeRoute(query: string): AuthoritativeRoute {
       mode: mode === 'question' ? 'clarify' : mode,
       family: 'meta',
       osIntent,
-      lockedTool: dest.jira ? 'jira' : dest.slack ? 'slack' : dest.notion ? 'notion' : null,
+      lockedTool: dest.jira ? 'jira' : dest.slack ? 'slack' : dest.notion ? 'notion' : dest.gmail ? 'gmail' : null,
       lockedAction: null,
       routeAction,
       entities,
@@ -340,7 +353,7 @@ export function resolveAuthoritativeRoute(query: string): AuthoritativeRoute {
   }
 
   // Cross-system collision without a clear primary → clarify
-  const destCount = [dest.jira, dest.slack, dest.notion].filter(Boolean).length;
+  const destCount = [dest.jira, dest.slack, dest.notion, dest.gmail].filter(Boolean).length;
   if (destCount >= 2 && osIntent.kind === 'simple_action') {
     // Exception: explicit Slack command that also mentions a Notion URL is Slack-only (handled in intent detector)
     if (!(isExplicitSlackCommand(query) && !isExplicitJiraCreate(query) && !/\bjira\b/i.test(query))) {
@@ -404,6 +417,30 @@ export function resolveAuthoritativeRoute(query: string): AuthoritativeRoute {
       ambiguous: false,
       allowWorkflow: false,
       rationale: 'Explicit Notion command',
+    };
+  }
+
+  // Gmail — email read/search/send commands
+  if (dest.gmail) {
+    const isSend = /\b(send|email|draft|reply)\b/i.test(query) && /\b(to|reply)\b/i.test(query);
+    return {
+      mode: 'execute',
+      family: isSend ? 'gmail_write' : 'gmail_read',
+      osIntent: {
+        ...osIntent,
+        kind: 'simple_action',
+        confidence: 0.95,
+        rationale: isSend ? 'Explicit Gmail send command' : 'Explicit Gmail read/search command',
+        legacyIntent: isSend ? 'action' : 'read',
+      },
+      lockedTool: 'gmail',
+      lockedAction: isSend ? 'sendEmail' : 'searchEmails',
+      routeAction: isSend ? 'post' : 'search',
+      entities,
+      confidence: 0.95,
+      ambiguous: false,
+      allowWorkflow: false,
+      rationale: isSend ? 'Locked gmail.sendEmail' : 'Locked gmail.searchEmails',
     };
   }
 

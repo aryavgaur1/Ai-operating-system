@@ -115,6 +115,12 @@ const DEFS: CapDef[] = [
   { connector: 'notion', action: 'createPRD', families: ['notion', 'launch'], rw: 'write', verify: 'get_created' },
   { connector: 'notion', action: 'createWiki', families: ['notion'], rw: 'write', verify: 'get_created' },
   { connector: 'notion', action: 'createRoadmap', families: ['notion', 'launch'], rw: 'write', verify: 'get_created' },
+
+  // —— Gmail ——
+  { connector: 'gmail', action: 'searchEmails', families: ['gmail_read', 'read_only'], rw: 'read', verify: 'none' },
+  { connector: 'gmail', action: 'getEmail', families: ['gmail_read', 'read_only'], rw: 'read', verify: 'none' },
+  { connector: 'gmail', action: 'getThread', families: ['gmail_read', 'read_only'], rw: 'read', verify: 'none' },
+  { connector: 'gmail', action: 'sendEmail', families: ['gmail_write'], rw: 'write', verify: 'external_confirm' },
 ];
 
 function toCapability(def: CapDef): Capability {

@@ -4,7 +4,7 @@ import { createLLMClient, type LLMMessage } from '../llmClient';
 import { runAgentTurn } from '../orchestrator';
 import { recall, listRecentMemory } from '../os/threadMemory';
 import { detectOsIntent, isExplicitSlackCommand, isExplicitNotionCommand } from '../os/intentDetector';
-import { getConnectorContext, hasSlackTokenInContext, hasNotionTokenInContext, hasJiraTokenInContext } from '@enterprise-ai-os/connectors';
+import { getConnectorContext, hasSlackTokenInContext, hasNotionTokenInContext, hasJiraTokenInContext, hasGmailTokenInContext } from '@enterprise-ai-os/connectors';
 
 // ============================================================
 // Nexora AI Service — single intelligence layer for app + marketing
@@ -151,7 +151,7 @@ export async function webSearch(query: string): Promise<{ ok: boolean; summary: 
 export async function buildContextPack(input: NexoraTurnInput): Promise<{
   text: string;
   sources: string[];
-  integrations: { slack: boolean; notion: boolean; jira: boolean };
+  integrations: { slack: boolean; notion: boolean; jira: boolean; gmail: boolean };
 }> {
   const sources: string[] = [];
   const parts: string[] = [];
@@ -159,6 +159,7 @@ export async function buildContextPack(input: NexoraTurnInput): Promise<{
     slack: false,
     notion: false,
     jira: false,
+    gmail: false,
   };
 
   try {
@@ -166,13 +167,17 @@ export async function buildContextPack(input: NexoraTurnInput): Promise<{
     integrations.slack = hasSlackTokenInContext() || Boolean(ctx.slackBotToken);
     integrations.notion = hasNotionTokenInContext() || Boolean(ctx.notionToken);
     integrations.jira = hasJiraTokenInContext() || Boolean(ctx.jiraToken);
+    integrations.gmail = hasGmailTokenInContext() || Boolean(ctx.gmailToken);
   } catch {
     // public / no ALS
   }
 
   if (input.mode === 'authenticated') {
+    const gmailAccount = (() => {
+      try { const ctx = getConnectorContext(); return ctx.gmailEmail ?? null; } catch { return null; }
+    })();
     parts.push(
-      `Connected integrations: Slack=${integrations.slack ? 'yes' : 'no'}, Notion=${integrations.notion ? 'yes' : 'no'}, Jira=${integrations.jira ? 'yes' : 'no'}.`
+      `Connected integrations: Slack=${integrations.slack ? 'yes' : 'no'}, Notion=${integrations.notion ? 'yes' : 'no'}, Jira=${integrations.jira ? 'yes' : 'no'}, Gmail=${integrations.gmail ? `yes (${gmailAccount ?? 'connected'})` : 'no'}.`
     );
   }
 

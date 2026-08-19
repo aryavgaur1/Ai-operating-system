@@ -10,6 +10,7 @@ import {
   slackService,
 } from '@enterprise-ai-os/connectors';
 import { resolveFreshJiraAuth } from './jiraAuth';
+import { resolveFreshGmailAuth } from './gmailAuth';
 
 type AuthUser = {
   id: string;
@@ -27,6 +28,9 @@ export async function withUserConnectorContext<T>(user: AuthUser, fn: () => Prom
   let jiraCloudId: string | undefined;
   let jiraSiteUrl: string | undefined;
   let jiraAuthError: string | undefined;
+  let gmailToken: string | undefined;
+  let gmailEmail: string | null | undefined;
+  let gmailAuthError: string | undefined;
 
   if (demoMode) {
     try {
@@ -90,6 +94,22 @@ export async function withUserConnectorContext<T>(user: AuthUser, fn: () => Prom
         message: jiraAuthError,
       });
     }
+
+    try {
+      const gmail = await resolveFreshGmailAuth(user.organizationId, user.id);
+      if (gmail) {
+        gmailToken = gmail.accessToken;
+        gmailEmail = gmail.googleEmail;
+        void touchConnectionLastUsed(user.organizationId, 'gmail', user.id);
+      }
+    } catch (err: unknown) {
+      gmailAuthError = err instanceof Error ? err.message : String(err);
+      console.warn('[withUserConnectors] gmail_auth_error', {
+        organizationId: user.organizationId,
+        userId: user.id,
+        message: gmailAuthError,
+      });
+    }
   }
 
   return runWithConnectorContext(
@@ -102,6 +122,9 @@ export async function withUserConnectorContext<T>(user: AuthUser, fn: () => Prom
       jiraToken,
       jiraCloudId,
       jiraSiteUrl,
+      gmailToken,
+      gmailEmail,
+      gmailAuthError,
       saasStrict: !demoMode,
       jiraAuthError,
     },

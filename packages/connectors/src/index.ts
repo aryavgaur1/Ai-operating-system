@@ -30,6 +30,7 @@ export {
   hasSlackTokenInContext,
   hasNotionTokenInContext,
   hasJiraTokenInContext,
+  hasGmailTokenInContext,
 } from './context';
 
 export const connectorRegistry: Record<ToolName, ToolConnector> = {

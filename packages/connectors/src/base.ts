@@ -1,5 +1,10 @@
 import type { ToolCallResult, ToolName } from '@enterprise-ai-os/shared';
-import { hasJiraTokenInContext, hasNotionTokenInContext, hasSlackTokenInContext } from './context';
+import {
+  hasGmailTokenInContext,
+  hasJiraTokenInContext,
+  hasNotionTokenInContext,
+  hasSlackTokenInContext,
+} from './context';
 
 // ============================================================
 // ToolConnector — common interface for third-party integrations.
@@ -9,10 +14,10 @@ import { hasJiraTokenInContext, hasNotionTokenInContext, hasSlackTokenInContext 
 // ============================================================
 
 /** Tools with real OAuth + execute paths in production. */
-export const PRODUCTION_LIVE_TOOLS: readonly ToolName[] = ['slack', 'jira', 'notion'];
+export const PRODUCTION_LIVE_TOOLS: readonly ToolName[] = ['slack', 'jira', 'notion', 'gmail'];
 
 /** Tools that must never be proposed or shown as connectable. */
-export const NOT_IMPLEMENTED_TOOLS: readonly ToolName[] = ['gmail', 'salesforce'];
+export const NOT_IMPLEMENTED_TOOLS: readonly ToolName[] = ['salesforce'];
 
 export function isProductionLiveTool(tool: ToolName): boolean {
   return (PRODUCTION_LIVE_TOOLS as readonly string[]).includes(tool);
@@ -85,6 +90,7 @@ export function isLiveMode(tool?: ToolName): boolean {
   if (tool === 'slack' && hasSlackTokenInContext()) return true;
   if (tool === 'notion' && hasNotionTokenInContext()) return true;
   if (tool === 'jira' && hasJiraTokenInContext()) return true;
+  if (tool === 'gmail' && hasGmailTokenInContext()) return true;
 
   if (tool === 'slack' && process.env.SLACK_BOT_TOKEN?.trim()) {
     const override = process.env.SLACK_MODE;

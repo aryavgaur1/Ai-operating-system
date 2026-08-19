@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { Plug } from 'lucide-react';
 import { api, getAccessToken, oauthConnectUrl, type IntegrationStatus } from '@/lib/api';
@@ -40,9 +41,9 @@ const CATALOG: Array<{
   {
     tool: 'gmail',
     label: 'Gmail',
-    description: 'Not implemented — email send/read is not available yet.',
-    actions: [],
-    implemented: false,
+    description: 'Search, read, and send emails directly from Nexora chat.',
+    actions: ['searchEmails', 'getEmail', 'getThread', 'sendEmail'],
+    implemented: true,
   },
   {
     tool: 'salesforce',
@@ -169,6 +170,7 @@ function SmoothToggle({
 }
 
 export default function IntegrationsPage() {
+  const searchParams = useSearchParams();
   const [meta, setMeta] = useState<Record<string, IntegrationStatus>>({});
   const [enabled, setEnabled] = useState<Record<ToolId, boolean>>(DEFAULT_ENABLED);
   const [error, setError] = useState<string | null>(null);
@@ -177,6 +179,29 @@ export default function IntegrationsPage() {
   const [hydrated, setHydrated] = useState(false);
   const [notionToken, setNotionToken] = useState('');
   const [savingNotion, setSavingNotion] = useState(false);
+
+  // Handle OAuth callback redirects (?connected=gmail or ?error=...)
+  useEffect(() => {
+    const connected = searchParams?.get('connected');
+    const oauthError = searchParams?.get('error');
+    if (connected) {
+      setInfo(`${connected.charAt(0).toUpperCase() + connected.slice(1)} connected successfully.`);
+      // Clean URL without triggering re-render loop
+      if (typeof window !== 'undefined') {
+        const url = new URL(window.location.href);
+        url.searchParams.delete('connected');
+        window.history.replaceState({}, '', url.toString());
+      }
+    }
+    if (oauthError) {
+      setError(decodeURIComponent(oauthError));
+      if (typeof window !== 'undefined') {
+        const url = new URL(window.location.href);
+        url.searchParams.delete('error');
+        window.history.replaceState({}, '', url.toString());
+      }
+    }
+  }, [searchParams]);
 
   async function refresh() {
     const res = await api.listIntegrations();
@@ -212,7 +237,7 @@ export default function IntegrationsPage() {
   async function toggle(tool: ToolId) {
     if (busy) return;
     const row = meta[tool];
-    const isOauthTool = tool === 'slack' || tool === 'notion' || tool === 'jira';
+    const isOauthTool = tool === 'slack' || tool === 'notion' || tool === 'jira' || tool === 'gmail';
     const actuallyConnected = row?.status === 'active';
     // If OAuth tool isn't really connected, always start Connect (ignore stale ON UI).
     const turningOn = isOauthTool ? !actuallyConnected : !enabled[tool];
@@ -240,7 +265,7 @@ export default function IntegrationsPage() {
           setEnabled((prev) => ({ ...prev, [tool]: false }));
           return;
         }
-        setError(`${tool} is not implemented — Slack, Notion, and Jira are available now.`);
+        setError(`${tool} is not implemented — Slack, Notion, Jira, and Gmail are available now.`);
         setEnabled((prev) => ({ ...prev, [tool]: false }));
         return;
       } else {
@@ -286,6 +311,9 @@ export default function IntegrationsPage() {
   const notionConnectUrl = meta.notion?.connectUrl;
   const jiraActive = meta.jira?.status === 'active';
   const jiraConnectUrl = meta.jira?.connectUrl || oauthConnectUrl('jira');
+  const gmailActive = meta.gmail?.status === 'active';
+  const gmailConnectUrl = meta.gmail?.connectUrl || oauthConnectUrl('gmail');
+  const gmailAccount = meta.gmail?.workspaceName ?? null;
 
   return (
     <div className="space-y-6 pb-10">
@@ -296,8 +324,8 @@ export default function IntegrationsPage() {
           </span>
           <h1 className="font-display mt-4 text-3xl font-semibold text-white sm:text-4xl">Integrations</h1>
           <p className="mt-3 max-w-2xl text-sm leading-7 text-neutral-400">
-            Connect Slack, Notion, and Jira with OAuth. After Notion Allow, share at least one page with the
-            integration (page ··· → Connections) so Chat can create docs.
+            Connect Slack, Notion, Jira, and Gmail with OAuth. Each connector uses your personal credentials —
+            your data stays isolated from other users.
           </p>
         </GlassCard>
       </Reveal>
@@ -460,6 +488,109 @@ export default function IntegrationsPage() {
           >
             Reconnect Jira
           </button>
+        )}
+      </GlassCard>
+
+      {/* ── Gmail card ───────────────────────────────────────────── */}
+      <GlassCard className="p-6 sm:p-7" hoverLift={false}>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex items-start gap-4">
+            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/5 p-2.5">
+              <GmailLogo className="h-full w-full" />
+            </div>
+            <div>
+              <h2 className="font-display text-xl font-semibold text-white sm:text-2xl">Gmail</h2>
+              <p className="mt-1 max-w-2xl text-sm text-neutral-400">
+                Connect your Gmail account so Nexora can search, read, and send emails on your behalf from Chat.
+                Each user connects their own Gmail — tokens are encrypted and never shared across accounts.
+              </p>
+            </div>
+          </div>
+          <span
+            className={cn(
+              'shrink-0 rounded-full px-3 py-1 text-[11px] uppercase tracking-[0.18em]',
+              gmailActive
+                ? 'bg-emerald-400/15 text-emerald-300'
+                : 'border border-white/10 bg-white/5 text-neutral-400'
+            )}
+          >
+            {gmailActive ? '● Connected' : 'Not connected'}
+          </span>
+        </div>
+
+        {gmailActive ? (
+          <div className="mt-5 space-y-3">
+            <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/5 p-4 text-sm text-emerald-200">
+              <p className="font-medium">Gmail connected</p>
+              {gmailAccount && (
+                <p className="mt-1 text-xs text-emerald-300/80">Connected account: {gmailAccount}</p>
+              )}
+              <p className="mt-1 text-xs text-emerald-200/70">
+                You can now ask Nexora: &ldquo;Find the latest email from Acme&rdquo; or
+                &ldquo;Send Rahul an email saying the meeting moved to 4 PM.&rdquo;
+              </p>
+            </div>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  if (gmailConnectUrl) window.location.href = gmailConnectUrl;
+                  else setError('Gmail OAuth URL not available — sign in again, then retry.');
+                }}
+                className="rounded-full border border-white/15 bg-white/5 px-4 py-2 text-sm text-white hover:bg-white/10 disabled:opacity-40"
+              >
+                Reconnect Gmail
+              </button>
+              <button
+                type="button"
+                disabled={busy === 'gmail'}
+                onClick={async () => {
+                  setBusy('gmail');
+                  setError(null);
+                  setInfo(null);
+                  try {
+                    await api.disconnectIntegration('gmail');
+                    setInfo('Gmail disconnected from Nexora.');
+                    await refresh();
+                  } catch (err: unknown) {
+                    setError(err instanceof Error ? err.message : 'Disconnect failed');
+                  } finally {
+                    setBusy(null);
+                  }
+                }}
+                className="rounded-full border border-rose-500/30 px-4 py-2 text-sm text-rose-300 hover:bg-rose-500/10 disabled:opacity-40"
+              >
+                {busy === 'gmail' ? 'Disconnecting…' : 'Disconnect'}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-5 rounded-2xl border border-accent/30 bg-accent/5 p-4">
+            <p className="text-xs leading-5 text-neutral-400">
+              Uses the existing Google OAuth app (
+              <code className="text-neutral-300">GOOGLE_CLIENT_ID</code>). You must add this callback URI to your
+              Google Cloud Console → OAuth client → Authorized redirect URIs:
+            </p>
+            <code className="mt-2 block break-all rounded-lg bg-black/40 px-3 py-2 text-[11px] text-neutral-300">
+              {(process.env.NEXT_PUBLIC_API_URL ?? 'https://your-api.railway.app')}/oauth/gmail/callback
+            </code>
+            <p className="mt-3 text-xs text-neutral-500">
+              Also set <code className="text-neutral-400">GOOGLE_GMAIL_REDIRECT_URI</code> on Railway to that same URL.
+              Required Gmail scopes: <code className="text-neutral-400">gmail.readonly</code>,{' '}
+              <code className="text-neutral-400">gmail.send</code>.
+            </p>
+            <button
+              type="button"
+              disabled={!gmailConnectUrl}
+              onClick={() => {
+                if (gmailConnectUrl) window.location.href = gmailConnectUrl;
+                else setError('Gmail OAuth URL not available — sign in again, then retry Connect');
+              }}
+              className="mt-4 rounded-full bg-accent px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
+            >
+              Connect Gmail
+            </button>
+          </div>
         )}
       </GlassCard>
 

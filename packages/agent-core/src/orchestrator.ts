@@ -148,6 +148,28 @@ function formatReply(executedCalls: AgentTurnResult['executedCalls'], plan: Agen
       }
       return `✅ Notion ${call.action} completed${id}.${url}`;
     }
+    if (call.tool === 'gmail') {
+      if (call.action === 'searchEmails') {
+        const emails = (output?.emails as unknown[]) ?? [];
+        const query = output?.query ? ` for "${output.query}"` : '';
+        const account = output?.account ? ` (${output.account})` : '';
+        return `Found ${emails.length} email(s)${query}${account}.`;
+      }
+      if (call.action === 'getThread') {
+        const count = Number(output?.messageCount ?? 0);
+        return `Retrieved Gmail thread with ${count} message(s).`;
+      }
+      if (call.action === 'sendEmail') {
+        const to = output?.to ? ` to ${output.to}` : '';
+        const subject = output?.subject ? ` — "${output.subject}"` : '';
+        const url = output?.url ? ` ${output.url}` : '';
+        return `✅ Email sent${to}${subject}.${url}`;
+      }
+      if (call.action === 'getEmail') {
+        return `Retrieved email.`;
+      }
+      return `✅ gmail.${call.action} completed.`;
+    }
     const url = output?.url ? ` ${output.url}` : '';
     return `✅ ${call.tool}.${call.action} completed.${url}`;
   });
