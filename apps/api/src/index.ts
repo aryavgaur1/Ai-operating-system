@@ -52,12 +52,12 @@ const SAAS_MODE = (process.env.SAAS_MODE ?? 'true') === 'true';
 const WEB_APP_URL_RAW = (
   process.env.WEB_APP_URL ??
   (process.env.RAILWAY_ENVIRONMENT || process.env.NODE_ENV === 'production'
-    ? 'https://nexoraos-ai.vercel.app'
+    ? 'https://nexoraos.co.in'
     : 'http://localhost:3000')
 ).replace(/\/$/, '');
 // Never treat retired Netlify as the canonical web origin.
 const WEB_APP_URL = /^https:\/\/[a-z0-9-]+\.netlify\.app$/i.test(WEB_APP_URL_RAW)
-  ? 'https://nexoraos-ai.vercel.app'
+  ? 'https://nexoraos.co.in'
   : WEB_APP_URL_RAW;
 const EXTRA_ORIGINS = (process.env.CORS_ORIGINS ?? '')
   .split(',')

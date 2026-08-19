@@ -13,7 +13,7 @@ export function randomToken(bytes = 32): string {
 }
 
 /** Canonical production web app (Vercel). Never default to Netlify. */
-export const CANONICAL_WEB_APP_URL = 'https://nexoraos-ai.vercel.app';
+export const CANONICAL_WEB_APP_URL = 'https://nexoraos.co.in';
 
 /** Old Netlify host — treat as retired; never redirect users here. */
 const RETIRED_NETLIFY_ORIGIN = 'https://try-nexora.netlify.app';
@@ -75,6 +75,7 @@ export function resolveReturnOrigin(candidate: string | null | undefined): strin
     const allowed = allowedWebOrigins();
     if (allowed.includes(origin)) return origin;
     if (/^https:\/\/[a-z0-9-]+\.vercel\.app$/i.test(origin)) return origin;
+    if (/^https:\/\/nexoraos\.co\.in$/i.test(origin)) return origin;
     if (/^https:\/\/[a-z0-9-]+\.netlify\.app$/i.test(origin)) return origin;
   } catch {
     // ignore
