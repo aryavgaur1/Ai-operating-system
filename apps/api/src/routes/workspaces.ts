@@ -28,11 +28,9 @@ function invitationEmailError(email: {
 }): AppError {
   const detail =
     email.hint ||
-    (email.errorCode === 'resend_domain_unverified'
-      ? 'Email provider requires a verified domain. Set EMAIL_FROM to a verified sender on Railway and Vercel.'
-      : email.errorCode
-        ? `Email delivery failed (${email.errorCode}).`
-        : `Email delivery failed (${email.mode}).`);
+    (email.errorCode
+      ? `Gmail SMTP delivery failed (${email.errorCode}).`
+      : `Email delivery failed (${email.mode}).`);
   return new AppError(`Invitation could not be sent. ${detail}`, 502);
 }
 

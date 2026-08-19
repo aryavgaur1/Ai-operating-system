@@ -82,13 +82,9 @@ export default function WorkspaceSettingsPage() {
     }
     const hint =
       res.email.hint ||
-      (res.email.errorCode === 'resend_domain_unverified'
-        ? 'Resend is in test mode — verify a domain at resend.com/domains and set EMAIL_FROM on the API and Vercel.'
-        : null);
+      `Gmail SMTP delivery failed (${res.email.errorCode || res.email.mode}). Check EMAIL_USER and EMAIL_PASS on the API service.`;
     setMessage(
-      hint
-        ? `Invitation ${verb}, but email was not delivered. ${hint} Share the accept link below.`
-        : `Invitation ${verb}, but email was not delivered (${res.email.mode}${res.email.errorCode ? `: ${res.email.errorCode}` : ''}). Share the accept link below. Gmail SMTP does not work on Railway — use Resend with a verified domain.`
+      `Invitation ${verb}, but email was not delivered. ${hint} Share the accept link below.`
     );
     if (res.acceptToken) {
       const origin = typeof window !== 'undefined' ? window.location.origin : '';

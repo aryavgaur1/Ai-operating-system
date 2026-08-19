@@ -3,103 +3,46 @@ import { logger } from './logger';
 import { webAppUrl } from './authTokens';
 import { getPlatformAdminEmail } from './platformAdmin';
 
-type SmtpProfile = {
-  label: string;
-  port: number;
-  secure: boolean;
-  requireTLS?: boolean;
+// ─── SMTP configuration ───────────────────────────────────────────────────────
+// Gmail SMTP is the single production email provider.
+// No Resend. No relay. No fallback. No provider switching.
+//
+// Required environment variables on Railway:
+//   EMAIL_USER   — Gmail address (e.g. yourname@gmail.com)
+//   EMAIL_PASS   — Gmail App Password (16-char, spaces stripped)
+//   EMAIL_FROM   — Display sender  (e.g. "Nexora OS <yourname@gmail.com>")
+//   WEB_APP_URL  — https://ai-lilac-phi.vercel.app
+
+const SMTP_TIMEOUT_MS = 15_000;
+
+// Try port 465 (TLS) first, then 587 (STARTTLS).
+// Railway blocks both — the health endpoint reports the exact TCP error.
+const SMTP_PROFILES = [
+  { label: 'gmail-465', port: 465, secure: true,  requireTLS: false },
+  { label: 'gmail-587', port: 587, secure: false, requireTLS: true  },
+] as const;
+
+export type EmailDeliveryResult = {
+  delivered: boolean;
+  mode: 'smtp' | 'console_fallback' | 'failed';
+  errorCode?: string;
+  profile?: string;
+  /** Safe, user-facing guidance (no secrets). */
+  hint?: string;
 };
 
-const SMTP_TIMEOUT_MS = 12_000;
-const SMTP_PROFILES: SmtpProfile[] = [
-  { label: 'gmail-465', port: 465, secure: true },
-  { label: 'gmail-587', port: 587, secure: false, requireTLS: true },
-];
-
-let _transporter: nodemailer.Transporter | null = null;
-let _activeProfile: string | null = null;
-
-export type EmailProviderMode = 'resend' | 'smtp' | 'none';
-
-/** Last email outcome for /health (no secrets, no bodies). */
+/** Last email outcome — exposed via /health (no secrets, no bodies). */
 let lastEmailDiag: {
   at: string;
   delivered: boolean;
-  mode: 'smtp' | 'resend' | 'console_fallback' | 'failed' | 'verify';
+  mode: 'smtp' | 'console_fallback' | 'failed' | 'verify';
   profile?: string | null;
   errorCode?: string | null;
 } | null = null;
 
-function normalizeProvider(raw: string | undefined): EmailProviderMode | null {
-  const v = String(raw || '').trim().toLowerCase();
-  if (v === 'resend') return 'resend';
-  if (v === 'smtp') return 'smtp';
-  if (v === 'none' || v === 'console') return 'none';
-  return null;
-}
+let _activeProfile: string | null = null;
 
-const RESEND_TEST_SENDER = 'onboarding@resend.dev';
-
-/** Deterministic provider selection — EMAIL_PROVIDER must be set explicitly. */
-export function resolveEmailProvider(): {
-  mode: EmailProviderMode;
-  configured: boolean;
-  missing: string[];
-  explicit: boolean;
-} {
-  const explicit = normalizeProvider(process.env.EMAIL_PROVIDER);
-  const hasResend = Boolean(resendApiKey());
-  const hasSmtp = Boolean(emailCredentials());
-  const missing: string[] = [];
-
-  if (!explicit) {
-    return {
-      mode: 'none',
-      configured: false,
-      missing: ['EMAIL_PROVIDER'],
-      explicit: false,
-    };
-  }
-
-  if (explicit === 'resend') {
-    if (!hasResend) missing.push('RESEND_API_KEY');
-    const from = (process.env.EMAIL_FROM ?? '').trim();
-    if (!from) missing.push('EMAIL_FROM');
-    else if (from.includes(RESEND_TEST_SENDER)) missing.push('EMAIL_FROM_verified_domain');
-    return { mode: 'resend', configured: missing.length === 0, missing, explicit: true };
-  }
-  if (explicit === 'smtp') {
-    if (!hasSmtp) missing.push('EMAIL_USER', 'EMAIL_PASS');
-    return { mode: 'smtp', configured: hasSmtp, missing, explicit: true };
-  }
-  return { mode: 'none', configured: false, missing: [], explicit: true };
-}
-
-export function getEmailDiagnostics() {
-  const selection = resolveEmailProvider();
-  return {
-    configured: selection.configured,
-    provider: selection.mode,
-    providerExplicit: selection.explicit,
-    providerMissing: selection.missing,
-    resendKeyPresent: Boolean(resendApiKey()),
-    emailFromConfigured: Boolean((process.env.EMAIL_FROM ?? '').trim()),
-    smtpConfigured: Boolean(emailCredentials()),
-    last: lastEmailDiag,
-    activeProfile: _activeProfile,
-  };
-}
-
-function resendApiKey(): string | null {
-  // Accept common aliases / accidental quoting from Railway paste.
-  const raw =
-    process.env.RESEND_API_KEY ??
-    process.env.RESEND_KEY ??
-    process.env.RESEND_TOKEN ??
-    '';
-  const key = String(raw).trim().replace(/^["']|["']$/g, '');
-  return key || null;
-}
+// ─── Credential helpers ───────────────────────────────────────────────────────
 
 function emailCredentials(): { user: string; pass: string } | null {
   const user = (process.env.EMAIL_USER ?? '').trim();
@@ -116,7 +59,28 @@ function mailFromAddress(): string {
   return 'Nexora OS <noreply@localhost>';
 }
 
-function buildTransport(profile: SmtpProfile, creds: { user: string; pass: string }) {
+// ─── Health / diagnostics ─────────────────────────────────────────────────────
+
+export function getEmailDiagnostics() {
+  const creds = emailCredentials();
+  return {
+    configured: Boolean(creds),
+    provider: 'smtp',
+    smtpConfigured: Boolean(creds),
+    emailUserConfigured: Boolean((process.env.EMAIL_USER ?? '').trim()),
+    emailPassConfigured: Boolean((process.env.EMAIL_PASS ?? '').trim()),
+    emailFromConfigured: Boolean((process.env.EMAIL_FROM ?? '').trim()),
+    last: lastEmailDiag,
+    activeProfile: _activeProfile,
+  };
+}
+
+// ─── Transport helpers ────────────────────────────────────────────────────────
+
+function buildTransport(
+  profile: (typeof SMTP_PROFILES)[number],
+  creds: { user: string; pass: string }
+) {
   return nodemailer.createTransport({
     host: 'smtp.gmail.com',
     port: profile.port,
@@ -130,23 +94,15 @@ function buildTransport(profile: SmtpProfile, creds: { user: string; pass: strin
   });
 }
 
-function resetTransporter() {
-  _transporter = null;
-  _activeProfile = null;
-}
-
-async function sendMailWithTimeout(
-  transporter: nodemailer.Transporter,
-  mail: nodemailer.SendMailOptions
-): Promise<nodemailer.SentMessageInfo> {
+async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
-      transporter.sendMail(mail),
+      promise,
       new Promise<never>((_, reject) => {
         timer = setTimeout(
-          () => reject(Object.assign(new Error('SMTP send timed out'), { code: 'ETIMEDOUT' })),
-          SMTP_TIMEOUT_MS + 2_000
+          () => reject(Object.assign(new Error(`${label} timed out after ${ms}ms`), { code: 'ETIMEDOUT' })),
+          ms
         );
       }),
     ]);
@@ -155,241 +111,23 @@ async function sendMailWithTimeout(
   }
 }
 
-async function verifyWithTimeout(transporter: nodemailer.Transporter): Promise<void> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    await Promise.race([
-      transporter.verify(),
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(
-          () => reject(Object.assign(new Error('SMTP verify timed out'), { code: 'ETIMEDOUT' })),
-          SMTP_TIMEOUT_MS + 2_000
-        );
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
+// ─── SMTP probe (health check) ────────────────────────────────────────────────
 
-export type EmailDeliveryResult = {
-  delivered: boolean;
-  mode: 'smtp' | 'resend' | 'resend_relay' | 'console_fallback' | 'failed';
-  errorCode?: string;
-  profile?: string;
-  /** Resend message id when available (safe to log). */
-  providerMessageId?: string;
-  /** Safe, user-facing guidance (no secrets). */
-  hint?: string;
-};
-
-const RESEND_DOMAIN_HINT =
-  'Resend is in test mode (onboarding@resend.dev only reaches the Resend account owner). Verify a domain at resend.com/domains, then set EMAIL_FROM to an address on that domain on the API and Vercel.';
-
-function resendFailureMeta(message: string | undefined, errorCode: string): {
-  errorCode: string;
-  hint?: string;
-} {
-  const m = (message || '').toLowerCase();
-  if (
-    m.includes('verify a domain') ||
-    m.includes('only send testing emails') ||
-    m.includes('domain is not verified') ||
-    m.includes('from address is not verified')
-  ) {
-    return { errorCode: 'resend_domain_unverified', hint: RESEND_DOMAIN_HINT };
-  }
-  return { errorCode };
-}
-
-async function sendViaResend(opts: {
-  to: string;
-  subject: string;
-  html: string;
-  text?: string;
-}): Promise<EmailDeliveryResult> {
-  const key = resendApiKey();
-  if (!key) return { delivered: false, mode: 'failed', errorCode: 'resend_not_configured' };
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), SMTP_TIMEOUT_MS + 2_000);
-  try {
-    const res = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      signal: controller.signal,
-      headers: {
-        Authorization: `Bearer ${key}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        from: mailFromAddress(),
-        to: [opts.to],
-        subject: opts.subject,
-        html: opts.html,
-        ...(opts.text ? { text: opts.text } : {}),
-      }),
-    });
-    const bodyText = await res.text();
-    let parsed: any = null;
-    try {
-      parsed = JSON.parse(bodyText);
-    } catch {
-      // ignore
-    }
-    if (!res.ok) {
-      const rawCode = String(parsed?.name || parsed?.statusCode || `resend_http_${res.status}`);
-      const message = String(parsed?.message || bodyText.slice(0, 200));
-      const { errorCode, hint } = resendFailureMeta(message, rawCode);
-      lastEmailDiag = {
-        at: new Date().toISOString(),
-        delivered: false,
-        mode: 'failed',
-        profile: 'resend',
-        errorCode,
-      };
-      logger.error('email.failed', {
-        to: opts.to,
-        subject: opts.subject,
-        profile: 'resend',
-        code: errorCode,
-        message,
-      });
-      return { delivered: false, mode: 'failed', errorCode, profile: 'resend', hint };
-    }
-    const providerMessageId =
-      typeof parsed?.id === 'string' ? parsed.id : undefined;
-    _activeProfile = 'resend';
-    lastEmailDiag = {
-      at: new Date().toISOString(),
-      delivered: true,
-      mode: 'resend',
-      profile: 'resend',
-      errorCode: null,
-    };
-    logger.info('email.sent', {
-      to: opts.to,
-      subject: opts.subject,
-      profile: 'resend',
-      providerMessageId,
-    });
-    return { delivered: true, mode: 'resend', profile: 'resend', providerMessageId };
-  } catch (err) {
-    const e = err as Error & { code?: string; name?: string };
-    const errorCode = e.name === 'AbortError' ? 'ETIMEDOUT' : e.code || 'resend_error';
-    lastEmailDiag = {
-      at: new Date().toISOString(),
-      delivered: false,
-      mode: 'failed',
-      profile: 'resend',
-      errorCode,
-    };
-    logger.error('email.failed', {
-      to: opts.to,
-      subject: opts.subject,
-      profile: 'resend',
-      code: errorCode,
-      message: e.message,
-    });
-    return { delivered: false, mode: 'failed', errorCode, profile: 'resend' };
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-/** Probe email delivery path from this runtime (used by /health?probeSmtp=1). */
 export async function probeSmtpConnectivity(): Promise<{
   ok: boolean;
   profile?: string;
   errorCode?: string;
+  errorMessage?: string;
   missing?: string[];
 }> {
-  const selection = resolveEmailProvider();
-  if (!selection.explicit || selection.missing.length) {
-    return {
-      ok: false,
-      errorCode: 'provider_misconfigured',
-      missing: selection.explicit ? selection.missing : ['EMAIL_PROVIDER'],
-    };
-  }
-  if (selection.mode === 'none') {
-    return { ok: false, errorCode: 'not_configured' };
-  }
-  if (selection.mode === 'resend') {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 10_000);
-    try {
-      // Send-only Resend keys return 401 on /api-keys — that still means the key is present.
-      // Prefer a cheap authenticated domains list; accept restricted_api_key as configured.
-      const res = await fetch('https://api.resend.com/domains', {
-        method: 'GET',
-        signal: controller.signal,
-        headers: { Authorization: `Bearer ${resendApiKey()}` },
-      });
-      const bodyText = await res.text();
-      let parsed: any = null;
-      try {
-        parsed = JSON.parse(bodyText);
-      } catch {
-        // ignore
-      }
-      if (res.ok || parsed?.name === 'restricted_api_key' || res.status === 403) {
-        _activeProfile = 'resend';
-        lastEmailDiag = {
-          at: new Date().toISOString(),
-          delivered: true,
-          mode: 'verify',
-          profile: 'resend',
-          errorCode: null,
-        };
-        return { ok: true, profile: 'resend' };
-      }
-      if (res.status === 401 && parsed?.name !== 'restricted_api_key') {
-        lastEmailDiag = {
-          at: new Date().toISOString(),
-          delivered: false,
-          mode: 'verify',
-          profile: 'resend',
-          errorCode: 'resend_unauthorized',
-        };
-        return { ok: false, profile: 'resend', errorCode: 'resend_unauthorized' };
-      }
-      // Any other response: key reached Resend over HTTPS
-      _activeProfile = 'resend';
-      lastEmailDiag = {
-        at: new Date().toISOString(),
-        delivered: true,
-        mode: 'verify',
-        profile: 'resend',
-        errorCode: null,
-      };
-      return { ok: true, profile: 'resend' };
-    } catch (err) {
-      const e = err as Error & { name?: string };
-      const errorCode = e.name === 'AbortError' ? 'ETIMEDOUT' : 'resend_unreachable';
-      lastEmailDiag = {
-        at: new Date().toISOString(),
-        delivered: false,
-        mode: 'verify',
-        profile: 'resend',
-        errorCode,
-      };
-      return { ok: false, profile: 'resend', errorCode };
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-
-  if (selection.mode !== 'smtp') {
-    return { ok: false, errorCode: 'smtp_not_selected' };
-  }
-
   const creds = emailCredentials();
-  if (!creds) return { ok: false, errorCode: 'not_configured', missing: ['EMAIL_USER', 'EMAIL_PASS'] };
-
+  if (!creds) {
+    return { ok: false, errorCode: 'not_configured', missing: ['EMAIL_USER', 'EMAIL_PASS'] };
+  }
   for (const profile of SMTP_PROFILES) {
     const transporter = buildTransport(profile, creds);
     try {
-      await verifyWithTimeout(transporter);
-      _transporter = transporter;
+      await withTimeout(transporter.verify(), SMTP_TIMEOUT_MS, `smtp-verify-${profile.label}`);
       _activeProfile = profile.label;
       lastEmailDiag = {
         at: new Date().toISOString(),
@@ -401,7 +139,7 @@ export async function probeSmtpConnectivity(): Promise<{
       return { ok: true, profile: profile.label };
     } catch (err) {
       const e = err as Error & { code?: string; responseCode?: number };
-      const errorCode = e.code || (e.responseCode ? `smtp_${e.responseCode}` : 'unknown');
+      const errorCode = e.code || (e.responseCode ? `smtp_${e.responseCode}` : 'smtp_error');
       logger.warn('email.smtp_probe_failed', {
         profile: profile.label,
         code: errorCode,
@@ -416,9 +154,120 @@ export async function probeSmtpConnectivity(): Promise<{
       };
     }
   }
-  resetTransporter();
-  return { ok: false, errorCode: lastEmailDiag?.errorCode || 'unreachable' };
+  return {
+    ok: false,
+    errorCode: lastEmailDiag?.errorCode || 'unreachable',
+    errorMessage:
+      'Gmail SMTP is unreachable from this runtime. On Railway, outbound SMTP (ports 465/587) is blocked by the platform firewall. Use a transactional email provider (e.g. SendGrid, Mailgun, AWS SES) with HTTP API delivery, or configure a custom SMTP relay that accepts connections from Railway.',
+  };
 }
+
+// ─── Core send ────────────────────────────────────────────────────────────────
+
+async function sendViaSMTP(opts: {
+  to: string;
+  subject: string;
+  html: string;
+  text?: string;
+}): Promise<EmailDeliveryResult> {
+  const creds = emailCredentials();
+  if (!creds) {
+    return {
+      delivered: false,
+      mode: 'failed',
+      errorCode: 'smtp_not_configured',
+      hint: 'Set EMAIL_USER and EMAIL_PASS (Gmail App Password) on the API service.',
+    };
+  }
+
+  const mail: nodemailer.SendMailOptions = {
+    from: mailFromAddress(),
+    to: opts.to,
+    subject: opts.subject,
+    html: opts.html,
+    ...(opts.text ? { text: opts.text } : {}),
+  };
+
+  for (const profile of SMTP_PROFILES) {
+    const transporter = buildTransport(profile, creds);
+    try {
+      const info = await withTimeout(
+        transporter.sendMail(mail),
+        SMTP_TIMEOUT_MS + 2_000,
+        `smtp-send-${profile.label}`
+      );
+      _activeProfile = profile.label;
+      lastEmailDiag = {
+        at: new Date().toISOString(),
+        delivered: true,
+        mode: 'smtp',
+        profile: profile.label,
+        errorCode: null,
+      };
+      logger.info('email.sent', {
+        to: opts.to,
+        subject: opts.subject,
+        profile: profile.label,
+        messageId: info?.messageId,
+      });
+      return { delivered: true, mode: 'smtp', profile: profile.label };
+    } catch (err) {
+      const e = err as Error & { code?: string; responseCode?: number };
+      const errorCode = e.code || (e.responseCode ? `smtp_${e.responseCode}` : 'smtp_error');
+      logger.error('email.failed', {
+        to: opts.to,
+        subject: opts.subject,
+        profile: profile.label,
+        code: errorCode,
+        message: e.message,
+      });
+      lastEmailDiag = {
+        at: new Date().toISOString(),
+        delivered: false,
+        mode: 'failed',
+        profile: profile.label,
+        errorCode,
+      };
+    }
+  }
+
+  const lastCode = lastEmailDiag?.errorCode || 'smtp_unreachable';
+  const isRailwayBlock =
+    lastCode === 'ETIMEDOUT' || lastCode === 'ESOCKET' || lastCode === 'ECONNREFUSED';
+
+  return {
+    delivered: false,
+    mode: 'failed',
+    errorCode: lastCode,
+    hint: isRailwayBlock
+      ? 'Gmail SMTP (ports 465/587) is blocked by the Railway platform firewall. Email cannot be sent via direct SMTP from Railway. Verify EMAIL_USER and EMAIL_PASS are correct, then contact Railway support or migrate to an HTTP-based transactional email service.'
+      : `Gmail SMTP delivery failed (${lastCode}). Check EMAIL_USER, EMAIL_PASS (must be a Gmail App Password), and ensure 2FA + App Passwords are enabled on the Gmail account.`,
+  };
+}
+
+async function send(
+  to: string,
+  subject: string,
+  html: string,
+  debugLink?: string,
+  text?: string
+): Promise<EmailDeliveryResult> {
+  const result = await sendViaSMTP({ to, subject, html, text });
+  if (!result.delivered) {
+    if (debugLink) {
+      console.log(`[email:failed] ${subject} → ${to}\nLink: ${debugLink}\nError: ${result.errorCode}`);
+    }
+    logger.error('email.delivery_failed', {
+      to,
+      subject,
+      errorCode: result.errorCode,
+      hint: result.hint,
+    });
+  }
+  return result;
+}
+
+// ─── HTML helpers ─────────────────────────────────────────────────────────────
 
 function escapeHtml(value: string): string {
   return value
@@ -442,140 +291,14 @@ function baseTemplate(title: string, bodyHtml: string): string {
       <h1 style="font-size:22px;line-height:1.3;margin:0 0 18px;color:#ffffff;font-weight:650;">${title}</h1>
       <div style="font-size:14px;line-height:1.75;color:#cbd5e1;">${bodyHtml}</div>
       <div style="margin-top:36px;padding-top:20px;border-top:1px solid #1e293b;font-size:12px;color:#64748b;">
-        Automated security message from Nexora OS · <a href="${webAppUrl()}/app/dashboard" style="color:#93c5fd;text-decoration:none;">Open app</a>
+        Automated message from Nexora OS · <a href="${webAppUrl()}/app/dashboard" style="color:#93c5fd;text-decoration:none;">Open app</a>
       </div>
     </div>
   </div>
 </body></html>`;
 }
 
-async function sendViaProfiles(
-  creds: { user: string; pass: string },
-  mail: nodemailer.SendMailOptions
-): Promise<EmailDeliveryResult> {
-  const errors: string[] = [];
-  for (const profile of SMTP_PROFILES) {
-    const transporter = buildTransport(profile, creds);
-    try {
-      await sendMailWithTimeout(transporter, mail);
-      _transporter = transporter;
-      _activeProfile = profile.label;
-      lastEmailDiag = {
-        at: new Date().toISOString(),
-        delivered: true,
-        mode: 'smtp',
-        profile: profile.label,
-        errorCode: null,
-      };
-      return { delivered: true, mode: 'smtp', profile: profile.label };
-    } catch (err) {
-      const e = err as Error & { code?: string; responseCode?: number };
-      const errorCode = e.code || (e.responseCode ? `smtp_${e.responseCode}` : 'unknown');
-      errors.push(`${profile.label}:${errorCode}`);
-      logger.error('email.failed', {
-        to: mail.to,
-        subject: mail.subject,
-        profile: profile.label,
-        message: e.message,
-        code: errorCode,
-      });
-      lastEmailDiag = {
-        at: new Date().toISOString(),
-        delivered: false,
-        mode: 'failed',
-        profile: profile.label,
-        errorCode,
-      };
-    }
-  }
-  resetTransporter();
-  return { delivered: false, mode: 'failed', errorCode: errors.join('|') || 'unknown' };
-}
-
-async function send(
-  to: string,
-  subject: string,
-  html: string,
-  debugLink?: string,
-  text?: string
-): Promise<EmailDeliveryResult> {
-  const selection = resolveEmailProvider();
-
-  if (!selection.explicit || selection.missing.length) {
-    const missing = selection.explicit ? selection.missing : ['EMAIL_PROVIDER'];
-    const errorCode = `provider_missing_${missing.join('_').toLowerCase()}`;
-    logger.error('email.provider_misconfigured', {
-      provider: selection.mode,
-      missing,
-    });
-    lastEmailDiag = {
-      at: new Date().toISOString(),
-      delivered: false,
-      mode: 'failed',
-      profile: selection.mode,
-      errorCode,
-    };
-    return {
-      delivered: false,
-      mode: 'failed',
-      errorCode,
-      profile: selection.mode,
-      hint:
-        missing.includes('EMAIL_PROVIDER')
-          ? 'Set EMAIL_PROVIDER to resend or smtp on the API service.'
-          : `Email provider "${selection.mode}" is selected but required configuration is missing: ${missing.join(', ')}.`,
-    };
-  }
-
-  if (selection.mode === 'none') {
-    logger.info('email.console_fallback', { to, subject, debugLink: debugLink || null });
-    if (debugLink) console.log(`[email:console] ${subject} → ${to}\nLink: ${debugLink}`);
-    return {
-      delivered: false,
-      mode: 'console_fallback',
-      errorCode: 'not_configured',
-      hint: 'EMAIL_PROVIDER=none — emails are logged locally only.',
-    };
-  }
-
-  if (selection.mode === 'resend') {
-    const result = await sendViaResend({ to, subject, html, text });
-    if (!result.delivered && debugLink) console.log(`[email:failed] ${subject} → ${to}\nLink: ${debugLink}`);
-    return result;
-  }
-
-  if (selection.mode === 'smtp') {
-    const creds = emailCredentials();
-    if (!creds) {
-      return {
-        delivered: false,
-        mode: 'failed',
-        errorCode: 'smtp_not_configured',
-        hint: 'SMTP provider selected but EMAIL_USER / EMAIL_PASS are not configured.',
-      };
-    }
-    const result = await sendViaProfiles(creds, {
-      from: mailFromAddress(),
-      to,
-      subject,
-      html,
-      ...(text ? { text } : {}),
-    });
-    if (result.delivered) {
-      logger.info('email.sent', { to, subject, profile: result.profile });
-      return result;
-    }
-    if (debugLink) console.log(`[email:failed] ${subject} → ${to}\nLink: ${debugLink}`);
-    return result;
-  }
-
-  return {
-    delivered: false,
-    mode: 'failed',
-    errorCode: 'unknown_provider',
-    hint: 'Unsupported EMAIL_PROVIDER value.',
-  };
-}
+// ─── Public mailer API ────────────────────────────────────────────────────────
 
 export const mailer = {
   sendWelcome: (to: string, displayName: string | null) => {
@@ -595,7 +318,8 @@ export const mailer = {
     );
   },
 
-  sendSignupConfirmation: (to: string, displayName: string | null) => mailer.sendWelcome(to, displayName),
+  sendSignupConfirmation: (to: string, displayName: string | null) =>
+    mailer.sendWelcome(to, displayName),
 
   sendVerification: (to: string, token: string) => {
     const url = `${webAppUrl()}/login?verify=${encodeURIComponent(token)}`;
@@ -722,7 +446,6 @@ export const mailer = {
       )
     ),
 
-  /** Notify platform admin of a new user signup (not login). */
   sendPlatformAdminSignupNotification: (opts: {
     name: string | null;
     email: string;
@@ -748,7 +471,6 @@ export const mailer = {
     );
   },
 
-  /** Notify platform admin when a user joins a team workspace via invitation. */
   sendPlatformAdminMemberJoinedNotification: (opts: {
     workspaceName: string;
     userName: string | null;
@@ -797,12 +519,14 @@ export const mailer = {
     const role = escapeHtml(opts.role);
     const invitedEmail = escapeHtml(opts.to);
     const expires = escapeHtml(opts.expiresAt.toUTCString());
-    const subject = `Nexora OS — You've been invited to join ${opts.workspaceName}`;
+    const subject = `Nexora OS — You have been invited to join ${opts.workspaceName}`;
     const plainText = [
-      `You've been invited to join ${opts.workspaceName} on Nexora OS.`,
+      `You have been invited to join ${opts.workspaceName} on Nexora OS.`,
       '',
       `Invited by: ${opts.inviterName || 'A teammate'}`,
       `Role: ${opts.role}`,
+      '',
+      'You have been invited to collaborate in this Nexora workspace.',
       '',
       'ACCESS WORKSPACE:',
       acceptUrl,
@@ -816,12 +540,14 @@ export const mailer = {
       opts.to,
       subject,
       baseTemplate(
-        `You've been invited to join ${workspace}`,
-        `<p style="font-size:16px;color:#e2e8f0;margin:0 0 20px;">You've been invited to join <strong>${workspace}</strong> on Nexora OS.</p>
+        `You have been invited to join ${workspace}`,
+        `<p style="font-size:16px;color:#e2e8f0;margin:0 0 20px;">You have been invited to join:</p>
+         <p style="font-size:22px;font-weight:700;color:#ffffff;margin:0 0 20px;">${workspace}</p>
          <table style="width:100%;font-size:14px;color:#cbd5e1;margin:0 0 20px;border-collapse:collapse;">
            <tr><td style="padding:6px 0;color:#94a3b8;width:110px;">Invited by</td><td style="padding:6px 0;"><strong>${inviter}</strong></td></tr>
            <tr><td style="padding:6px 0;color:#94a3b8;">Role</td><td style="padding:6px 0;"><strong>${role}</strong></td></tr>
          </table>
+         <p>You have been invited to collaborate in this Nexora workspace.</p>
          ${ctaButton(acceptUrl, 'ACCESS WORKSPACE')}
          <p style="font-size:13px;color:#94a3b8;margin-top:20px;">Or copy this link:<br/><span style="word-break:break-all;">${escapeHtml(acceptUrl)}</span></p>
          <p style="font-size:13px;color:#94a3b8;margin-top:16px;">This invitation is intended for:<br/><strong style="color:#e2e8f0;">${invitedEmail}</strong></p>

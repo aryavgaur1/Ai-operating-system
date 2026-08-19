@@ -301,7 +301,7 @@ export interface InvitationPreview {
 
 export interface EmailDeliveryResult {
   delivered: boolean;
-  mode: 'smtp' | 'resend' | 'resend_relay' | 'console_fallback' | 'failed';
+  mode: 'smtp' | 'console_fallback' | 'failed';
   errorCode?: string;
   profile?: string;
   hint?: string;
