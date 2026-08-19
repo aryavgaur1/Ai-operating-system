@@ -4,16 +4,7 @@ import { getPlatformAdminEmail } from './platformAdmin';
 
 // ─── Gmail API mailer ─────────────────────────────────────────────────────────
 // Sends email via Gmail REST API over HTTPS (port 443).
-// Railway cannot block this — it's standard HTTPS to googleapis.com.
-//
 // No Resend. No SMTP. No nodemailer. No domain verification. No DNS.
-//
-// Required environment variables:
-//   GOOGLE_CLIENT_ID      — existing Google OAuth client
-//   GOOGLE_CLIENT_SECRET  — existing Google OAuth client secret
-//   EMAIL_USER            — Gmail address that sends Nexora emails
-//   GMAIL_REFRESH_TOKEN   — obtained once via: npm run setup:gmail-mailer
-//   WEB_APP_URL           — https://ai-lilac-phi.vercel.app
 
 const GMAIL_API = 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send';
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
@@ -81,36 +72,49 @@ async function getAccessToken(creds: {
   }
 }
 
-// ─── MIME message builder ─────────────────────────────────────────────────────
-
-function encodeMimeSubject(subject: string): string {
-  // RFC 2047 encoded-word: =?utf-8?b?<base64>?=
-  return `=?utf-8?b?${Buffer.from(subject, 'utf8').toString('base64')}?=`;
-}
+// ─── MIME builder ─────────────────────────────────────────────────────────────
+// Proper RFC 2822 headers prevent spam classification:
+//   - Plain UTF-8 subject (no encoded-word — Gmail handles it fine over API)
+//   - Message-ID and Date headers
+//   - List-Unsubscribe header
+//   - multipart/alternative with both text and HTML parts
 
 function buildMimeMessage(opts: {
   from: string;
   to: string;
   subject: string;
   html: string;
-  text?: string;
+  text: string;
 }): string {
-  const boundary = `nexora_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-  const lines: string[] = [
+  const boundary = `np_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  const msgId = `<${Date.now()}.${Math.random().toString(36).slice(2)}@nexoraos.mail>`;
+  const date = new Date().toUTCString();
+
+  const lines = [
     `From: ${opts.from}`,
     `To: ${opts.to}`,
-    `Subject: ${encodeMimeSubject(opts.subject)}`,
+    `Subject: ${opts.subject}`,
+    `Date: ${date}`,
+    `Message-ID: ${msgId}`,
     'MIME-Version: 1.0',
     `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    'X-Mailer: Nexora OS',
     '',
     `--${boundary}`,
+    'Content-Type: text/plain; charset=UTF-8',
+    'Content-Transfer-Encoding: quoted-printable',
+    '',
+    opts.text,
+    '',
+    `--${boundary}`,
+    'Content-Type: text/html; charset=UTF-8',
+    'Content-Transfer-Encoding: quoted-printable',
+    '',
+    opts.html,
+    '',
+    `--${boundary}--`,
   ];
-  if (opts.text) {
-    lines.push('Content-Type: text/plain; charset=UTF-8', '', opts.text, '', `--${boundary}`);
-  }
-  lines.push('Content-Type: text/html; charset=UTF-8', '', opts.html, '', `--${boundary}--`);
-  const raw = lines.join('\r\n');
-  return Buffer.from(raw).toString('base64url');
+  return Buffer.from(lines.join('\r\n'), 'utf8').toString('base64url');
 }
 
 // ─── Health / diagnostics ─────────────────────────────────────────────────────
@@ -161,7 +165,7 @@ async function sendViaGmailApi(opts: {
   to: string;
   subject: string;
   html: string;
-  text?: string;
+  text: string;
 }): Promise<EmailDeliveryResult> {
   const creds = gmailCredentials();
   if (!creds) {
@@ -228,8 +232,8 @@ async function send(
   to: string,
   subject: string,
   html: string,
+  text: string,
   debugLink?: string,
-  text?: string
 ): Promise<EmailDeliveryResult> {
   const result = await sendViaGmailApi({ to, subject, html, text });
   if (!result.delivered) {
@@ -249,25 +253,69 @@ function escapeHtml(value: string): string {
     .replace(/"/g, '&quot;');
 }
 
-function ctaButton(href: string, label: string): string {
-  return `<p style="margin:28px 0 8px;"><a href="${href}" style="display:inline-block;background:linear-gradient(135deg,#3b82f6,#6366f1);color:#fff;padding:14px 24px;border-radius:999px;text-decoration:none;font-weight:600;font-size:14px;">${label}</a></p>`;
+// Clean, minimal design — looks like Notion/Linear transactional emails.
+// White background, black text, simple button. Passes spam filters.
+function baseTemplate(title: string, bodyHtml: string, preheader = ''): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<meta http-equiv="X-UA-Compatible" content="IE=edge" />
+<title>${escapeHtml(title)}</title>
+</head>
+<body style="margin:0;padding:0;background:#f4f4f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;">
+${preheader ? `<div style="display:none;max-height:0;overflow:hidden;mso-hide:all;">${escapeHtml(preheader)}&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;</div>` : ''}
+<table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f4f4f5;padding:40px 16px;">
+  <tr><td align="center">
+    <table width="560" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;width:100%;background:#ffffff;border-radius:8px;border:1px solid #e4e4e7;overflow:hidden;">
+
+      <!-- Header -->
+      <tr>
+        <td style="padding:28px 40px 24px;border-bottom:1px solid #f0f0f0;">
+          <span style="font-size:15px;font-weight:700;color:#18181b;letter-spacing:-0.2px;">Nexora OS</span>
+        </td>
+      </tr>
+
+      <!-- Body -->
+      <tr>
+        <td style="padding:36px 40px 32px;color:#3f3f46;font-size:15px;line-height:1.7;">
+          ${bodyHtml}
+        </td>
+      </tr>
+
+      <!-- Footer -->
+      <tr>
+        <td style="padding:20px 40px 28px;border-top:1px solid #f0f0f0;">
+          <p style="margin:0;font-size:12px;color:#a1a1aa;line-height:1.6;">
+            You received this email because an action was taken on your Nexora OS account.<br/>
+            <a href="${escapeHtml(webAppUrl())}" style="color:#71717a;text-decoration:underline;">Nexora OS</a>
+          </p>
+        </td>
+      </tr>
+
+    </table>
+  </td></tr>
+</table>
+</body>
+</html>`;
 }
 
-function baseTemplate(title: string, bodyHtml: string): string {
-  return `<!DOCTYPE html>
-<html><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /></head>
-<body style="margin:0;background:#070b12;">
-  <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#070b12;padding:40px 16px;color:#e5e7eb;">
-    <div style="max-width:520px;margin:0 auto;background:#0f172a;border-radius:20px;padding:36px 32px;border:1px solid #1e293b;box-shadow:0 20px 60px rgba(0,0,0,.45);">
-      <div style="font-size:12px;letter-spacing:.22em;text-transform:uppercase;color:#60a5fa;margin-bottom:18px;font-weight:600;">Nexora OS</div>
-      <h1 style="font-size:22px;line-height:1.3;margin:0 0 18px;color:#ffffff;font-weight:650;">${title}</h1>
-      <div style="font-size:14px;line-height:1.75;color:#cbd5e1;">${bodyHtml}</div>
-      <div style="margin-top:36px;padding-top:20px;border-top:1px solid #1e293b;font-size:12px;color:#64748b;">
-        Automated message from Nexora OS · <a href="${webAppUrl()}/app/dashboard" style="color:#93c5fd;text-decoration:none;">Open app</a>
-      </div>
-    </div>
-  </div>
-</body></html>`;
+function primaryButton(href: string, label: string): string {
+  return `<table cellpadding="0" cellspacing="0" border="0" style="margin:28px 0 8px;">
+    <tr>
+      <td style="background:#18181b;border-radius:6px;">
+        <a href="${escapeHtml(href)}" style="display:inline-block;padding:12px 24px;font-size:14px;font-weight:600;color:#ffffff;text-decoration:none;border-radius:6px;letter-spacing:-0.1px;">${label}</a>
+      </td>
+    </tr>
+  </table>`;
+}
+
+function infoRow(label: string, value: string): string {
+  return `<tr>
+    <td style="padding:8px 0;color:#71717a;font-size:13px;width:120px;vertical-align:top;">${label}</td>
+    <td style="padding:8px 0;color:#18181b;font-size:13px;font-weight:500;vertical-align:top;">${escapeHtml(value)}</td>
+  </tr>`;
 }
 
 // ─── Public mailer API ────────────────────────────────────────────────────────
@@ -275,18 +323,17 @@ function baseTemplate(title: string, bodyHtml: string): string {
 export const mailer = {
   sendWelcome: (to: string, displayName: string | null) => {
     const dashboard = `${webAppUrl()}/app/dashboard`;
-    const name = displayName ? escapeHtml(displayName) : 'there';
-    return send(
-      to,
-      'Welcome to Nexora — your workspace is ready',
-      baseTemplate(
-        `Welcome to Nexora, ${name}`,
-        `<p>Your personal workspace has been created successfully.</p>
-         <p><strong>Let's build with AI.</strong> Connect your own Slack and Notion, chat with your agent, and keep approvals in one place.</p>
-         ${ctaButton(dashboard, 'Open your dashboard')}`
-      ),
-      dashboard
-    );
+    const name = displayName || 'there';
+    const subject = 'Welcome to Nexora OS';
+    const text = `Hi ${name},\n\nYour Nexora OS workspace is ready.\n\nOpen your dashboard: ${dashboard}\n\nNexora OS`;
+    return send(to, subject, baseTemplate(subject,
+      `<p style="margin:0 0 16px;font-size:18px;font-weight:600;color:#18181b;">Welcome to Nexora OS</p>
+       <p style="margin:0 0 20px;">Hi ${escapeHtml(name)}, your workspace has been created and is ready to use.</p>
+       <p style="margin:0 0 24px;">Connect your tools, chat with your AI agent, and manage approvals in one place.</p>
+       ${primaryButton(dashboard, 'Open dashboard')}
+       <p style="margin:16px 0 0;font-size:13px;color:#71717a;">Or copy this link:<br/><a href="${escapeHtml(dashboard)}" style="color:#71717a;">${escapeHtml(dashboard)}</a></p>`,
+      `Your Nexora OS workspace is ready`
+    ), text);
   },
 
   sendSignupConfirmation: (to: string, displayName: string | null) =>
@@ -294,17 +341,15 @@ export const mailer = {
 
   sendVerification: (to: string, token: string) => {
     const url = `${webAppUrl()}/login?verify=${encodeURIComponent(token)}`;
-    return send(
-      to,
-      'Verify your Nexora email',
-      baseTemplate(
-        'Confirm your email',
-        `<p>Click below to verify your account and unlock chat, approvals, and integrations.</p>
-         ${ctaButton(url, 'Verify email')}
-         <p style="font-size:12px;color:#94a3b8;word-break:break-all;">Or paste this link:<br/>${escapeHtml(url)}</p>`
-      ),
-      url
-    );
+    const subject = 'Verify your Nexora OS email address';
+    const text = `Verify your email address by visiting:\n${url}\n\nIf you did not sign up for Nexora OS, ignore this email.\n\nNexora OS`;
+    return send(to, subject, baseTemplate(subject,
+      `<p style="margin:0 0 16px;font-size:18px;font-weight:600;color:#18181b;">Verify your email address</p>
+       <p style="margin:0 0 24px;">Click the button below to confirm your email address and activate your Nexora OS account.</p>
+       ${primaryButton(url, 'Verify email address')}
+       <p style="margin:16px 0 0;font-size:13px;color:#71717a;">This link expires in 24 hours. If you did not sign up for Nexora OS, you can ignore this email.</p>`,
+      `Confirm your Nexora OS email address`
+    ), text);
   },
 
   sendLoginNotification: (to: string, detail: {
@@ -312,117 +357,111 @@ export const mailer = {
     os?: string; ip: string; location?: string;
   }) => {
     const resetUrl = `${webAppUrl()}/login?mode=forgot`;
-    const name = detail.name ? escapeHtml(detail.name) : 'there';
-    return send(
-      to,
-      'New Login Detected — Nexora OS',
-      baseTemplate(
-        'New login detected',
-        `<p>Hi ${name}, someone just signed in to your Nexora account.</p>
-         <table style="width:100%;font-size:13px;color:#cbd5e1;margin:16px 0;border-collapse:collapse;">
-           <tr><td style="padding:8px 0;color:#94a3b8;width:110px;">Time</td><td style="padding:8px 0;">${escapeHtml(detail.time)}</td></tr>
-           <tr><td style="padding:8px 0;color:#94a3b8;">Browser</td><td style="padding:8px 0;">${escapeHtml(detail.browser)}</td></tr>
-           <tr><td style="padding:8px 0;color:#94a3b8;">Device / OS</td><td style="padding:8px 0;">${escapeHtml(detail.os || detail.device)}</td></tr>
-           <tr><td style="padding:8px 0;color:#94a3b8;">IP</td><td style="padding:8px 0;">${escapeHtml(detail.ip)}</td></tr>
-           <tr><td style="padding:8px 0;color:#94a3b8;">Location</td><td style="padding:8px 0;">${escapeHtml(detail.location ?? 'Unknown')}</td></tr>
-         </table>
-         <p>If this wasn't you, reset your password immediately.</p>
-         ${ctaButton(resetUrl, 'Reset password')}`
-      )
-    );
+    const subject = 'New sign-in to your Nexora OS account';
+    const text = `A new sign-in was detected on your Nexora OS account.\n\nTime: ${detail.time}\nBrowser: ${detail.browser}\nOS: ${detail.os || detail.device}\nIP: ${detail.ip}\nLocation: ${detail.location || 'Unknown'}\n\nIf this was not you, reset your password immediately:\n${resetUrl}\n\nNexora OS`;
+    return send(to, subject, baseTemplate(subject,
+      `<p style="margin:0 0 16px;font-size:18px;font-weight:600;color:#18181b;">New sign-in detected</p>
+       <p style="margin:0 0 20px;">A new sign-in was detected on your Nexora OS account.</p>
+       <table cellpadding="0" cellspacing="0" border="0" style="width:100%;margin:0 0 24px;">${[
+         infoRow('Time', detail.time),
+         infoRow('Browser', detail.browser),
+         infoRow('Device / OS', detail.os || detail.device),
+         infoRow('IP address', detail.ip),
+         infoRow('Location', detail.location ?? 'Unknown'),
+       ].join('')}</table>
+       <p style="margin:0 0 20px;">If this was not you, reset your password immediately.</p>
+       ${primaryButton(resetUrl, 'Reset password')}`,
+      `New sign-in to your account`
+    ), text);
   },
 
   sendPasswordChanged: (to: string) => {
     const resetUrl = `${webAppUrl()}/login?mode=forgot`;
-    return send(
-      to,
-      'Your password has been changed successfully — Nexora OS',
-      baseTemplate(
-        'Password changed successfully',
-        `<p>Your Nexora password was updated. All other sessions have been signed out for security.</p>
-         <p>If you did not make this change, reset your password now.</p>
-         ${ctaButton(resetUrl, 'Secure my account')}`
-      )
-    );
+    const subject = 'Your Nexora OS password was changed';
+    const text = `Your Nexora OS password was successfully changed. All other sessions have been signed out.\n\nIf you did not make this change, reset your password immediately:\n${resetUrl}\n\nNexora OS`;
+    return send(to, subject, baseTemplate(subject,
+      `<p style="margin:0 0 16px;font-size:18px;font-weight:600;color:#18181b;">Password changed</p>
+       <p style="margin:0 0 20px;">Your Nexora OS password was successfully changed. All other sessions have been signed out for security.</p>
+       <p style="margin:0 0 24px;">If you did not make this change, reset your password immediately.</p>
+       ${primaryButton(resetUrl, 'Reset password')}`,
+      `Your password was changed`
+    ), text);
   },
 
   sendPasswordReset: (to: string, token: string) => {
     const url = `${webAppUrl()}/login?reset=${encodeURIComponent(token)}`;
-    return send(
-      to,
-      'Reset your Nexora password',
-      baseTemplate(
-        'Reset your password',
-        `<p>We received a request to reset your Nexora password.</p>
-         <p>This link expires in <strong>1 hour</strong> and can only be used once.</p>
-         ${ctaButton(url, 'Choose a new password')}
-         <p style="font-size:12px;color:#94a3b8;word-break:break-all;">Or paste this link:<br/>${escapeHtml(url)}</p>
-         <p style="font-size:12px;color:#94a3b8;">If you didn't ask for this, you can ignore this email.</p>`
-      ),
-      url
-    );
+    const subject = 'Reset your Nexora OS password';
+    const text = `You requested a password reset for your Nexora OS account.\n\nReset your password:\n${url}\n\nThis link expires in 1 hour. If you did not request this, ignore this email.\n\nNexora OS`;
+    return send(to, subject, baseTemplate(subject,
+      `<p style="margin:0 0 16px;font-size:18px;font-weight:600;color:#18181b;">Reset your password</p>
+       <p style="margin:0 0 24px;">You requested a password reset for your Nexora OS account. Click the button below to choose a new password. This link expires in <strong>1 hour</strong>.</p>
+       ${primaryButton(url, 'Reset password')}
+       <p style="margin:16px 0 0;font-size:13px;color:#71717a;">If you did not request a password reset, you can safely ignore this email.</p>`,
+      `Reset your Nexora OS password`
+    ), text);
   },
 
-  sendTempPassword: (to: string, tempPassword: string) =>
-    send(
-      to,
-      'Temporary password — Nexora OS',
-      baseTemplate(
-        'Temporary password issued',
-        `<p>An administrator issued a temporary password for your account.</p>
-         <p style="font-size:16px;letter-spacing:.04em;background:#020617;border:1px solid #1e293b;border-radius:12px;padding:14px 16px;color:#f8fafc;"><code>${escapeHtml(tempPassword)}</code></p>
-         <p>Sign in and change it immediately.</p>
-         ${ctaButton(`${webAppUrl()}/login`, 'Sign in')}`
-      )
-    ),
+  sendTempPassword: (to: string, tempPassword: string) => {
+    const subject = 'Your temporary Nexora OS password';
+    const text = `An administrator has issued you a temporary password for Nexora OS.\n\nSign in and change it immediately:\n${webAppUrl()}/login\n\nNexora OS`;
+    return send(to, subject, baseTemplate(subject,
+      `<p style="margin:0 0 16px;font-size:18px;font-weight:600;color:#18181b;">Temporary password issued</p>
+       <p style="margin:0 0 20px;">An administrator has issued a temporary password for your Nexora OS account.</p>
+       <div style="background:#f4f4f5;border-radius:6px;padding:14px 18px;margin:0 0 24px;font-family:monospace;font-size:15px;color:#18181b;letter-spacing:0.04em;">${escapeHtml(tempPassword)}</div>
+       <p style="margin:0 0 24px;">Sign in and change your password immediately.</p>
+       ${primaryButton(`${webAppUrl()}/login`, 'Sign in')}`,
+      `Your temporary password`
+    ), text);
+  },
 
-  sendIntegrationConnected: (to: string, tool: string) =>
-    send(
-      to,
-      `${tool} connected to Nexora`,
-      baseTemplate(
-        'Integration connected',
-        `<p>Your <strong>${escapeHtml(tool)}</strong> account is now connected to <em>your</em> Nexora workspace.</p>
-         ${ctaButton(`${webAppUrl()}/app/integrations`, 'Manage integrations')}`
-      )
-    ),
+  sendIntegrationConnected: (to: string, tool: string) => {
+    const subject = `${tool} connected to Nexora OS`;
+    const text = `Your ${tool} account has been connected to your Nexora OS workspace.\n\nManage integrations: ${webAppUrl()}/app/integrations\n\nNexora OS`;
+    return send(to, subject, baseTemplate(subject,
+      `<p style="margin:0 0 16px;font-size:18px;font-weight:600;color:#18181b;">${escapeHtml(tool)} connected</p>
+       <p style="margin:0 0 24px;">Your <strong>${escapeHtml(tool)}</strong> account has been successfully connected to your Nexora OS workspace.</p>
+       ${primaryButton(`${webAppUrl()}/app/integrations`, 'Manage integrations')}`,
+      `${tool} connected to your workspace`
+    ), text);
+  },
 
-  sendVerified: (to: string) =>
-    send(
-      to,
-      'Email verified — Nexora OS',
-      baseTemplate(
-        'You are verified',
-        `<p>Your email is confirmed. You can use chat, approvals, and connect your own Slack &amp; Notion.</p>
-         ${ctaButton(`${webAppUrl()}/app/dashboard`, 'Go to dashboard')}`
-      )
-    ),
+  sendVerified: (to: string) => {
+    const subject = 'Email verified — Nexora OS';
+    const text = `Your Nexora OS email address has been verified.\n\nGo to dashboard: ${webAppUrl()}/app/dashboard\n\nNexora OS`;
+    return send(to, subject, baseTemplate(subject,
+      `<p style="margin:0 0 16px;font-size:18px;font-weight:600;color:#18181b;">Email verified</p>
+       <p style="margin:0 0 24px;">Your email address has been verified. You now have full access to Nexora OS.</p>
+       ${primaryButton(`${webAppUrl()}/app/dashboard`, 'Go to dashboard')}`,
+      `Your email has been verified`
+    ), text);
+  },
 
-  sendAccountDeleted: (to: string) =>
-    send(
-      to,
-      'Your Nexora account was deleted',
-      baseTemplate('Account deleted', `<p>Your Nexora account and workspace data have been deleted as requested.</p>`)
-    ),
+  sendAccountDeleted: (to: string) => {
+    const subject = 'Your Nexora OS account has been deleted';
+    const text = `Your Nexora OS account and all associated data have been deleted as requested.\n\nNexora OS`;
+    return send(to, subject, baseTemplate(subject,
+      `<p style="margin:0 0 16px;font-size:18px;font-weight:600;color:#18181b;">Account deleted</p>
+       <p style="margin:0;">Your Nexora OS account and all associated data have been permanently deleted.</p>`,
+      `Your account has been deleted`
+    ), text);
+  },
 
   sendPlatformAdminSignupNotification: (opts: {
     name: string | null; email: string; timestamp: string;
   }) => {
     const admin = getPlatformAdminEmail();
-    return send(
-      admin,
-      'Nexora OS — New user successfully signed up',
-      baseTemplate(
-        'New user successfully signed up',
-        `<p>A new user has registered on Nexora OS.</p>
-         <table style="width:100%;font-size:14px;color:#cbd5e1;margin:16px 0;border-collapse:collapse;">
-           <tr><td style="padding:8px 0;color:#94a3b8;width:110px;">Name</td><td style="padding:8px 0;">${escapeHtml(opts.name || 'Unknown')}</td></tr>
-           <tr><td style="padding:8px 0;color:#94a3b8;">Email</td><td style="padding:8px 0;">${escapeHtml(opts.email)}</td></tr>
-           <tr><td style="padding:8px 0;color:#94a3b8;">Time</td><td style="padding:8px 0;">${escapeHtml(opts.timestamp)}</td></tr>
-           <tr><td style="padding:8px 0;color:#94a3b8;">Status</td><td style="padding:8px 0;"><strong>Successfully registered</strong></td></tr>
-         </table>`
-      )
-    );
+    const subject = 'New user signup — Nexora OS';
+    const text = `New user signed up on Nexora OS.\n\nName: ${opts.name || 'Unknown'}\nEmail: ${opts.email}\nTime: ${opts.timestamp}\n\nNexora OS`;
+    return send(admin, subject, baseTemplate(subject,
+      `<p style="margin:0 0 16px;font-size:18px;font-weight:600;color:#18181b;">New user signed up</p>
+       <table cellpadding="0" cellspacing="0" border="0" style="width:100%;margin:0 0 8px;">${[
+         infoRow('Name', opts.name || 'Unknown'),
+         infoRow('Email', opts.email),
+         infoRow('Time', opts.timestamp),
+         infoRow('Status', 'Successfully registered'),
+       ].join('')}</table>`,
+      `New signup: ${opts.email}`
+    ), text);
   },
 
   sendPlatformAdminMemberJoinedNotification: (opts: {
@@ -430,22 +469,20 @@ export const mailer = {
     role: string; inviterName: string | null; timestamp: string;
   }) => {
     const admin = getPlatformAdminEmail();
-    return send(
-      admin,
-      `Nexora OS — ${opts.userName || opts.email} joined ${opts.workspaceName}`,
-      baseTemplate(
-        'A new member has successfully joined a workspace',
-        `<p>A new member has successfully joined a team workspace.</p>
-         <table style="width:100%;font-size:14px;color:#cbd5e1;margin:16px 0;border-collapse:collapse;">
-           <tr><td style="padding:8px 0;color:#94a3b8;width:120px;">Workspace</td><td style="padding:8px 0;"><strong>${escapeHtml(opts.workspaceName)}</strong></td></tr>
-           <tr><td style="padding:8px 0;color:#94a3b8;">Member</td><td style="padding:8px 0;">${escapeHtml(opts.userName || opts.email)}</td></tr>
-           <tr><td style="padding:8px 0;color:#94a3b8;">Email</td><td style="padding:8px 0;">${escapeHtml(opts.email)}</td></tr>
-           <tr><td style="padding:8px 0;color:#94a3b8;">Role</td><td style="padding:8px 0;">${escapeHtml(opts.role)}</td></tr>
-           <tr><td style="padding:8px 0;color:#94a3b8;">Invited by</td><td style="padding:8px 0;">${escapeHtml(opts.inviterName || 'Unknown')}</td></tr>
-           <tr><td style="padding:8px 0;color:#94a3b8;">Time</td><td style="padding:8px 0;">${escapeHtml(opts.timestamp)}</td></tr>
-         </table>`
-      )
-    );
+    const subject = `${opts.userName || opts.email} joined ${opts.workspaceName} — Nexora OS`;
+    const text = `A new member joined a workspace on Nexora OS.\n\nWorkspace: ${opts.workspaceName}\nMember: ${opts.userName || opts.email}\nEmail: ${opts.email}\nRole: ${opts.role}\nInvited by: ${opts.inviterName || 'Unknown'}\nTime: ${opts.timestamp}\n\nNexora OS`;
+    return send(admin, subject, baseTemplate(subject,
+      `<p style="margin:0 0 16px;font-size:18px;font-weight:600;color:#18181b;">New member joined a workspace</p>
+       <table cellpadding="0" cellspacing="0" border="0" style="width:100%;margin:0 0 8px;">${[
+         infoRow('Workspace', opts.workspaceName),
+         infoRow('Member', opts.userName || opts.email),
+         infoRow('Email', opts.email),
+         infoRow('Role', opts.role),
+         infoRow('Invited by', opts.inviterName || 'Unknown'),
+         infoRow('Time', opts.timestamp),
+       ].join('')}</table>`,
+      `${opts.email} joined ${opts.workspaceName}`
+    ), text);
   },
 
   sendWorkspaceInvitation: async (opts: {
@@ -453,48 +490,66 @@ export const mailer = {
     role: string; rawToken: string; expiresAt: Date;
   }): Promise<EmailDeliveryResult> => {
     const acceptUrl = `${webAppUrl()}/invite/${encodeURIComponent(opts.rawToken)}`;
-    const inviter = opts.inviterName ? escapeHtml(opts.inviterName) : 'A teammate';
-    const workspace = escapeHtml(opts.workspaceName);
-    const role = escapeHtml(opts.role);
-    const invitedEmail = escapeHtml(opts.to);
-    const expires = escapeHtml(opts.expiresAt.toUTCString());
-    const subject = `Nexora OS — You have been invited to join ${opts.workspaceName}`;
-    const plainText = [
-      `You have been invited to join ${opts.workspaceName} on Nexora OS.`,
-      '',
-      `Invited by: ${opts.inviterName || 'A teammate'}`,
-      `Role: ${opts.role}`,
-      '',
-      'You have been invited to collaborate in this Nexora workspace.',
-      '',
-      'ACCESS WORKSPACE:',
+    const subject = `You have been invited to join ${opts.workspaceName} on Nexora OS`;
+    const inviter = opts.inviterName || 'A teammate';
+    const role = opts.role;
+
+    const text = [
+      `Hi,`,
+      ``,
+      `${inviter} has invited you to join ${opts.workspaceName} on Nexora OS.`,
+      ``,
+      `Role: ${role}`,
+      ``,
+      `Accept the invitation:`,
       acceptUrl,
-      '',
-      `This invitation is intended for: ${opts.to}`,
-      `This invitation expires on ${opts.expiresAt.toUTCString()}.`,
-      '',
-      'If you did not expect this invitation, you can ignore this email.',
+      ``,
+      `This invitation is for: ${opts.to}`,
+      `It expires on: ${opts.expiresAt.toUTCString()}`,
+      ``,
+      `If you were not expecting this invitation, ignore this email.`,
+      ``,
+      `Nexora OS`,
     ].join('\n');
-    return send(
-      opts.to,
+
+    const html = baseTemplate(
       subject,
-      baseTemplate(
-        `You have been invited to join ${workspace}`,
-        `<p style="font-size:16px;color:#e2e8f0;margin:0 0 20px;">You have been invited to join:</p>
-         <p style="font-size:22px;font-weight:700;color:#ffffff;margin:0 0 20px;">${workspace}</p>
-         <table style="width:100%;font-size:14px;color:#cbd5e1;margin:0 0 20px;border-collapse:collapse;">
-           <tr><td style="padding:6px 0;color:#94a3b8;width:110px;">Invited by</td><td style="padding:6px 0;"><strong>${inviter}</strong></td></tr>
-           <tr><td style="padding:6px 0;color:#94a3b8;">Role</td><td style="padding:6px 0;"><strong>${role}</strong></td></tr>
-         </table>
-         <p>You have been invited to collaborate in this Nexora workspace.</p>
-         ${ctaButton(acceptUrl, 'ACCESS WORKSPACE')}
-         <p style="font-size:13px;color:#94a3b8;margin-top:20px;">Or copy this link:<br/><span style="word-break:break-all;">${escapeHtml(acceptUrl)}</span></p>
-         <p style="font-size:13px;color:#94a3b8;margin-top:16px;">This invitation is intended for:<br/><strong style="color:#e2e8f0;">${invitedEmail}</strong></p>
-         <p style="font-size:12px;color:#64748b;margin-top:16px;">This invitation expires on ${expires}.</p>
-         <p style="font-size:12px;color:#64748b;margin-top:12px;">If you did not expect this invitation, you can ignore this email.</p>`
-      ),
-      acceptUrl,
-      plainText
+      `<p style="margin:0 0 8px;font-size:18px;font-weight:600;color:#18181b;">You have been invited</p>
+       <p style="margin:0 0 24px;color:#52525b;">You have been invited to join a workspace on Nexora OS.</p>
+
+       <table cellpadding="0" cellspacing="0" border="0" style="width:100%;margin:0 0 28px;border:1px solid #e4e4e7;border-radius:6px;overflow:hidden;">
+         <tr style="background:#fafafa;">
+           <td style="padding:16px 20px;border-bottom:1px solid #e4e4e7;" colspan="2">
+             <span style="font-size:13px;font-weight:600;color:#71717a;text-transform:uppercase;letter-spacing:0.05em;">Invitation details</span>
+           </td>
+         </tr>
+         <tr>
+           <td style="padding:14px 20px;border-bottom:1px solid #f4f4f5;font-size:13px;color:#71717a;width:110px;">Workspace</td>
+           <td style="padding:14px 20px;border-bottom:1px solid #f4f4f5;font-size:14px;font-weight:600;color:#18181b;">${escapeHtml(opts.workspaceName)}</td>
+         </tr>
+         <tr>
+           <td style="padding:14px 20px;border-bottom:1px solid #f4f4f5;font-size:13px;color:#71717a;">Invited by</td>
+           <td style="padding:14px 20px;border-bottom:1px solid #f4f4f5;font-size:14px;color:#18181b;">${escapeHtml(inviter)}</td>
+         </tr>
+         <tr>
+           <td style="padding:14px 20px;font-size:13px;color:#71717a;">Your role</td>
+           <td style="padding:14px 20px;font-size:14px;color:#18181b;">${escapeHtml(role)}</td>
+         </tr>
+       </table>
+
+       <p style="margin:0 0 6px;font-size:14px;color:#3f3f46;">Click below to accept the invitation and access the workspace:</p>
+       ${primaryButton(acceptUrl, 'Accept invitation')}
+
+       <p style="margin:20px 0 0;font-size:12px;color:#a1a1aa;">
+         Or copy this link into your browser:<br/>
+         <a href="${escapeHtml(acceptUrl)}" style="color:#71717a;word-break:break-all;">${escapeHtml(acceptUrl)}</a>
+       </p>
+       <p style="margin:16px 0 0;font-size:12px;color:#a1a1aa;">
+         This invitation was sent to <strong>${escapeHtml(opts.to)}</strong> and expires on ${escapeHtml(opts.expiresAt.toUTCString())}.
+       </p>`,
+      `${inviter} invited you to join ${opts.workspaceName} on Nexora OS`
     );
+
+    return send(opts.to, subject, html, text, acceptUrl);
   },
 };
