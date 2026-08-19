@@ -143,7 +143,7 @@ export function LandingPage() {
               animate={{ opacity: 1, y: 0 }}
               className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] uppercase tracking-[0.22em] text-neutral-300"
             >
-              <span className="h-1.5 w-1.5 rounded-full bg-accent2" /> Nexora · Work Action OS
+              <span className="h-1.5 w-1.5 rounded-full bg-accent2" /> Nexora OS · AI Operating System
             </motion.div>
             <motion.h1
               initial={{ opacity: 0, y: 20 }}
@@ -151,9 +151,9 @@ export function LandingPage() {
               transition={{ delay: 0.08 }}
               className="font-display mt-6 text-4xl font-semibold leading-[1.05] tracking-tight text-white sm:text-5xl md:text-6xl lg:text-[4.1rem]"
             >
-              <span className="gradient-text">Propose → Approve → Act</span>
+              <span className="gradient-text">Nexora OS</span>
               <span className="block text-[0.72em] font-medium text-neutral-200 sm:text-[0.68em] md:mt-2">
-                across Slack, Jira, and Notion.
+                Propose → Approve → Act across Slack, Jira, Notion, and Gmail.
               </span>
             </motion.h1>
             <motion.p
@@ -162,7 +162,8 @@ export function LandingPage() {
               transition={{ delay: 0.16 }}
               className="mt-5 max-w-xl text-base leading-8 text-neutral-400 sm:text-lg"
             >
-              Nexora is the Work Action OS with a human gate — it plans real writes, then waits for your approval before anything lands in your tools.
+              Nexora OS is an AI Operating System for modern teams. It connects your tools, plans real
+              actions with full context, and waits for human approval before anything executes.
             </motion.p>
             <motion.div
               initial={{ opacity: 0, y: 20 }}
