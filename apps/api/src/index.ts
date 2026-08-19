@@ -26,7 +26,7 @@ import { marketingChatbotRouter, adminChatbotRouter } from './routes/marketing-c
 import { errorMiddleware } from './lib/errors';
 import { isLiveMode } from '@enterprise-ai-os/connectors';
 import { getEmailDiagnostics, probeSmtpConnectivity } from './lib/mailer';
-import { webAppUrl as resolveCanonicalWebAppUrl } from './lib/authTokens';
+import { allowedWebOrigins, webAppUrl as resolveCanonicalWebAppUrl } from './lib/authTokens';
 
 function loadEnvFromWorkspaceRoot(): void {
   const candidates = [process.cwd(), __dirname];
@@ -59,11 +59,6 @@ const WEB_APP_URL_RAW = (
 const WEB_APP_URL = /^https:\/\/[a-z0-9-]+\.netlify\.app$/i.test(WEB_APP_URL_RAW)
   ? 'https://nexoraos.co.in'
   : WEB_APP_URL_RAW;
-const EXTRA_ORIGINS = (process.env.CORS_ORIGINS ?? '')
-  .split(',')
-  .map((s) => s.trim().replace(/\/$/, ''))
-  .filter(Boolean);
-
 const app = express();
 // Railway / Vercel / reverse proxies
 app.set('trust proxy', 1);
@@ -73,9 +68,7 @@ app.use(
     origin: (origin, cb) => {
       const allowed = new Set([
         WEB_APP_URL,
-        'http://localhost:3000',
-        'http://127.0.0.1:3000',
-        ...EXTRA_ORIGINS,
+        ...allowedWebOrigins(),
       ]);
       if (!origin) return cb(null, true);
       const normalized = origin.replace(/\/$/, '');

@@ -61,6 +61,7 @@ export function allowedWebOrigins(): string[] {
     new Set([
       webAppUrl(),
       CANONICAL_WEB_APP_URL,
+      'https://www.nexoraos.co.in',
       'https://try-nexora.netlify.app',
       'http://localhost:3000',
       'http://127.0.0.1:3000',
