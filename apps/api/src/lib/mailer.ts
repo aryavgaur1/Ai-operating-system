@@ -83,6 +83,11 @@ async function getAccessToken(creds: {
 
 // ─── MIME message builder ─────────────────────────────────────────────────────
 
+function encodeMimeSubject(subject: string): string {
+  // RFC 2047 encoded-word: =?utf-8?b?<base64>?=
+  return `=?utf-8?b?${Buffer.from(subject, 'utf8').toString('base64')}?=`;
+}
+
 function buildMimeMessage(opts: {
   from: string;
   to: string;
@@ -94,7 +99,7 @@ function buildMimeMessage(opts: {
   const lines: string[] = [
     `From: ${opts.from}`,
     `To: ${opts.to}`,
-    `Subject: ${opts.subject}`,
+    `Subject: ${encodeMimeSubject(opts.subject)}`,
     'MIME-Version: 1.0',
     `Content-Type: multipart/alternative; boundary="${boundary}"`,
     '',
