@@ -1,33 +1,24 @@
-import nodemailer from 'nodemailer';
 import { logger } from './logger';
 import { webAppUrl } from './authTokens';
 import { getPlatformAdminEmail } from './platformAdmin';
 
-// ─── SMTP configuration ───────────────────────────────────────────────────────
-// Uses Resend's SMTP bridge (smtp.resend.com) — reachable from Railway.
-// This is standard SMTP transport, not the Resend REST API.
-// No provider switching. No fallback. No REST API calls.
+// ─── Email configuration ──────────────────────────────────────────────────────
+// Uses Resend REST API over HTTPS — the only provider reachable from Railway.
+// Railway blocks all outbound SMTP (ports 465/587) at the platform firewall.
 //
 // Required environment variables on Railway:
-//   SMTP_HOST    — smtp.resend.com
-//   SMTP_USER    — resend
-//   SMTP_PASS    — your Resend API key (used as SMTP password)
-//   EMAIL_FROM   — verified sender (e.g. "Nexora OS <you@yourdomain.com>")
-//                  or any address while in Resend test mode
-//   WEB_APP_URL  — https://ai-lilac-phi.vercel.app
+//   RESEND_API_KEY — Resend API key
+//   EMAIL_FROM     — verified sender address (e.g. "Nexora OS <you@yourdomain.com>")
+//   WEB_APP_URL    — https://ai-lilac-phi.vercel.app
 
-const SMTP_TIMEOUT_MS = 15_000;
-
-const SMTP_PROFILES = [
-  { label: 'resend-465', port: 465, secure: true,  requireTLS: false },
-  { label: 'resend-587', port: 587, secure: false, requireTLS: true  },
-] as const;
+const HTTP_TIMEOUT_MS = 15_000;
 
 export type EmailDeliveryResult = {
   delivered: boolean;
-  mode: 'smtp' | 'console_fallback' | 'failed';
+  mode: 'resend' | 'console_fallback' | 'failed';
   errorCode?: string;
   profile?: string;
+  providerMessageId?: string;
   /** Safe, user-facing guidance (no secrets). */
   hint?: string;
 };
@@ -36,26 +27,17 @@ export type EmailDeliveryResult = {
 let lastEmailDiag: {
   at: string;
   delivered: boolean;
-  mode: 'smtp' | 'console_fallback' | 'failed' | 'verify';
+  mode: 'resend' | 'console_fallback' | 'failed' | 'verify';
   profile?: string | null;
   errorCode?: string | null;
 } | null = null;
 
-let _activeProfile: string | null = null;
-
 // ─── Credential helpers ───────────────────────────────────────────────────────
 
-function smtpHost(): string {
-  return (process.env.SMTP_HOST ?? 'smtp.resend.com').trim();
-}
-
-function emailCredentials(): { user: string; pass: string } | null {
-  // Resend SMTP: user=resend, pass=API_KEY
-  // Fallback: legacy EMAIL_USER / EMAIL_PASS
-  const user = (process.env.SMTP_USER ?? process.env.EMAIL_USER ?? '').trim();
-  const pass = (process.env.SMTP_PASS ?? process.env.EMAIL_PASS ?? '').trim().replace(/\s+/g, '');
-  if (!user || !pass) return null;
-  return { user, pass };
+function resendApiKey(): string | null {
+  const raw = process.env.RESEND_API_KEY ?? process.env.RESEND_KEY ?? process.env.RESEND_TOKEN ?? '';
+  const key = String(raw).trim().replace(/^["']|["']$/g, '');
+  return key || null;
 }
 
 function mailFromAddress(): string {
@@ -67,57 +49,18 @@ function mailFromAddress(): string {
 // ─── Health / diagnostics ─────────────────────────────────────────────────────
 
 export function getEmailDiagnostics() {
-  const creds = emailCredentials();
+  const hasKey = Boolean(resendApiKey());
   return {
-    configured: Boolean(creds),
-    provider: 'smtp',
-    smtpHost: smtpHost(),
-    smtpConfigured: Boolean(creds),
-    smtpUserConfigured: Boolean((process.env.SMTP_USER ?? process.env.EMAIL_USER ?? '').trim()),
-    smtpPassConfigured: Boolean((process.env.SMTP_PASS ?? process.env.EMAIL_PASS ?? '').trim()),
+    configured: hasKey,
+    provider: 'resend',
+    resendKeyConfigured: hasKey,
     emailFromConfigured: Boolean((process.env.EMAIL_FROM ?? '').trim()),
     last: lastEmailDiag,
-    activeProfile: _activeProfile,
+    activeProfile: 'resend',
   };
 }
 
-// ─── Transport helpers ────────────────────────────────────────────────────────
-
-function buildTransport(
-  profile: (typeof SMTP_PROFILES)[number],
-  creds: { user: string; pass: string }
-) {
-  return nodemailer.createTransport({
-    host: smtpHost(),
-    port: profile.port,
-    secure: profile.secure,
-    requireTLS: profile.requireTLS,
-    auth: { user: creds.user, pass: creds.pass },
-    connectionTimeout: SMTP_TIMEOUT_MS,
-    greetingTimeout: SMTP_TIMEOUT_MS,
-    socketTimeout: SMTP_TIMEOUT_MS,
-    tls: { minVersion: 'TLSv1.2' },
-  });
-}
-
-async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(
-          () => reject(Object.assign(new Error(`${label} timed out after ${ms}ms`), { code: 'ETIMEDOUT' })),
-          ms
-        );
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
-
-// ─── SMTP probe (health check) ────────────────────────────────────────────────
+// ─── Probe (health check) ─────────────────────────────────────────────────────
 
 export async function probeSmtpConnectivity(): Promise<{
   ok: boolean;
@@ -126,129 +69,92 @@ export async function probeSmtpConnectivity(): Promise<{
   errorMessage?: string;
   missing?: string[];
 }> {
-  const creds = emailCredentials();
-  if (!creds) {
-    return { ok: false, errorCode: 'not_configured', missing: ['EMAIL_USER', 'EMAIL_PASS'] };
+  const key = resendApiKey();
+  if (!key) {
+    return { ok: false, errorCode: 'not_configured', missing: ['RESEND_API_KEY'] };
   }
-  for (const profile of SMTP_PROFILES) {
-    const transporter = buildTransport(profile, creds);
-    try {
-      await withTimeout(transporter.verify(), SMTP_TIMEOUT_MS, `smtp-verify-${profile.label}`);
-      _activeProfile = profile.label;
-      lastEmailDiag = {
-        at: new Date().toISOString(),
-        delivered: true,
-        mode: 'verify',
-        profile: profile.label,
-        errorCode: null,
-      };
-      return { ok: true, profile: profile.label };
-    } catch (err) {
-      const e = err as Error & { code?: string; responseCode?: number };
-      const errorCode = e.code || (e.responseCode ? `smtp_${e.responseCode}` : 'smtp_error');
-      logger.warn('email.smtp_probe_failed', {
-        profile: profile.label,
-        code: errorCode,
-        message: e.message,
-      });
-      lastEmailDiag = {
-        at: new Date().toISOString(),
-        delivered: false,
-        mode: 'verify',
-        profile: profile.label,
-        errorCode,
-      };
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const res = await fetch('https://api.resend.com/domains', {
+      method: 'GET',
+      signal: controller.signal,
+      headers: { Authorization: `Bearer ${key}` },
+    });
+    if (res.ok || res.status === 403) {
+      lastEmailDiag = { at: new Date().toISOString(), delivered: true, mode: 'verify', profile: 'resend', errorCode: null };
+      return { ok: true, profile: 'resend' };
     }
+    if (res.status === 401) {
+      lastEmailDiag = { at: new Date().toISOString(), delivered: false, mode: 'verify', profile: 'resend', errorCode: 'resend_unauthorized' };
+      return { ok: false, errorCode: 'resend_unauthorized' };
+    }
+    return { ok: true, profile: 'resend' };
+  } catch (err) {
+    const e = err as Error & { name?: string };
+    return { ok: false, errorCode: e.name === 'AbortError' ? 'ETIMEDOUT' : 'resend_unreachable' };
+  } finally {
+    clearTimeout(timer);
   }
-  return {
-    ok: false,
-    errorCode: lastEmailDiag?.errorCode || 'unreachable',
-    errorMessage:
-      'Gmail SMTP is unreachable from this runtime. On Railway, outbound SMTP (ports 465/587) is blocked by the platform firewall. Use a transactional email provider (e.g. SendGrid, Mailgun, AWS SES) with HTTP API delivery, or configure a custom SMTP relay that accepts connections from Railway.',
-  };
 }
 
-// ─── Core send ────────────────────────────────────────────────────────────────
+// ─── Core send via Resend REST API ───────────────────────────────────────────
 
-async function sendViaSMTP(opts: {
+async function sendViaResend(opts: {
   to: string;
   subject: string;
   html: string;
   text?: string;
 }): Promise<EmailDeliveryResult> {
-  const creds = emailCredentials();
-  if (!creds) {
+  const key = resendApiKey();
+  if (!key) {
     return {
       delivered: false,
       mode: 'failed',
-      errorCode: 'smtp_not_configured',
-      hint: 'Set EMAIL_USER and EMAIL_PASS (Gmail App Password) on the API service.',
+      errorCode: 'resend_not_configured',
+      hint: 'Set RESEND_API_KEY on the Railway API service.',
     };
   }
-
-  const mail: nodemailer.SendMailOptions = {
-    from: mailFromAddress(),
-    to: opts.to,
-    subject: opts.subject,
-    html: opts.html,
-    ...(opts.text ? { text: opts.text } : {}),
-  };
-
-  for (const profile of SMTP_PROFILES) {
-    const transporter = buildTransport(profile, creds);
-    try {
-      const info = await withTimeout(
-        transporter.sendMail(mail),
-        SMTP_TIMEOUT_MS + 2_000,
-        `smtp-send-${profile.label}`
-      );
-      _activeProfile = profile.label;
-      lastEmailDiag = {
-        at: new Date().toISOString(),
-        delivered: true,
-        mode: 'smtp',
-        profile: profile.label,
-        errorCode: null,
-      };
-      logger.info('email.sent', {
-        to: opts.to,
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), HTTP_TIMEOUT_MS);
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      signal: controller.signal,
+      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        from: mailFromAddress(),
+        to: [opts.to],
         subject: opts.subject,
-        profile: profile.label,
-        messageId: info?.messageId,
-      });
-      return { delivered: true, mode: 'smtp', profile: profile.label };
-    } catch (err) {
-      const e = err as Error & { code?: string; responseCode?: number };
-      const errorCode = e.code || (e.responseCode ? `smtp_${e.responseCode}` : 'smtp_error');
-      logger.error('email.failed', {
-        to: opts.to,
-        subject: opts.subject,
-        profile: profile.label,
-        code: errorCode,
-        message: e.message,
-      });
-      lastEmailDiag = {
-        at: new Date().toISOString(),
-        delivered: false,
-        mode: 'failed',
-        profile: profile.label,
-        errorCode,
-      };
+        html: opts.html,
+        ...(opts.text ? { text: opts.text } : {}),
+      }),
+    });
+    const bodyText = await res.text();
+    let parsed: any = null;
+    try { parsed = JSON.parse(bodyText); } catch { /* ignore */ }
+
+    if (!res.ok) {
+      const rawCode = String(parsed?.name || `resend_http_${res.status}`);
+      const message = String(parsed?.message || bodyText.slice(0, 200));
+      lastEmailDiag = { at: new Date().toISOString(), delivered: false, mode: 'failed', profile: 'resend', errorCode: rawCode };
+      logger.error('email.failed', { to: opts.to, subject: opts.subject, code: rawCode, message });
+      return { delivered: false, mode: 'failed', errorCode: rawCode, hint: message };
     }
+
+    const providerMessageId = typeof parsed?.id === 'string' ? parsed.id : undefined;
+    lastEmailDiag = { at: new Date().toISOString(), delivered: true, mode: 'resend', profile: 'resend', errorCode: null };
+    logger.info('email.sent', { to: opts.to, subject: opts.subject, profile: 'resend', providerMessageId });
+    return { delivered: true, mode: 'resend', profile: 'resend', providerMessageId };
+  } catch (err) {
+    const e = err as Error & { name?: string };
+    const errorCode = e.name === 'AbortError' ? 'ETIMEDOUT' : 'resend_error';
+    lastEmailDiag = { at: new Date().toISOString(), delivered: false, mode: 'failed', profile: 'resend', errorCode };
+    logger.error('email.failed', { to: opts.to, subject: opts.subject, code: errorCode, message: e.message });
+    return { delivered: false, mode: 'failed', errorCode };
+  } finally {
+    clearTimeout(timer);
   }
-
-  const lastCode = lastEmailDiag?.errorCode || 'smtp_unreachable';
-  const isRailwayBlock =
-    lastCode === 'ETIMEDOUT' || lastCode === 'ESOCKET' || lastCode === 'ECONNREFUSED';
-
-  return {
-    delivered: false,
-    mode: 'failed',
-    errorCode: lastCode,
-    hint: isRailwayBlock
-      ? `SMTP connection to ${smtpHost()} timed out. Check SMTP_HOST, SMTP_USER, and SMTP_PASS on the Railway API service.`
-      : `SMTP delivery failed (${lastCode}). Check SMTP_HOST, SMTP_USER, and SMTP_PASS on the Railway API service.`,
-  };
 }
 
 async function send(
@@ -258,17 +164,12 @@ async function send(
   debugLink?: string,
   text?: string
 ): Promise<EmailDeliveryResult> {
-  const result = await sendViaSMTP({ to, subject, html, text });
+  const result = await sendViaResend({ to, subject, html, text });
   if (!result.delivered) {
     if (debugLink) {
       console.log(`[email:failed] ${subject} → ${to}\nLink: ${debugLink}\nError: ${result.errorCode}`);
     }
-    logger.error('email.delivery_failed', {
-      to,
-      subject,
-      errorCode: result.errorCode,
-      hint: result.hint,
-    });
+    logger.error('email.delivery_failed', { to, subject, errorCode: result.errorCode, hint: result.hint });
   }
   return result;
 }
