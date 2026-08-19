@@ -6,6 +6,9 @@ export const metadata: Metadata = {
   title: 'Nexora OS — The AI Operating System for Modern Teams',
   description:
     'Nexora is an AI Operating System that connects your tools, reasons over context, and executes real work across Slack, Notion, and more.',
+  verification: {
+    google: 'BhLKa_C6zSqokDt3bsGkxHFTcEvQrDaFOct-2iEiZfo',
+  },
   icons: {
     icon: [{ url: '/favicon.png', type: 'image/png' }],
     apple: [{ url: '/favicon.png' }],
