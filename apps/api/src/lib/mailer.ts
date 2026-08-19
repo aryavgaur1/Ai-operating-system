@@ -4,22 +4,23 @@ import { webAppUrl } from './authTokens';
 import { getPlatformAdminEmail } from './platformAdmin';
 
 // ─── SMTP configuration ───────────────────────────────────────────────────────
-// Gmail SMTP is the single production email provider.
-// No Resend. No relay. No fallback. No provider switching.
+// Uses Resend's SMTP bridge (smtp.resend.com) — reachable from Railway.
+// This is standard SMTP transport, not the Resend REST API.
+// No provider switching. No fallback. No REST API calls.
 //
 // Required environment variables on Railway:
-//   EMAIL_USER   — Gmail address (e.g. yourname@gmail.com)
-//   EMAIL_PASS   — Gmail App Password (16-char, spaces stripped)
-//   EMAIL_FROM   — Display sender  (e.g. "Nexora OS <yourname@gmail.com>")
+//   SMTP_HOST    — smtp.resend.com
+//   SMTP_USER    — resend
+//   SMTP_PASS    — your Resend API key (used as SMTP password)
+//   EMAIL_FROM   — verified sender (e.g. "Nexora OS <you@yourdomain.com>")
+//                  or any address while in Resend test mode
 //   WEB_APP_URL  — https://ai-lilac-phi.vercel.app
 
 const SMTP_TIMEOUT_MS = 15_000;
 
-// Try port 465 (TLS) first, then 587 (STARTTLS).
-// Railway blocks both — the health endpoint reports the exact TCP error.
 const SMTP_PROFILES = [
-  { label: 'gmail-465', port: 465, secure: true,  requireTLS: false },
-  { label: 'gmail-587', port: 587, secure: false, requireTLS: true  },
+  { label: 'resend-465', port: 465, secure: true,  requireTLS: false },
+  { label: 'resend-587', port: 587, secure: false, requireTLS: true  },
 ] as const;
 
 export type EmailDeliveryResult = {
@@ -44,9 +45,15 @@ let _activeProfile: string | null = null;
 
 // ─── Credential helpers ───────────────────────────────────────────────────────
 
+function smtpHost(): string {
+  return (process.env.SMTP_HOST ?? 'smtp.resend.com').trim();
+}
+
 function emailCredentials(): { user: string; pass: string } | null {
-  const user = (process.env.EMAIL_USER ?? '').trim();
-  const pass = (process.env.EMAIL_PASS ?? '').trim().replace(/\s+/g, '');
+  // Resend SMTP: user=resend, pass=API_KEY
+  // Fallback: legacy EMAIL_USER / EMAIL_PASS
+  const user = (process.env.SMTP_USER ?? process.env.EMAIL_USER ?? '').trim();
+  const pass = (process.env.SMTP_PASS ?? process.env.EMAIL_PASS ?? '').trim().replace(/\s+/g, '');
   if (!user || !pass) return null;
   return { user, pass };
 }
@@ -54,9 +61,7 @@ function emailCredentials(): { user: string; pass: string } | null {
 function mailFromAddress(): string {
   const from = (process.env.EMAIL_FROM ?? '').trim();
   if (from) return from;
-  const user = (process.env.EMAIL_USER ?? '').trim();
-  if (user) return `Nexora OS <${user}>`;
-  return 'Nexora OS <noreply@localhost>';
+  return 'Nexora OS <onboarding@resend.dev>';
 }
 
 // ─── Health / diagnostics ─────────────────────────────────────────────────────
@@ -66,9 +71,10 @@ export function getEmailDiagnostics() {
   return {
     configured: Boolean(creds),
     provider: 'smtp',
+    smtpHost: smtpHost(),
     smtpConfigured: Boolean(creds),
-    emailUserConfigured: Boolean((process.env.EMAIL_USER ?? '').trim()),
-    emailPassConfigured: Boolean((process.env.EMAIL_PASS ?? '').trim()),
+    smtpUserConfigured: Boolean((process.env.SMTP_USER ?? process.env.EMAIL_USER ?? '').trim()),
+    smtpPassConfigured: Boolean((process.env.SMTP_PASS ?? process.env.EMAIL_PASS ?? '').trim()),
     emailFromConfigured: Boolean((process.env.EMAIL_FROM ?? '').trim()),
     last: lastEmailDiag,
     activeProfile: _activeProfile,
@@ -82,7 +88,7 @@ function buildTransport(
   creds: { user: string; pass: string }
 ) {
   return nodemailer.createTransport({
-    host: 'smtp.gmail.com',
+    host: smtpHost(),
     port: profile.port,
     secure: profile.secure,
     requireTLS: profile.requireTLS,
@@ -240,8 +246,8 @@ async function sendViaSMTP(opts: {
     mode: 'failed',
     errorCode: lastCode,
     hint: isRailwayBlock
-      ? 'Gmail SMTP (ports 465/587) is blocked by the Railway platform firewall. Email cannot be sent via direct SMTP from Railway. Verify EMAIL_USER and EMAIL_PASS are correct, then contact Railway support or migrate to an HTTP-based transactional email service.'
-      : `Gmail SMTP delivery failed (${lastCode}). Check EMAIL_USER, EMAIL_PASS (must be a Gmail App Password), and ensure 2FA + App Passwords are enabled on the Gmail account.`,
+      ? `SMTP connection to ${smtpHost()} timed out. Check SMTP_HOST, SMTP_USER, and SMTP_PASS on the Railway API service.`
+      : `SMTP delivery failed (${lastCode}). Check SMTP_HOST, SMTP_USER, and SMTP_PASS on the Railway API service.`,
   };
 }
 
