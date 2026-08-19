@@ -253,8 +253,6 @@ function escapeHtml(value: string): string {
     .replace(/"/g, '&quot;');
 }
 
-// Clean, minimal design — looks like Notion/Linear transactional emails.
-// White background, black text, simple button. Passes spam filters.
 function baseTemplate(title: string, bodyHtml: string, preheader = ''): string {
   return `<!DOCTYPE html>
 <html lang="en">
@@ -264,32 +262,32 @@ function baseTemplate(title: string, bodyHtml: string, preheader = ''): string {
 <meta http-equiv="X-UA-Compatible" content="IE=edge" />
 <title>${escapeHtml(title)}</title>
 </head>
-<body style="margin:0;padding:0;background:#f4f4f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;">
+<body style="margin:0;padding:0;background:#070b12;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;">
 ${preheader ? `<div style="display:none;max-height:0;overflow:hidden;mso-hide:all;">${escapeHtml(preheader)}&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;</div>` : ''}
-<table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f4f4f5;padding:40px 16px;">
+<table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#070b12;padding:40px 16px;">
   <tr><td align="center">
-    <table width="560" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;width:100%;background:#ffffff;border-radius:8px;border:1px solid #e4e4e7;overflow:hidden;">
+    <table width="560" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;width:100%;background:#0f172a;border-radius:20px;border:1px solid #1e293b;">
 
       <!-- Header -->
       <tr>
-        <td style="padding:28px 40px 24px;border-bottom:1px solid #f0f0f0;">
-          <span style="font-size:15px;font-weight:700;color:#18181b;letter-spacing:-0.2px;">Nexora OS</span>
+        <td style="padding:32px 36px 0;">
+          <span style="font-size:11px;letter-spacing:0.2em;text-transform:uppercase;color:#60a5fa;font-weight:600;">Nexora OS</span>
         </td>
       </tr>
 
       <!-- Body -->
       <tr>
-        <td style="padding:36px 40px 32px;color:#3f3f46;font-size:15px;line-height:1.7;">
+        <td style="padding:20px 36px 36px;color:#cbd5e1;font-size:14px;line-height:1.75;">
           ${bodyHtml}
         </td>
       </tr>
 
       <!-- Footer -->
       <tr>
-        <td style="padding:20px 40px 28px;border-top:1px solid #f0f0f0;">
-          <p style="margin:0;font-size:12px;color:#a1a1aa;line-height:1.6;">
-            You received this email because an action was taken on your Nexora OS account.<br/>
-            <a href="${escapeHtml(webAppUrl())}" style="color:#71717a;text-decoration:underline;">Nexora OS</a>
+        <td style="padding:20px 36px 28px;border-top:1px solid #1e293b;">
+          <p style="margin:0;font-size:12px;color:#475569;line-height:1.6;">
+            Automated message from Nexora OS &middot;
+            <a href="${escapeHtml(webAppUrl())}/app/dashboard" style="color:#60a5fa;text-decoration:none;">Open app</a>
           </p>
         </td>
       </tr>
@@ -304,8 +302,8 @@ ${preheader ? `<div style="display:none;max-height:0;overflow:hidden;mso-hide:al
 function primaryButton(href: string, label: string): string {
   return `<table cellpadding="0" cellspacing="0" border="0" style="margin:28px 0 8px;">
     <tr>
-      <td style="background:#18181b;border-radius:6px;">
-        <a href="${escapeHtml(href)}" style="display:inline-block;padding:12px 24px;font-size:14px;font-weight:600;color:#ffffff;text-decoration:none;border-radius:6px;letter-spacing:-0.1px;">${label}</a>
+      <td style="background:linear-gradient(135deg,#3b82f6,#6366f1);border-radius:999px;">
+        <a href="${escapeHtml(href)}" style="display:inline-block;padding:14px 28px;font-size:14px;font-weight:600;color:#ffffff;text-decoration:none;border-radius:999px;letter-spacing:0.01em;">${label}</a>
       </td>
     </tr>
   </table>`;
@@ -313,8 +311,8 @@ function primaryButton(href: string, label: string): string {
 
 function infoRow(label: string, value: string): string {
   return `<tr>
-    <td style="padding:8px 0;color:#71717a;font-size:13px;width:120px;vertical-align:top;">${label}</td>
-    <td style="padding:8px 0;color:#18181b;font-size:13px;font-weight:500;vertical-align:top;">${escapeHtml(value)}</td>
+    <td style="padding:7px 0;color:#64748b;font-size:13px;width:120px;vertical-align:top;">${label}</td>
+    <td style="padding:7px 0;color:#e2e8f0;font-size:13px;font-weight:500;vertical-align:top;">${escapeHtml(value)}</td>
   </tr>`;
 }
 
@@ -514,38 +512,38 @@ export const mailer = {
 
     const html = baseTemplate(
       subject,
-      `<p style="margin:0 0 8px;font-size:18px;font-weight:600;color:#18181b;">You have been invited</p>
-       <p style="margin:0 0 24px;color:#52525b;">You have been invited to join a workspace on Nexora OS.</p>
+      `<p style="margin:0 0 8px;font-size:22px;font-weight:700;color:#ffffff;line-height:1.3;">You have been invited to join<br/><span style="color:#60a5fa;">${escapeHtml(opts.workspaceName)}</span></p>
+       <p style="margin:0 0 24px;color:#94a3b8;">You have been invited to collaborate on Nexora OS.</p>
 
-       <table cellpadding="0" cellspacing="0" border="0" style="width:100%;margin:0 0 28px;border:1px solid #e4e4e7;border-radius:6px;overflow:hidden;">
-         <tr style="background:#fafafa;">
-           <td style="padding:16px 20px;border-bottom:1px solid #e4e4e7;" colspan="2">
-             <span style="font-size:13px;font-weight:600;color:#71717a;text-transform:uppercase;letter-spacing:0.05em;">Invitation details</span>
+       <table cellpadding="0" cellspacing="0" border="0" style="width:100%;margin:0 0 28px;border:1px solid #1e293b;border-radius:10px;overflow:hidden;">
+         <tr style="background:#0a1628;">
+           <td style="padding:14px 20px;border-bottom:1px solid #1e293b;" colspan="2">
+             <span style="font-size:11px;font-weight:600;color:#60a5fa;text-transform:uppercase;letter-spacing:0.1em;">Invitation details</span>
            </td>
          </tr>
          <tr>
-           <td style="padding:14px 20px;border-bottom:1px solid #f4f4f5;font-size:13px;color:#71717a;width:110px;">Workspace</td>
-           <td style="padding:14px 20px;border-bottom:1px solid #f4f4f5;font-size:14px;font-weight:600;color:#18181b;">${escapeHtml(opts.workspaceName)}</td>
+           <td style="padding:12px 20px;border-bottom:1px solid #1e293b;font-size:13px;color:#64748b;width:110px;">Workspace</td>
+           <td style="padding:12px 20px;border-bottom:1px solid #1e293b;font-size:14px;font-weight:600;color:#f1f5f9;">${escapeHtml(opts.workspaceName)}</td>
          </tr>
          <tr>
-           <td style="padding:14px 20px;border-bottom:1px solid #f4f4f5;font-size:13px;color:#71717a;">Invited by</td>
-           <td style="padding:14px 20px;border-bottom:1px solid #f4f4f5;font-size:14px;color:#18181b;">${escapeHtml(inviter)}</td>
+           <td style="padding:12px 20px;border-bottom:1px solid #1e293b;font-size:13px;color:#64748b;">Invited by</td>
+           <td style="padding:12px 20px;border-bottom:1px solid #1e293b;font-size:14px;color:#e2e8f0;">${escapeHtml(inviter)}</td>
          </tr>
          <tr>
-           <td style="padding:14px 20px;font-size:13px;color:#71717a;">Your role</td>
-           <td style="padding:14px 20px;font-size:14px;color:#18181b;">${escapeHtml(role)}</td>
+           <td style="padding:12px 20px;font-size:13px;color:#64748b;">Your role</td>
+           <td style="padding:12px 20px;font-size:14px;color:#e2e8f0;">${escapeHtml(role)}</td>
          </tr>
        </table>
 
-       <p style="margin:0 0 6px;font-size:14px;color:#3f3f46;">Click below to accept the invitation and access the workspace:</p>
-       ${primaryButton(acceptUrl, 'Accept invitation')}
+       <p style="margin:0 0 6px;font-size:14px;color:#94a3b8;">Click the button below to access your workspace:</p>
+       ${primaryButton(acceptUrl, 'ACCESS WORKSPACE')}
 
-       <p style="margin:20px 0 0;font-size:12px;color:#a1a1aa;">
+       <p style="margin:20px 0 0;font-size:12px;color:#475569;">
          Or copy this link into your browser:<br/>
-         <a href="${escapeHtml(acceptUrl)}" style="color:#71717a;word-break:break-all;">${escapeHtml(acceptUrl)}</a>
+         <a href="${escapeHtml(acceptUrl)}" style="color:#60a5fa;word-break:break-all;text-decoration:none;">${escapeHtml(acceptUrl)}</a>
        </p>
-       <p style="margin:16px 0 0;font-size:12px;color:#a1a1aa;">
-         This invitation was sent to <strong>${escapeHtml(opts.to)}</strong> and expires on ${escapeHtml(opts.expiresAt.toUTCString())}.
+       <p style="margin:16px 0 0;font-size:12px;color:#475569;">
+         This invitation was sent to <strong style="color:#94a3b8;">${escapeHtml(opts.to)}</strong> and expires on ${escapeHtml(opts.expiresAt.toUTCString())}.
        </p>`,
       `${inviter} invited you to join ${opts.workspaceName} on Nexora OS`
     );
