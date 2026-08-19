@@ -145,6 +145,15 @@ export function LandingPage() {
             >
               <span className="h-1.5 w-1.5 rounded-full bg-accent2" /> Nexora · Work Action OS
             </motion.div>
+            <motion.p
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.04 }}
+              className="font-display mt-4 text-lg font-semibold sm:text-xl"
+            >
+              <span className="gradient-text">Nexora OS</span>
+              <span className="text-neutral-400"> — AI for your workspace</span>
+            </motion.p>
             <motion.h1
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
@@ -164,10 +173,25 @@ export function LandingPage() {
             >
               Nexora is the Work Action OS with a human gate — it plans real writes, then waits for your approval before anything lands in your tools.
             </motion.p>
+            <motion.aside
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.2 }}
+              id="what-nexora-does"
+              className="mt-5 max-w-md rounded-2xl border border-accent/20 bg-gradient-to-br from-accent/10 via-white/[0.03] to-accent2/10 px-4 py-3.5 sm:px-5 sm:py-4"
+            >
+              <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-accent2">
+                What Nexora does
+              </p>
+              <p className="mt-2 text-sm leading-6 text-neutral-300">
+                Connects Gmail, Slack, Notion, and Jira. Search email, summarize threads, draft replies,
+                and run approved actions — with you in control before anything sends or changes.
+              </p>
+            </motion.aside>
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.24 }}
+              transition={{ delay: 0.28 }}
               className="mt-8 flex flex-wrap gap-3"
             >
               <Link href="/register" className="inline-flex items-center gap-2 rounded-full bg-accent px-6 py-3 text-sm font-semibold text-[#04101f]">
