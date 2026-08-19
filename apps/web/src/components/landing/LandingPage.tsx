@@ -101,7 +101,7 @@ function SectionHeading({ eyebrow, title, body }: { eyebrow: string; title: stri
   );
 }
 
-export function LandingPage() {
+export function LandingPage({ hideStaticHero = false }: { hideStaticHero?: boolean }) {
   const [yearly, setYearly] = useState(true);
   const [openFaq, setOpenFaq] = useState<number | null>(0);
   const [cmdIndex, setCmdIndex] = useState(0);
@@ -134,10 +134,12 @@ export function LandingPage() {
       {/* Nav — glass + scroll hide/reveal */}
       <MarketingNav />
 
-      {/* Hero */}
-      <section className="relative mx-auto max-w-7xl px-4 pb-16 pt-28 sm:px-6 sm:pt-32">
+      {/* Hero — static intro rendered server-side when hideStaticHero (see page.tsx) */}
+      <section className={cn('relative mx-auto max-w-7xl px-4 pb-16 sm:px-6', hideStaticHero ? 'pt-4' : 'pt-28 sm:pt-32')}>
         <motion.div style={{ opacity: heroOpacity }} className="grid items-center gap-12 lg:grid-cols-[1.05fr_0.95fr]">
           <div>
+            {!hideStaticHero && (
+              <>
             <motion.div
               initial={{ opacity: 0, y: 16 }}
               animate={{ opacity: 1, y: 0 }}
@@ -180,6 +182,8 @@ export function LandingPage() {
                 Notion, and approve real actions before anything is sent or changed.
               </p>
             </motion.div>
+              </>
+            )}
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
