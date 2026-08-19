@@ -10,6 +10,10 @@ const GMAIL_API = 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send'
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const API_TIMEOUT_MS = 15_000;
 
+/** Match Nexora web typography (Instrument Sans / Inter stack with email-safe fallbacks). */
+const EMAIL_FONT =
+  "'Inter','Instrument Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Helvetica,Arial,sans-serif";
+
 export type EmailDeliveryResult = {
   delivered: boolean;
   mode: 'gmail_api' | 'console_fallback' | 'failed';
@@ -73,11 +77,13 @@ async function getAccessToken(creds: {
 }
 
 // ─── MIME builder ─────────────────────────────────────────────────────────────
-// Proper RFC 2822 headers prevent spam classification:
-//   - Plain UTF-8 subject (no encoded-word — Gmail handles it fine over API)
-//   - Message-ID and Date headers
-//   - List-Unsubscribe header
-//   - multipart/alternative with both text and HTML parts
+// RFC 2047 encoded-word for non-ASCII subjects (prevents em-dash mojibake on mobile Gmail).
+
+function encodeMimeSubject(subject: string): string {
+  if (/^[\x20-\x7E]*$/.test(subject)) return subject;
+  const b64 = Buffer.from(subject, 'utf8').toString('base64');
+  return `=?UTF-8?B?${b64}?=`;
+}
 
 function buildMimeMessage(opts: {
   from: string;
@@ -95,7 +101,7 @@ function buildMimeMessage(opts: {
   const lines = [
     `From: ${opts.from}`,
     `To: ${opts.to}`,
-    `Subject: ${opts.subject}`,
+    `Subject: ${encodeMimeSubject(opts.subject)}`,
     `Date: ${date}`,
     `Message-ID: ${msgId}`,
     'MIME-Version: 1.0',
@@ -265,8 +271,9 @@ function baseTemplate(title: string, bodyHtml: string, preheader = ''): string {
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <meta http-equiv="X-UA-Compatible" content="IE=edge"/>
 <title>${escapeHtml(title)}</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&amp;display=swap" rel="stylesheet"/>
 <style>
-  body{margin:0;padding:0;background-color:#070b12 !important;}
+  body{margin:0;padding:0;background-color:#070b12 !important;font-family:${EMAIL_FONT};}
   .wrapper{background-color:#070b12 !important;}
   .card{background-color:#0f172a !important;}
   .card-header{background-color:#0f172a !important;}
@@ -289,13 +296,13 @@ ${preheader ? `<div style="display:none;max-height:0;overflow:hidden;mso-hide:al
         <!-- Brand header -->
         <tr>
           <td class="card-header" style="padding:28px 32px 0;background-color:#0f172a;border-radius:16px 16px 0 0;" bgcolor="#0f172a">
-            <span style="font-family:Arial,sans-serif;font-size:11px;letter-spacing:3px;text-transform:uppercase;color:#60a5fa;font-weight:700;">NEXORA OS</span>
+            <span style="font-family:${EMAIL_FONT};font-size:11px;letter-spacing:3px;text-transform:uppercase;color:#60a5fa;font-weight:700;">NEXORA OS</span>
           </td>
         </tr>
 
         <!-- Main content -->
         <tr>
-          <td class="card-body" style="padding:20px 32px 32px;background-color:#0f172a;font-family:Arial,'Helvetica Neue',Helvetica,sans-serif;font-size:14px;line-height:1.7;color:#cbd5e1;" bgcolor="#0f172a">
+          <td class="card-body" style="padding:20px 32px 32px;background-color:#0f172a;font-family:${EMAIL_FONT};font-size:14px;line-height:1.7;color:#cbd5e1;" bgcolor="#0f172a">
             ${bodyHtml}
           </td>
         </tr>
@@ -303,7 +310,7 @@ ${preheader ? `<div style="display:none;max-height:0;overflow:hidden;mso-hide:al
         <!-- Footer -->
         <tr>
           <td class="card-footer" style="padding:18px 32px 24px;background-color:#0f172a;border-top:1px solid #1e293b;border-radius:0 0 16px 16px;" bgcolor="#0f172a">
-            <p style="margin:0;font-family:Arial,sans-serif;font-size:12px;color:#475569;line-height:1.5;">
+            <p style="margin:0;font-family:${EMAIL_FONT};font-size:12px;color:#475569;line-height:1.5;">
               Automated message from Nexora OS &nbsp;&middot;&nbsp;
               <a href="${escapeHtml(webAppUrl())}/app/dashboard" style="color:#60a5fa;text-decoration:none;">Open app</a>
             </p>
@@ -324,7 +331,7 @@ function primaryButton(href: string, label: string): string {
     <tr>
       <td align="center" bgcolor="#4f6ef7" style="background-color:#4f6ef7;border-radius:50px;mso-padding-alt:0;">
         <a href="${escapeHtml(href)}"
-           style="display:inline-block;padding:14px 32px;font-family:Arial,sans-serif;font-size:14px;font-weight:700;color:#ffffff;text-decoration:none;border-radius:50px;letter-spacing:0.5px;background-color:#4f6ef7;"
+           style="display:inline-block;padding:14px 32px;font-family:${EMAIL_FONT};font-size:14px;font-weight:700;color:#ffffff;text-decoration:none;border-radius:50px;letter-spacing:0.5px;background-color:#4f6ef7;"
            target="_blank">${label}</a>
       </td>
     </tr>
@@ -333,8 +340,10 @@ function primaryButton(href: string, label: string): string {
 
 function infoRow(label: string, value: string): string {
   return `<tr class="details-row" bgcolor="#0f172a">
-    <td style="padding:12px 20px;border-bottom:1px solid #1e293b;font-family:Arial,sans-serif;font-size:13px;color:#64748b;width:110px;background-color:#0f172a;" bgcolor="#0f172a">${label}</td>
-    <td style="padding:12px 20px;border-bottom:1px solid #1e293b;font-family:Arial,sans-serif;font-size:14px;font-weight:600;color:#e2e8f0;background-color:#0f172a;" bgcolor="#0f172a">${escapeHtml(value)}</td>
+    <td colspan="2" style="padding:14px 20px;border-bottom:1px solid #1e293b;font-family:${EMAIL_FONT};background-color:#0f172a;" bgcolor="#0f172a">
+      <p style="margin:0 0 4px;font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#64748b;">${escapeHtml(label)}</p>
+      <p style="margin:0;font-size:15px;font-weight:600;line-height:1.4;color:#e2e8f0;word-break:break-word;">${escapeHtml(value)}</p>
+    </td>
   </tr>`;
 }
 
@@ -510,7 +519,7 @@ export const mailer = {
     role: string; rawToken: string; expiresAt: Date;
   }): Promise<EmailDeliveryResult> => {
     const acceptUrl = `${webAppUrl()}/invite/${encodeURIComponent(opts.rawToken)}`;
-    const subject = `Nexora OS — You've been invited to join ${opts.workspaceName}`;
+    const subject = `Nexora OS - You've been invited to join ${opts.workspaceName}`;
     const inviter = opts.inviterName || 'A teammate';
     const role = opts.role;
 
@@ -536,24 +545,21 @@ export const mailer = {
 
     const html = baseTemplate(
       subject,
-      `<p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:22px;font-weight:700;color:#ffffff;line-height:1.3;">You've been invited to join<br/><span style="color:#60a5fa;">${escapeHtml(opts.workspaceName)}</span></p>
-       <p style="margin:0 0 24px;font-family:Arial,sans-serif;color:#94a3b8;font-size:14px;">${escapeHtml(inviter)} has invited you to collaborate on <strong style="color:#cbd5e1;">Nexora OS</strong>.</p>
+      `<p style="margin:0 0 8px;font-family:${EMAIL_FONT};font-size:22px;font-weight:700;color:#ffffff;line-height:1.3;">You've been invited to join<br/><span style="color:#60a5fa;">${escapeHtml(opts.workspaceName)}</span></p>
+       <p style="margin:0 0 24px;font-family:${EMAIL_FONT};color:#94a3b8;font-size:14px;">${escapeHtml(inviter)} has invited you to collaborate on <strong style="color:#cbd5e1;">Nexora OS</strong>.</p>
 
        <table cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;margin:0 0 28px;border-radius:10px;box-shadow:0 0 0 1px #1e293b;">
          <tr class="details-header" bgcolor="#0a1628">
            <td colspan="2" bgcolor="#0a1628" style="padding:14px 20px;border-bottom:1px solid #1e293b;border-radius:10px 10px 0 0;background-color:#0a1628;">
-             <span style="font-family:Arial,sans-serif;font-size:11px;font-weight:700;color:#60a5fa;text-transform:uppercase;letter-spacing:2px;">Invitation Details</span>
+             <span style="font-family:${EMAIL_FONT};font-size:11px;font-weight:700;color:#60a5fa;text-transform:uppercase;letter-spacing:2px;">Invitation Details</span>
            </td>
          </tr>
          ${infoRow('Workspace', opts.workspaceName)}
          ${infoRow('Invited by', inviter)}
-         <tr class="details-row" bgcolor="#0f172a">
-           <td style="padding:12px 20px;font-family:Arial,sans-serif;font-size:13px;color:#64748b;width:110px;background-color:#0f172a;border-radius:0 0 0 10px;" bgcolor="#0f172a">Your role</td>
-           <td style="padding:12px 20px;font-family:Arial,sans-serif;font-size:14px;font-weight:600;color:#e2e8f0;background-color:#0f172a;border-radius:0 0 10px 0;" bgcolor="#0f172a">${escapeHtml(role)}</td>
-         </tr>
+         ${infoRow('Your role', role)}
        </table>
 
-       <p style="margin:0 0 6px;font-size:14px;color:#94a3b8;">Click the button below to access your workspace:</p>
+       <p style="margin:0 0 6px;font-family:${EMAIL_FONT};font-size:14px;color:#94a3b8;">Click the button below to access your workspace:</p>
        ${primaryButton(acceptUrl, 'ACCESS WORKSPACE')}
 
        <p style="margin:20px 0 0;font-size:12px;color:#475569;">
