@@ -143,51 +143,50 @@ export function LandingPage() {
               animate={{ opacity: 1, y: 0 }}
               className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] uppercase tracking-[0.22em] text-neutral-300"
             >
-              <span className="h-1.5 w-1.5 rounded-full bg-accent2" /> Nexora · Work Action OS
+              <span className="h-1.5 w-1.5 rounded-full bg-accent2" /> Nexora OS · AI Operating System
             </motion.div>
             <motion.p
-              initial={{ opacity: 0, y: 12 }}
+              initial={{ opacity: 0, y: 16 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.04 }}
-              className="font-display mt-4 text-lg font-semibold sm:text-xl"
+              transition={{ delay: 0.05 }}
+              className="font-display mt-5 text-3xl font-semibold tracking-tight sm:text-4xl md:text-5xl"
+              aria-label="Nexora OS"
             >
               <span className="gradient-text">Nexora OS</span>
-              <span className="text-neutral-400"> — AI for your workspace</span>
             </motion.p>
             <motion.h1
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.08 }}
-              className="font-display mt-6 text-4xl font-semibold leading-[1.05] tracking-tight text-white sm:text-5xl md:text-6xl lg:text-[4.1rem]"
+              transition={{ delay: 0.1 }}
+              className="font-display mt-4 text-4xl font-semibold leading-[1.05] tracking-tight text-white sm:text-5xl md:text-6xl lg:text-[4.1rem]"
             >
               <span className="gradient-text">Propose → Approve → Act</span>
               <span className="block text-[0.72em] font-medium text-neutral-200 sm:text-[0.68em] md:mt-2">
                 across Slack, Jira, and Notion.
               </span>
             </motion.h1>
+            <motion.div
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.16 }}
+              id="what-nexora-does"
+              className="mt-5 max-w-xl rounded-2xl border border-white/10 bg-white/[0.04] px-5 py-4 text-sm leading-7 text-neutral-300"
+            >
+              <p className="font-semibold text-white">What Nexora OS does</p>
+              <p className="mt-2">
+                Nexora OS is a productivity app with OAuth integrations. Users sign in, connect their own
+                Gmail and workspace tools, then use AI chat to read email, draft replies, search Slack and
+                Notion, and approve real actions before anything is sent or changed.
+              </p>
+            </motion.div>
             <motion.p
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.16 }}
+              transition={{ delay: 0.22 }}
               className="mt-5 max-w-xl text-base leading-8 text-neutral-400 sm:text-lg"
             >
               Nexora is the Work Action OS with a human gate — it plans real writes, then waits for your approval before anything lands in your tools.
             </motion.p>
-            <motion.aside
-              initial={{ opacity: 0, y: 16 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.2 }}
-              id="what-nexora-does"
-              className="mt-5 max-w-md rounded-2xl border border-accent/20 bg-gradient-to-br from-accent/10 via-white/[0.03] to-accent2/10 px-4 py-3.5 sm:px-5 sm:py-4"
-            >
-              <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-accent2">
-                What Nexora does
-              </p>
-              <p className="mt-2 text-sm leading-6 text-neutral-300">
-                Connects Gmail, Slack, Notion, and Jira. Search email, summarize threads, draft replies,
-                and run approved actions — with you in control before anything sends or changes.
-              </p>
-            </motion.aside>
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
