@@ -90,6 +90,8 @@ function buildMimeMessage(opts: {
   const msgId = `<${Date.now()}.${Math.random().toString(36).slice(2)}@nexoraos.mail>`;
   const date = new Date().toUTCString();
 
+  // multipart/alternative: text first (lowest priority), HTML last (highest priority).
+  // Gmail always picks the LAST part — HTML card will always render, never plain text.
   const lines = [
     `From: ${opts.from}`,
     `To: ${opts.to}`,
@@ -102,13 +104,11 @@ function buildMimeMessage(opts: {
     '',
     `--${boundary}`,
     'Content-Type: text/plain; charset=UTF-8',
-    'Content-Transfer-Encoding: quoted-printable',
     '',
     opts.text,
     '',
     `--${boundary}`,
     'Content-Type: text/html; charset=UTF-8',
-    'Content-Transfer-Encoding: quoted-printable',
     '',
     opts.html,
     '',
@@ -254,65 +254,87 @@ function escapeHtml(value: string): string {
 }
 
 function baseTemplate(title: string, bodyHtml: string, preheader = ''): string {
+  // Gmail-safe dark card:
+  // - background-color on every td (not just table/body — Gmail strips those)
+  // - no CSS variables, no @media, no shorthand background
+  // - border via box-shadow (Gmail strips border on tables in some clients)
   return `<!DOCTYPE html>
-<html lang="en">
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<meta http-equiv="X-UA-Compatible" content="IE=edge" />
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<meta http-equiv="X-UA-Compatible" content="IE=edge"/>
 <title>${escapeHtml(title)}</title>
+<style>
+  body{margin:0;padding:0;background-color:#070b12 !important;}
+  .wrapper{background-color:#070b12 !important;}
+  .card{background-color:#0f172a !important;}
+  .card-header{background-color:#0f172a !important;}
+  .card-body{background-color:#0f172a !important;}
+  .card-footer{background-color:#0f172a !important;}
+  .details-header{background-color:#0a1628 !important;}
+  .details-row{background-color:#0f172a !important;}
+</style>
 </head>
-<body style="margin:0;padding:0;background:#070b12;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;">
-${preheader ? `<div style="display:none;max-height:0;overflow:hidden;mso-hide:all;">${escapeHtml(preheader)}&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;</div>` : ''}
-<table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#070b12;padding:40px 16px;">
-  <tr><td align="center">
-    <table width="560" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;width:100%;background:#0f172a;border-radius:20px;border:1px solid #1e293b;">
+<body style="margin:0;padding:0;background-color:#070b12;" bgcolor="#070b12">
+${preheader ? `<div style="display:none;max-height:0;overflow:hidden;mso-hide:all;font-size:1px;color:#070b12;">${escapeHtml(preheader)}&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;</div>` : ''}
+<table class="wrapper" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#070b12">
+  <tr>
+    <td align="center" style="padding:40px 16px;background-color:#070b12;" bgcolor="#070b12">
 
-      <!-- Header -->
-      <tr>
-        <td style="padding:32px 36px 0;">
-          <span style="font-size:11px;letter-spacing:0.2em;text-transform:uppercase;color:#60a5fa;font-weight:600;">Nexora OS</span>
-        </td>
-      </tr>
+      <table class="card" width="100%" cellpadding="0" cellspacing="0" border="0"
+             style="max-width:560px;background-color:#0f172a;border-radius:16px;box-shadow:0 0 0 1px #1e293b;"
+             bgcolor="#0f172a">
 
-      <!-- Body -->
-      <tr>
-        <td style="padding:20px 36px 36px;color:#cbd5e1;font-size:14px;line-height:1.75;">
-          ${bodyHtml}
-        </td>
-      </tr>
+        <!-- Brand header -->
+        <tr>
+          <td class="card-header" style="padding:28px 32px 0;background-color:#0f172a;border-radius:16px 16px 0 0;" bgcolor="#0f172a">
+            <span style="font-family:Arial,sans-serif;font-size:11px;letter-spacing:3px;text-transform:uppercase;color:#60a5fa;font-weight:700;">NEXORA OS</span>
+          </td>
+        </tr>
 
-      <!-- Footer -->
-      <tr>
-        <td style="padding:20px 36px 28px;border-top:1px solid #1e293b;">
-          <p style="margin:0;font-size:12px;color:#475569;line-height:1.6;">
-            Automated message from Nexora OS &middot;
-            <a href="${escapeHtml(webAppUrl())}/app/dashboard" style="color:#60a5fa;text-decoration:none;">Open app</a>
-          </p>
-        </td>
-      </tr>
+        <!-- Main content -->
+        <tr>
+          <td class="card-body" style="padding:20px 32px 32px;background-color:#0f172a;font-family:Arial,'Helvetica Neue',Helvetica,sans-serif;font-size:14px;line-height:1.7;color:#cbd5e1;" bgcolor="#0f172a">
+            ${bodyHtml}
+          </td>
+        </tr>
 
-    </table>
-  </td></tr>
+        <!-- Footer -->
+        <tr>
+          <td class="card-footer" style="padding:18px 32px 24px;background-color:#0f172a;border-top:1px solid #1e293b;border-radius:0 0 16px 16px;" bgcolor="#0f172a">
+            <p style="margin:0;font-family:Arial,sans-serif;font-size:12px;color:#475569;line-height:1.5;">
+              Automated message from Nexora OS &nbsp;&middot;&nbsp;
+              <a href="${escapeHtml(webAppUrl())}/app/dashboard" style="color:#60a5fa;text-decoration:none;">Open app</a>
+            </p>
+          </td>
+        </tr>
+
+      </table>
+    </td>
+  </tr>
 </table>
 </body>
 </html>`;
 }
 
 function primaryButton(href: string, label: string): string {
+  // Solid background fallback for clients that don't support gradients
   return `<table cellpadding="0" cellspacing="0" border="0" style="margin:28px 0 8px;">
     <tr>
-      <td style="background:linear-gradient(135deg,#3b82f6,#6366f1);border-radius:999px;">
-        <a href="${escapeHtml(href)}" style="display:inline-block;padding:14px 28px;font-size:14px;font-weight:600;color:#ffffff;text-decoration:none;border-radius:999px;letter-spacing:0.01em;">${label}</a>
+      <td align="center" bgcolor="#4f6ef7" style="background-color:#4f6ef7;border-radius:50px;mso-padding-alt:0;">
+        <a href="${escapeHtml(href)}"
+           style="display:inline-block;padding:14px 32px;font-family:Arial,sans-serif;font-size:14px;font-weight:700;color:#ffffff;text-decoration:none;border-radius:50px;letter-spacing:0.5px;background-color:#4f6ef7;"
+           target="_blank">${label}</a>
       </td>
     </tr>
   </table>`;
 }
 
 function infoRow(label: string, value: string): string {
-  return `<tr>
-    <td style="padding:7px 0;color:#64748b;font-size:13px;width:120px;vertical-align:top;">${label}</td>
-    <td style="padding:7px 0;color:#e2e8f0;font-size:13px;font-weight:500;vertical-align:top;">${escapeHtml(value)}</td>
+  return `<tr class="details-row" bgcolor="#0f172a">
+    <td style="padding:12px 20px;border-bottom:1px solid #1e293b;font-family:Arial,sans-serif;font-size:13px;color:#64748b;width:110px;background-color:#0f172a;" bgcolor="#0f172a">${label}</td>
+    <td style="padding:12px 20px;border-bottom:1px solid #1e293b;font-family:Arial,sans-serif;font-size:14px;font-weight:600;color:#e2e8f0;background-color:#0f172a;" bgcolor="#0f172a">${escapeHtml(value)}</td>
   </tr>`;
 }
 
@@ -512,26 +534,20 @@ export const mailer = {
 
     const html = baseTemplate(
       subject,
-      `<p style="margin:0 0 8px;font-size:22px;font-weight:700;color:#ffffff;line-height:1.3;">You have been invited to join<br/><span style="color:#60a5fa;">${escapeHtml(opts.workspaceName)}</span></p>
-       <p style="margin:0 0 24px;color:#94a3b8;">You have been invited to collaborate on Nexora OS.</p>
+      `<p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:22px;font-weight:700;color:#ffffff;line-height:1.3;">You have been invited to join<br/><span style="color:#60a5fa;">${escapeHtml(opts.workspaceName)}</span></p>
+       <p style="margin:0 0 24px;font-family:Arial,sans-serif;color:#94a3b8;font-size:14px;">You have been invited to collaborate on Nexora OS.</p>
 
-       <table cellpadding="0" cellspacing="0" border="0" style="width:100%;margin:0 0 28px;border:1px solid #1e293b;border-radius:10px;overflow:hidden;">
-         <tr style="background:#0a1628;">
-           <td style="padding:14px 20px;border-bottom:1px solid #1e293b;" colspan="2">
-             <span style="font-size:11px;font-weight:600;color:#60a5fa;text-transform:uppercase;letter-spacing:0.1em;">Invitation details</span>
+       <table cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;margin:0 0 28px;border-radius:10px;box-shadow:0 0 0 1px #1e293b;">
+         <tr class="details-header" bgcolor="#0a1628">
+           <td colspan="2" bgcolor="#0a1628" style="padding:14px 20px;border-bottom:1px solid #1e293b;border-radius:10px 10px 0 0;background-color:#0a1628;">
+             <span style="font-family:Arial,sans-serif;font-size:11px;font-weight:700;color:#60a5fa;text-transform:uppercase;letter-spacing:2px;">Invitation Details</span>
            </td>
          </tr>
-         <tr>
-           <td style="padding:12px 20px;border-bottom:1px solid #1e293b;font-size:13px;color:#64748b;width:110px;">Workspace</td>
-           <td style="padding:12px 20px;border-bottom:1px solid #1e293b;font-size:14px;font-weight:600;color:#f1f5f9;">${escapeHtml(opts.workspaceName)}</td>
-         </tr>
-         <tr>
-           <td style="padding:12px 20px;border-bottom:1px solid #1e293b;font-size:13px;color:#64748b;">Invited by</td>
-           <td style="padding:12px 20px;border-bottom:1px solid #1e293b;font-size:14px;color:#e2e8f0;">${escapeHtml(inviter)}</td>
-         </tr>
-         <tr>
-           <td style="padding:12px 20px;font-size:13px;color:#64748b;">Your role</td>
-           <td style="padding:12px 20px;font-size:14px;color:#e2e8f0;">${escapeHtml(role)}</td>
+         ${infoRow('Workspace', opts.workspaceName)}
+         ${infoRow('Invited by', inviter)}
+         <tr class="details-row" bgcolor="#0f172a">
+           <td style="padding:12px 20px;font-family:Arial,sans-serif;font-size:13px;color:#64748b;width:110px;background-color:#0f172a;border-radius:0 0 0 10px;" bgcolor="#0f172a">Your role</td>
+           <td style="padding:12px 20px;font-family:Arial,sans-serif;font-size:14px;font-weight:600;color:#e2e8f0;background-color:#0f172a;border-radius:0 0 10px 0;" bgcolor="#0f172a">${escapeHtml(role)}</td>
          </tr>
        </table>
 
