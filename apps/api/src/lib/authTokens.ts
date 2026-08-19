@@ -26,12 +26,16 @@ export function webAppUrl(): string {
   const isLocalOrigin = (url: string) =>
     /^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?$/i.test(url);
 
-  // Prefer env when set, but never send users to retired Netlify or localhost in production.
+  // Prefer env when set, but never send users to retired hosts or localhost in production.
   if (fromEnv) {
     if (
       fromEnv === RETIRED_NETLIFY_ORIGIN ||
       /^https:\/\/[a-z0-9-]+\.netlify\.app$/i.test(fromEnv)
     ) {
+      return CANONICAL_WEB_APP_URL;
+    }
+    // Stale Vercel preview URLs on Railway — canonical domain is nexoraos.co.in.
+    if (isProduction && /^https:\/\/[a-z0-9-]+\.vercel\.app$/i.test(fromEnv)) {
       return CANONICAL_WEB_APP_URL;
     }
     if (isProduction && isLocalOrigin(fromEnv)) {
