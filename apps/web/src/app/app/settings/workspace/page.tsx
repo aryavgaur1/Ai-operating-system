@@ -183,11 +183,15 @@ export default function WorkspaceSettingsPage() {
     verb: 'created' | 'resent'
   ) {
     if (res.email.delivered) {
-      setMessage(`Invitation ${verb} — email delivered to ${res.invitation.email}.`);
+      setMessage(
+        `Invitation ${verb === 'created' ? 'sent' : 'resent'} successfully to ${res.invitation.email}. ` +
+        `The member should receive an email with the ACCESS WORKSPACE link. ` +
+        `If they don't see it in their inbox, ask them to check their Spam/Junk or Promotions folder.`
+      );
       return;
     }
     const hint = res.email.hint || `Gmail API failed (${res.email.errorCode || res.email.mode}).`;
-    setMessage(`Invitation ${verb}, but email not delivered. ${hint}`);
+    setMessage(`Invitation ${verb}, but email was not delivered. ${hint}`);
     if (res.acceptToken) {
       const origin = typeof window !== 'undefined' ? window.location.origin : '';
       setLastAcceptLink(`${origin}${inviteAcceptPath(res.acceptToken)}`);

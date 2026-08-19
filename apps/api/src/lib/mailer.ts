@@ -510,7 +510,7 @@ export const mailer = {
     role: string; rawToken: string; expiresAt: Date;
   }): Promise<EmailDeliveryResult> => {
     const acceptUrl = `${webAppUrl()}/invite/${encodeURIComponent(opts.rawToken)}`;
-    const subject = `You have been invited to join ${opts.workspaceName} on Nexora OS`;
+    const subject = `Nexora OS — You've been invited to join ${opts.workspaceName}`;
     const inviter = opts.inviterName || 'A teammate';
     const role = opts.role;
 
@@ -519,23 +519,25 @@ export const mailer = {
       ``,
       `${inviter} has invited you to join ${opts.workspaceName} on Nexora OS.`,
       ``,
-      `Role: ${role}`,
+      `Your role: ${role}`,
       ``,
-      `Accept the invitation:`,
+      `Click the link below to accept your invitation and access the workspace:`,
       acceptUrl,
       ``,
-      `This invitation is for: ${opts.to}`,
+      `This invitation was sent to: ${opts.to}`,
       `It expires on: ${opts.expiresAt.toUTCString()}`,
       ``,
-      `If you were not expecting this invitation, ignore this email.`,
+      `If you don't see this email in your inbox, please check your Spam/Junk or Promotions folder.`,
       ``,
-      `Nexora OS`,
+      `If you were not expecting this invitation, you can safely ignore this email.`,
+      ``,
+      `— Nexora OS`,
     ].join('\n');
 
     const html = baseTemplate(
       subject,
-      `<p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:22px;font-weight:700;color:#ffffff;line-height:1.3;">You have been invited to join<br/><span style="color:#60a5fa;">${escapeHtml(opts.workspaceName)}</span></p>
-       <p style="margin:0 0 24px;font-family:Arial,sans-serif;color:#94a3b8;font-size:14px;">You have been invited to collaborate on Nexora OS.</p>
+      `<p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:22px;font-weight:700;color:#ffffff;line-height:1.3;">You've been invited to join<br/><span style="color:#60a5fa;">${escapeHtml(opts.workspaceName)}</span></p>
+       <p style="margin:0 0 24px;font-family:Arial,sans-serif;color:#94a3b8;font-size:14px;">${escapeHtml(inviter)} has invited you to collaborate on <strong style="color:#cbd5e1;">Nexora OS</strong>.</p>
 
        <table cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;margin:0 0 28px;border-radius:10px;box-shadow:0 0 0 1px #1e293b;">
          <tr class="details-header" bgcolor="#0a1628">
@@ -560,6 +562,9 @@ export const mailer = {
        </p>
        <p style="margin:16px 0 0;font-size:12px;color:#475569;">
          This invitation was sent to <strong style="color:#94a3b8;">${escapeHtml(opts.to)}</strong> and expires on ${escapeHtml(opts.expiresAt.toUTCString())}.
+       </p>
+       <p style="margin:14px 0 0;font-size:12px;color:#64748b;font-style:italic;">
+         If you don't see this email in your inbox, please check your <strong style="color:#94a3b8;">Spam/Junk</strong> or <strong style="color:#94a3b8;">Promotions</strong> folder.
        </p>`,
       `${inviter} invited you to join ${opts.workspaceName} on Nexora OS`
     );
