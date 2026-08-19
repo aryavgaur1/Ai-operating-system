@@ -22,6 +22,7 @@ import { conversationsRouter } from './routes/conversations';
 import { dashboardRouter } from './routes/dashboard';
 import { workspacesRouter } from './routes/workspaces';
 import { invitationsAuthRouter, invitationsPublicRouter } from './routes/invitations';
+import { marketingChatbotRouter, adminChatbotRouter } from './routes/marketing-chatbot';
 import { errorMiddleware } from './lib/errors';
 import { isLiveMode } from '@enterprise-ai-os/connectors';
 import { getEmailDiagnostics, probeSmtpConnectivity } from './lib/mailer';
@@ -114,6 +115,7 @@ app.use('/oauth/notion', oauthNotionRouter);
 app.use('/oauth/slack', oauthSlackRouter);
 app.use('/oauth/jira', oauthJiraRouter);
 app.use('/oauth/gmail', oauthGmailRouter);
+app.use('/marketing-chatbot', marketingChatbotRouter);
 
 app.get('/health', async (req, res) => {
   const probe = String(req.query.probeSmtp || '') === '1';
@@ -224,6 +226,7 @@ app.use('/dashboard', dashboardRouter);
 app.use('/workspaces', workspacesRouter);
 app.use('/invitations', invitationsAuthRouter);
 app.use('/admin', adminRouter);
+app.use('/admin/chatbot', adminChatbotRouter);
 
 app.use(errorMiddleware);
 
