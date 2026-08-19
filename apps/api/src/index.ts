@@ -131,13 +131,13 @@ app.get('/health', async (req, res) => {
       null,
     deployedAt: process.env.RAILWAY_DEPLOYMENT_ID || null,
     emailConfigured: email.configured,
-    emailProvider: 'resend',
-    resendKeyConfigured: email.resendKeyConfigured,
-    emailFromConfigured: email.emailFromConfigured,
+    emailProvider: 'gmail_api',
+    googleClientIdConfigured: email.googleClientIdConfigured,
+    emailUserConfigured: email.emailUserConfigured,
+    gmailRefreshTokenConfigured: email.gmailRefreshTokenConfigured,
     // Prefer runtime resolver (remaps retired Netlify) over raw env mirror.
     webAppUrl: resolveCanonicalWebAppUrl() || WEB_APP_URL,
-    emailSmtp: {
-      activeProfile: email.activeProfile,
+    emailGmail: {
       last: email.last,
       ...(smtpProbe ? { probe: smtpProbe } : {}),
     },

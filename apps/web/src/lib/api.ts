@@ -301,7 +301,7 @@ export interface InvitationPreview {
 
 export interface EmailDeliveryResult {
   delivered: boolean;
-  mode: 'smtp' | 'console_fallback' | 'failed';
+  mode: 'gmail_api' | 'console_fallback' | 'failed';
   errorCode?: string;
   profile?: string;
   hint?: string;

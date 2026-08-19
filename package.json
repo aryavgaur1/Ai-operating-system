@@ -15,7 +15,8 @@
     "build:api": "npm run build -w packages/shared && npm run build -w packages/stores && npm run build -w packages/connectors && npm run build -w packages/agent-core && npm run build -w apps/api",
     "start:api": "npm run start -w apps/api",
     "db:migrate": "node db/migrate.js",
-    "db:seed-admin": "node db/seed-admin.js"
+    "db:seed-admin": "node db/seed-admin.js",
+    "setup:gmail-mailer": "node scripts/setup-gmail-mailer.js"
   },
   "engines": {
     "node": ">=20"

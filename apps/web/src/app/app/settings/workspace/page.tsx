@@ -82,7 +82,7 @@ export default function WorkspaceSettingsPage() {
     }
     const hint =
       res.email.hint ||
-      `Gmail SMTP delivery failed (${res.email.errorCode || res.email.mode}). Check EMAIL_USER and EMAIL_PASS on the API service.`;
+      `Gmail API delivery failed (${res.email.errorCode || res.email.mode}). Check GMAIL_REFRESH_TOKEN on the API service.`;
     setMessage(
       `Invitation ${verb}, but email was not delivered. ${hint} Share the accept link below.`
     );

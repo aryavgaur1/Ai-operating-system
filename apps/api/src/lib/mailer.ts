@@ -2,65 +2,126 @@ import { logger } from './logger';
 import { webAppUrl } from './authTokens';
 import { getPlatformAdminEmail } from './platformAdmin';
 
-// ─── Email configuration ──────────────────────────────────────────────────────
-// Uses Resend REST API over HTTPS — the only provider reachable from Railway.
-// Railway blocks all outbound SMTP (ports 465/587) at the platform firewall.
+// ─── Gmail API mailer ─────────────────────────────────────────────────────────
+// Sends email via Gmail REST API over HTTPS (port 443).
+// Railway cannot block this — it's standard HTTPS to googleapis.com.
 //
-// Required environment variables on Railway:
-//   RESEND_API_KEY — Resend API key
-//   EMAIL_FROM     — verified sender address (e.g. "Nexora OS <you@yourdomain.com>")
-//   WEB_APP_URL    — https://ai-lilac-phi.vercel.app
+// No Resend. No SMTP. No nodemailer. No domain verification. No DNS.
+//
+// Required environment variables:
+//   GOOGLE_CLIENT_ID      — existing Google OAuth client
+//   GOOGLE_CLIENT_SECRET  — existing Google OAuth client secret
+//   EMAIL_USER            — Gmail address that sends Nexora emails
+//   GMAIL_REFRESH_TOKEN   — obtained once via: npm run setup:gmail-mailer
+//   WEB_APP_URL           — https://ai-lilac-phi.vercel.app
 
-const HTTP_TIMEOUT_MS = 15_000;
+const GMAIL_API = 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send';
+const TOKEN_URL = 'https://oauth2.googleapis.com/token';
+const API_TIMEOUT_MS = 15_000;
 
 export type EmailDeliveryResult = {
   delivered: boolean;
-  mode: 'resend' | 'console_fallback' | 'failed';
+  mode: 'gmail_api' | 'console_fallback' | 'failed';
   errorCode?: string;
-  profile?: string;
   providerMessageId?: string;
-  /** Safe, user-facing guidance (no secrets). */
   hint?: string;
 };
 
-/** Last email outcome — exposed via /health (no secrets, no bodies). */
 let lastEmailDiag: {
   at: string;
   delivered: boolean;
-  mode: 'resend' | 'console_fallback' | 'failed' | 'verify';
-  profile?: string | null;
+  mode: string;
   errorCode?: string | null;
 } | null = null;
 
-// ─── Credential helpers ───────────────────────────────────────────────────────
+// ─── Credentials ─────────────────────────────────────────────────────────────
 
-function resendApiKey(): string | null {
-  const raw = process.env.RESEND_API_KEY ?? process.env.RESEND_KEY ?? process.env.RESEND_TOKEN ?? '';
-  const key = String(raw).trim().replace(/^["']|["']$/g, '');
-  return key || null;
+function gmailCredentials(): {
+  clientId: string;
+  clientSecret: string;
+  refreshToken: string;
+  emailUser: string;
+} | null {
+  const clientId = (process.env.GOOGLE_CLIENT_ID ?? '').trim();
+  const clientSecret = (process.env.GOOGLE_CLIENT_SECRET ?? '').trim();
+  const refreshToken = (process.env.GMAIL_REFRESH_TOKEN ?? '').trim();
+  const emailUser = (process.env.EMAIL_USER ?? '').trim();
+  if (!clientId || !clientSecret || !refreshToken || !emailUser) return null;
+  return { clientId, clientSecret, refreshToken, emailUser };
 }
 
-function mailFromAddress(): string {
-  const from = (process.env.EMAIL_FROM ?? '').trim();
-  if (from) return from;
-  return 'Nexora OS <onboarding@resend.dev>';
+// ─── OAuth2 access token ──────────────────────────────────────────────────────
+
+async function getAccessToken(creds: {
+  clientId: string;
+  clientSecret: string;
+  refreshToken: string;
+}): Promise<string> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+  try {
+    const res = await fetch(TOKEN_URL, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: creds.clientId,
+        client_secret: creds.clientSecret,
+        refresh_token: creds.refreshToken,
+        grant_type: 'refresh_token',
+      }).toString(),
+    });
+    const body = await res.json() as { access_token?: string; error?: string; error_description?: string };
+    if (!res.ok || !body.access_token) {
+      throw new Error(`oauth_token_error: ${body.error || 'unknown'} — ${body.error_description || ''}`);
+    }
+    return body.access_token;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// ─── MIME message builder ─────────────────────────────────────────────────────
+
+function buildMimeMessage(opts: {
+  from: string;
+  to: string;
+  subject: string;
+  html: string;
+  text?: string;
+}): string {
+  const boundary = `nexora_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  const lines: string[] = [
+    `From: ${opts.from}`,
+    `To: ${opts.to}`,
+    `Subject: ${opts.subject}`,
+    'MIME-Version: 1.0',
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    '',
+    `--${boundary}`,
+  ];
+  if (opts.text) {
+    lines.push('Content-Type: text/plain; charset=UTF-8', '', opts.text, '', `--${boundary}`);
+  }
+  lines.push('Content-Type: text/html; charset=UTF-8', '', opts.html, '', `--${boundary}--`);
+  const raw = lines.join('\r\n');
+  return Buffer.from(raw).toString('base64url');
 }
 
 // ─── Health / diagnostics ─────────────────────────────────────────────────────
 
 export function getEmailDiagnostics() {
-  const hasKey = Boolean(resendApiKey());
+  const creds = gmailCredentials();
   return {
-    configured: hasKey,
-    provider: 'resend',
-    resendKeyConfigured: hasKey,
-    emailFromConfigured: Boolean((process.env.EMAIL_FROM ?? '').trim()),
+    configured: Boolean(creds),
+    provider: 'gmail_api',
+    googleClientIdConfigured: Boolean((process.env.GOOGLE_CLIENT_ID ?? '').trim()),
+    googleClientSecretConfigured: Boolean((process.env.GOOGLE_CLIENT_SECRET ?? '').trim()),
+    emailUserConfigured: Boolean((process.env.EMAIL_USER ?? '').trim()),
+    gmailRefreshTokenConfigured: Boolean((process.env.GMAIL_REFRESH_TOKEN ?? '').trim()),
     last: lastEmailDiag,
-    activeProfile: 'resend',
   };
 }
-
-// ─── Probe (health check) ─────────────────────────────────────────────────────
 
 export async function probeSmtpConnectivity(): Promise<{
   ok: boolean;
@@ -69,91 +130,92 @@ export async function probeSmtpConnectivity(): Promise<{
   errorMessage?: string;
   missing?: string[];
 }> {
-  const key = resendApiKey();
-  if (!key) {
-    return { ok: false, errorCode: 'not_configured', missing: ['RESEND_API_KEY'] };
+  const creds = gmailCredentials();
+  if (!creds) {
+    const missing: string[] = [];
+    if (!(process.env.GOOGLE_CLIENT_ID ?? '').trim()) missing.push('GOOGLE_CLIENT_ID');
+    if (!(process.env.GOOGLE_CLIENT_SECRET ?? '').trim()) missing.push('GOOGLE_CLIENT_SECRET');
+    if (!(process.env.EMAIL_USER ?? '').trim()) missing.push('EMAIL_USER');
+    if (!(process.env.GMAIL_REFRESH_TOKEN ?? '').trim()) missing.push('GMAIL_REFRESH_TOKEN');
+    return { ok: false, errorCode: 'not_configured', missing };
   }
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 10_000);
   try {
-    const res = await fetch('https://api.resend.com/domains', {
-      method: 'GET',
-      signal: controller.signal,
-      headers: { Authorization: `Bearer ${key}` },
-    });
-    if (res.ok || res.status === 403) {
-      lastEmailDiag = { at: new Date().toISOString(), delivered: true, mode: 'verify', profile: 'resend', errorCode: null };
-      return { ok: true, profile: 'resend' };
-    }
-    if (res.status === 401) {
-      lastEmailDiag = { at: new Date().toISOString(), delivered: false, mode: 'verify', profile: 'resend', errorCode: 'resend_unauthorized' };
-      return { ok: false, errorCode: 'resend_unauthorized' };
-    }
-    return { ok: true, profile: 'resend' };
+    await getAccessToken(creds);
+    lastEmailDiag = { at: new Date().toISOString(), delivered: true, mode: 'gmail_api', errorCode: null };
+    return { ok: true, profile: 'gmail_api' };
   } catch (err) {
-    const e = err as Error & { name?: string };
-    return { ok: false, errorCode: e.name === 'AbortError' ? 'ETIMEDOUT' : 'resend_unreachable' };
-  } finally {
-    clearTimeout(timer);
+    const msg = (err as Error).message;
+    lastEmailDiag = { at: new Date().toISOString(), delivered: false, mode: 'failed', errorCode: msg };
+    return { ok: false, errorCode: 'gmail_api_auth_failed', errorMessage: msg };
   }
 }
 
-// ─── Core send via Resend REST API ───────────────────────────────────────────
+// ─── Core send ────────────────────────────────────────────────────────────────
 
-async function sendViaResend(opts: {
+async function sendViaGmailApi(opts: {
   to: string;
   subject: string;
   html: string;
   text?: string;
 }): Promise<EmailDeliveryResult> {
-  const key = resendApiKey();
-  if (!key) {
+  const creds = gmailCredentials();
+  if (!creds) {
+    const missing: string[] = [];
+    if (!process.env.GOOGLE_CLIENT_ID?.trim()) missing.push('GOOGLE_CLIENT_ID');
+    if (!process.env.GOOGLE_CLIENT_SECRET?.trim()) missing.push('GOOGLE_CLIENT_SECRET');
+    if (!process.env.EMAIL_USER?.trim()) missing.push('EMAIL_USER');
+    if (!process.env.GMAIL_REFRESH_TOKEN?.trim()) missing.push('GMAIL_REFRESH_TOKEN');
     return {
       delivered: false,
       mode: 'failed',
-      errorCode: 'resend_not_configured',
-      hint: 'Set RESEND_API_KEY on the Railway API service.',
+      errorCode: 'gmail_api_not_configured',
+      hint: `Missing required variables: ${missing.join(', ')}. Run: npm run setup:gmail-mailer`,
     };
   }
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), HTTP_TIMEOUT_MS);
-  try {
-    const res = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      signal: controller.signal,
-      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        from: mailFromAddress(),
-        to: [opts.to],
-        subject: opts.subject,
-        html: opts.html,
-        ...(opts.text ? { text: opts.text } : {}),
-      }),
-    });
-    const bodyText = await res.text();
-    let parsed: any = null;
-    try { parsed = JSON.parse(bodyText); } catch { /* ignore */ }
 
-    if (!res.ok) {
-      const rawCode = String(parsed?.name || `resend_http_${res.status}`);
-      const message = String(parsed?.message || bodyText.slice(0, 200));
-      lastEmailDiag = { at: new Date().toISOString(), delivered: false, mode: 'failed', profile: 'resend', errorCode: rawCode };
-      logger.error('email.failed', { to: opts.to, subject: opts.subject, code: rawCode, message });
-      return { delivered: false, mode: 'failed', errorCode: rawCode, hint: message };
+  try {
+    const accessToken = await getAccessToken(creds);
+    const from = `Nexora OS <${creds.emailUser}>`;
+    const raw = buildMimeMessage({ from, to: opts.to, subject: opts.subject, html: opts.html, text: opts.text });
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+    let res: Response;
+    try {
+      res = await fetch(GMAIL_API, {
+        method: 'POST',
+        signal: controller.signal,
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ raw }),
+      });
+    } finally {
+      clearTimeout(timer);
     }
 
-    const providerMessageId = typeof parsed?.id === 'string' ? parsed.id : undefined;
-    lastEmailDiag = { at: new Date().toISOString(), delivered: true, mode: 'resend', profile: 'resend', errorCode: null };
-    logger.info('email.sent', { to: opts.to, subject: opts.subject, profile: 'resend', providerMessageId });
-    return { delivered: true, mode: 'resend', profile: 'resend', providerMessageId };
+    const body = await res.json() as { id?: string; error?: { message?: string; status?: string } };
+
+    if (!res.ok) {
+      const errorCode = body.error?.status || `gmail_http_${res.status}`;
+      const message = body.error?.message || `HTTP ${res.status}`;
+      lastEmailDiag = { at: new Date().toISOString(), delivered: false, mode: 'failed', errorCode };
+      logger.error('email.failed', { to: opts.to, subject: opts.subject, code: errorCode, message });
+      return { delivered: false, mode: 'failed', errorCode, hint: message };
+    }
+
+    const providerMessageId = body.id;
+    lastEmailDiag = { at: new Date().toISOString(), delivered: true, mode: 'gmail_api', errorCode: null };
+    logger.info('email.sent', { to: opts.to, subject: opts.subject, profile: 'gmail_api', providerMessageId });
+    return { delivered: true, mode: 'gmail_api', providerMessageId };
+
   } catch (err) {
     const e = err as Error & { name?: string };
-    const errorCode = e.name === 'AbortError' ? 'ETIMEDOUT' : 'resend_error';
-    lastEmailDiag = { at: new Date().toISOString(), delivered: false, mode: 'failed', profile: 'resend', errorCode };
+    const errorCode = e.name === 'AbortError' ? 'ETIMEDOUT' : 'gmail_api_error';
+    lastEmailDiag = { at: new Date().toISOString(), delivered: false, mode: 'failed', errorCode };
     logger.error('email.failed', { to: opts.to, subject: opts.subject, code: errorCode, message: e.message });
-    return { delivered: false, mode: 'failed', errorCode };
-  } finally {
-    clearTimeout(timer);
+    return { delivered: false, mode: 'failed', errorCode, hint: e.message };
   }
 }
 
@@ -164,11 +226,9 @@ async function send(
   debugLink?: string,
   text?: string
 ): Promise<EmailDeliveryResult> {
-  const result = await sendViaResend({ to, subject, html, text });
+  const result = await sendViaGmailApi({ to, subject, html, text });
   if (!result.delivered) {
-    if (debugLink) {
-      console.log(`[email:failed] ${subject} → ${to}\nLink: ${debugLink}\nError: ${result.errorCode}`);
-    }
+    if (debugLink) console.log(`[email:failed] ${subject} → ${to}\nLink: ${debugLink}\nError: ${result.errorCode}`);
     logger.error('email.delivery_failed', { to, subject, errorCode: result.errorCode, hint: result.hint });
   }
   return result;
@@ -218,8 +278,7 @@ export const mailer = {
         `Welcome to Nexora, ${name}`,
         `<p>Your personal workspace has been created successfully.</p>
          <p><strong>Let's build with AI.</strong> Connect your own Slack and Notion, chat with your agent, and keep approvals in one place.</p>
-         ${ctaButton(dashboard, 'Open your dashboard')}
-         <p style="font-size:12px;color:#94a3b8;">Check your inbox for a verification link to unlock chat and integrations.</p>`
+         ${ctaButton(dashboard, 'Open your dashboard')}`
       ),
       dashboard
     );
@@ -243,18 +302,10 @@ export const mailer = {
     );
   },
 
-  sendLoginNotification: (
-    to: string,
-    detail: {
-      name?: string;
-      time: string;
-      device: string;
-      browser: string;
-      os?: string;
-      ip: string;
-      location?: string;
-    }
-  ) => {
+  sendLoginNotification: (to: string, detail: {
+    name?: string; time: string; device: string; browser: string;
+    os?: string; ip: string; location?: string;
+  }) => {
     const resetUrl = `${webAppUrl()}/login?mode=forgot`;
     const name = detail.name ? escapeHtml(detail.name) : 'there';
     return send(
@@ -264,8 +315,7 @@ export const mailer = {
         'New login detected',
         `<p>Hi ${name}, someone just signed in to your Nexora account.</p>
          <table style="width:100%;font-size:13px;color:#cbd5e1;margin:16px 0;border-collapse:collapse;">
-           <tr><td style="padding:8px 0;color:#94a3b8;width:110px;">Name</td><td style="padding:8px 0;">${name}</td></tr>
-           <tr><td style="padding:8px 0;color:#94a3b8;">Time</td><td style="padding:8px 0;">${escapeHtml(detail.time)}</td></tr>
+           <tr><td style="padding:8px 0;color:#94a3b8;width:110px;">Time</td><td style="padding:8px 0;">${escapeHtml(detail.time)}</td></tr>
            <tr><td style="padding:8px 0;color:#94a3b8;">Browser</td><td style="padding:8px 0;">${escapeHtml(detail.browser)}</td></tr>
            <tr><td style="padding:8px 0;color:#94a3b8;">Device / OS</td><td style="padding:8px 0;">${escapeHtml(detail.os || detail.device)}</td></tr>
            <tr><td style="padding:8px 0;color:#94a3b8;">IP</td><td style="padding:8px 0;">${escapeHtml(detail.ip)}</td></tr>
@@ -327,7 +377,7 @@ export const mailer = {
       `${tool} connected to Nexora`,
       baseTemplate(
         'Integration connected',
-        `<p>Your <strong>${escapeHtml(tool)}</strong> account is now connected to <em>your</em> Nexora workspace — not shared with other users.</p>
+        `<p>Your <strong>${escapeHtml(tool)}</strong> account is now connected to <em>your</em> Nexora workspace.</p>
          ${ctaButton(`${webAppUrl()}/app/integrations`, 'Manage integrations')}`
       )
     ),
@@ -347,21 +397,13 @@ export const mailer = {
     send(
       to,
       'Your Nexora account was deleted',
-      baseTemplate(
-        'Account deleted',
-        `<p>Your Nexora account and workspace data have been deleted as requested.</p>`
-      )
+      baseTemplate('Account deleted', `<p>Your Nexora account and workspace data have been deleted as requested.</p>`)
     ),
 
   sendPlatformAdminSignupNotification: (opts: {
-    name: string | null;
-    email: string;
-    timestamp: string;
+    name: string | null; email: string; timestamp: string;
   }) => {
     const admin = getPlatformAdminEmail();
-    const name = escapeHtml(opts.name || 'Unknown');
-    const email = escapeHtml(opts.email);
-    const time = escapeHtml(opts.timestamp);
     return send(
       admin,
       'Nexora OS — New user successfully signed up',
@@ -369,9 +411,9 @@ export const mailer = {
         'New user successfully signed up',
         `<p>A new user has registered on Nexora OS.</p>
          <table style="width:100%;font-size:14px;color:#cbd5e1;margin:16px 0;border-collapse:collapse;">
-           <tr><td style="padding:8px 0;color:#94a3b8;width:110px;">Name</td><td style="padding:8px 0;">${name}</td></tr>
-           <tr><td style="padding:8px 0;color:#94a3b8;">Email</td><td style="padding:8px 0;">${email}</td></tr>
-           <tr><td style="padding:8px 0;color:#94a3b8;">Time</td><td style="padding:8px 0;">${time}</td></tr>
+           <tr><td style="padding:8px 0;color:#94a3b8;width:110px;">Name</td><td style="padding:8px 0;">${escapeHtml(opts.name || 'Unknown')}</td></tr>
+           <tr><td style="padding:8px 0;color:#94a3b8;">Email</td><td style="padding:8px 0;">${escapeHtml(opts.email)}</td></tr>
+           <tr><td style="padding:8px 0;color:#94a3b8;">Time</td><td style="padding:8px 0;">${escapeHtml(opts.timestamp)}</td></tr>
            <tr><td style="padding:8px 0;color:#94a3b8;">Status</td><td style="padding:8px 0;"><strong>Successfully registered</strong></td></tr>
          </table>`
       )
@@ -379,20 +421,10 @@ export const mailer = {
   },
 
   sendPlatformAdminMemberJoinedNotification: (opts: {
-    workspaceName: string;
-    userName: string | null;
-    email: string;
-    role: string;
-    inviterName: string | null;
-    timestamp: string;
+    workspaceName: string; userName: string | null; email: string;
+    role: string; inviterName: string | null; timestamp: string;
   }) => {
     const admin = getPlatformAdminEmail();
-    const workspace = escapeHtml(opts.workspaceName);
-    const userName = escapeHtml(opts.userName || opts.email);
-    const email = escapeHtml(opts.email);
-    const role = escapeHtml(opts.role);
-    const inviter = escapeHtml(opts.inviterName || 'Unknown');
-    const time = escapeHtml(opts.timestamp);
     return send(
       admin,
       `Nexora OS — ${opts.userName || opts.email} joined ${opts.workspaceName}`,
@@ -400,25 +432,20 @@ export const mailer = {
         'A new member has successfully joined a workspace',
         `<p>A new member has successfully joined a team workspace.</p>
          <table style="width:100%;font-size:14px;color:#cbd5e1;margin:16px 0;border-collapse:collapse;">
-           <tr><td style="padding:8px 0;color:#94a3b8;width:120px;">Workspace</td><td style="padding:8px 0;"><strong>${workspace}</strong></td></tr>
-           <tr><td style="padding:8px 0;color:#94a3b8;">Member</td><td style="padding:8px 0;">${userName}</td></tr>
-           <tr><td style="padding:8px 0;color:#94a3b8;">Email</td><td style="padding:8px 0;">${email}</td></tr>
-           <tr><td style="padding:8px 0;color:#94a3b8;">Role</td><td style="padding:8px 0;">${role}</td></tr>
-           <tr><td style="padding:8px 0;color:#94a3b8;">Invited by</td><td style="padding:8px 0;">${inviter}</td></tr>
-           <tr><td style="padding:8px 0;color:#94a3b8;">Status</td><td style="padding:8px 0;"><strong>Successfully joined</strong></td></tr>
-           <tr><td style="padding:8px 0;color:#94a3b8;">Time</td><td style="padding:8px 0;">${time}</td></tr>
+           <tr><td style="padding:8px 0;color:#94a3b8;width:120px;">Workspace</td><td style="padding:8px 0;"><strong>${escapeHtml(opts.workspaceName)}</strong></td></tr>
+           <tr><td style="padding:8px 0;color:#94a3b8;">Member</td><td style="padding:8px 0;">${escapeHtml(opts.userName || opts.email)}</td></tr>
+           <tr><td style="padding:8px 0;color:#94a3b8;">Email</td><td style="padding:8px 0;">${escapeHtml(opts.email)}</td></tr>
+           <tr><td style="padding:8px 0;color:#94a3b8;">Role</td><td style="padding:8px 0;">${escapeHtml(opts.role)}</td></tr>
+           <tr><td style="padding:8px 0;color:#94a3b8;">Invited by</td><td style="padding:8px 0;">${escapeHtml(opts.inviterName || 'Unknown')}</td></tr>
+           <tr><td style="padding:8px 0;color:#94a3b8;">Time</td><td style="padding:8px 0;">${escapeHtml(opts.timestamp)}</td></tr>
          </table>`
       )
     );
   },
 
   sendWorkspaceInvitation: async (opts: {
-    to: string;
-    workspaceName: string;
-    inviterName: string | null;
-    role: string;
-    rawToken: string;
-    expiresAt: Date;
+    to: string; workspaceName: string; inviterName: string | null;
+    role: string; rawToken: string; expiresAt: Date;
   }): Promise<EmailDeliveryResult> => {
     const acceptUrl = `${webAppUrl()}/invite/${encodeURIComponent(opts.rawToken)}`;
     const inviter = opts.inviterName ? escapeHtml(opts.inviterName) : 'A teammate';

@@ -29,7 +29,7 @@ function invitationEmailError(email: {
   const detail =
     email.hint ||
     (email.errorCode
-      ? `Gmail SMTP delivery failed (${email.errorCode}).`
+      ? `Gmail API delivery failed (${email.errorCode}).`
       : `Email delivery failed (${email.mode}).`);
   return new AppError(`Invitation could not be sent. ${detail}`, 502);
 }
