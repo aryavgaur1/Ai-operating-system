@@ -38,7 +38,9 @@ function normalizeProvider(raw: string | undefined): EmailProviderMode | null {
   return null;
 }
 
-/** Deterministic provider selection — never silently fall back when Resend is expected. */
+const RESEND_TEST_SENDER = 'onboarding@resend.dev';
+
+/** Deterministic provider selection — EMAIL_PROVIDER must be set explicitly. */
 export function resolveEmailProvider(): {
   mode: EmailProviderMode;
   configured: boolean;
@@ -50,24 +52,27 @@ export function resolveEmailProvider(): {
   const hasSmtp = Boolean(emailCredentials());
   const missing: string[] = [];
 
+  if (!explicit) {
+    return {
+      mode: 'none',
+      configured: false,
+      missing: ['EMAIL_PROVIDER'],
+      explicit: false,
+    };
+  }
+
   if (explicit === 'resend') {
     if (!hasResend) missing.push('RESEND_API_KEY');
-    return { mode: 'resend', configured: hasResend, missing, explicit: true };
+    const from = (process.env.EMAIL_FROM ?? '').trim();
+    if (!from) missing.push('EMAIL_FROM');
+    else if (from.includes(RESEND_TEST_SENDER)) missing.push('EMAIL_FROM_verified_domain');
+    return { mode: 'resend', configured: missing.length === 0, missing, explicit: true };
   }
   if (explicit === 'smtp') {
     if (!hasSmtp) missing.push('EMAIL_USER', 'EMAIL_PASS');
     return { mode: 'smtp', configured: hasSmtp, missing, explicit: true };
   }
-  if (explicit === 'none') {
-    return { mode: 'none', configured: false, missing: [], explicit: true };
-  }
-
-  // No EMAIL_PROVIDER — infer from configured credentials. Prefer SMTP when both
-  // are present so production can use the already-working Gmail sender without
-  // silently selecting Resend's test-mode address.
-  if (hasSmtp) return { mode: 'smtp', configured: true, missing: [], explicit: false };
-  if (hasResend) return { mode: 'resend', configured: true, missing: [], explicit: false };
-  return { mode: 'none', configured: false, missing: ['RESEND_API_KEY or EMAIL_USER/EMAIL_PASS'], explicit: false };
+  return { mode: 'none', configured: false, missing: [], explicit: true };
 }
 
 export function getEmailDiagnostics() {
@@ -106,11 +111,9 @@ function emailCredentials(): { user: string; pass: string } | null {
 function mailFromAddress(): string {
   const from = (process.env.EMAIL_FROM ?? '').trim();
   if (from) return from;
-  // Resend rejects unverified Gmail "from" addresses — use Resend test sender unless overridden.
-  if (resendApiKey()) return 'Nexora OS <onboarding@resend.dev>';
   const user = (process.env.EMAIL_USER ?? '').trim();
   if (user) return `Nexora OS <${user}>`;
-  return 'Nexora OS <onboarding@resend.dev>';
+  return 'Nexora OS <noreply@localhost>';
 }
 
 function buildTransport(profile: SmtpProfile, creds: { user: string; pass: string }) {
@@ -203,6 +206,7 @@ async function sendViaResend(opts: {
   to: string;
   subject: string;
   html: string;
+  text?: string;
 }): Promise<EmailDeliveryResult> {
   const key = resendApiKey();
   if (!key) return { delivered: false, mode: 'failed', errorCode: 'resend_not_configured' };
@@ -221,6 +225,7 @@ async function sendViaResend(opts: {
         to: [opts.to],
         subject: opts.subject,
         html: opts.html,
+        ...(opts.text ? { text: opts.text } : {}),
       }),
     });
     const bodyText = await res.text();
@@ -298,8 +303,12 @@ export async function probeSmtpConnectivity(): Promise<{
   missing?: string[];
 }> {
   const selection = resolveEmailProvider();
-  if (selection.explicit && selection.missing.length) {
-    return { ok: false, errorCode: 'provider_misconfigured', missing: selection.missing };
+  if (!selection.explicit || selection.missing.length) {
+    return {
+      ok: false,
+      errorCode: 'provider_misconfigured',
+      missing: selection.explicit ? selection.missing : ['EMAIL_PROVIDER'],
+    };
   }
   if (selection.mode === 'none') {
     return { ok: false, errorCode: 'not_configured' };
@@ -483,84 +492,21 @@ async function sendViaProfiles(
   return { delivered: false, mode: 'failed', errorCode: errors.join('|') || 'unknown' };
 }
 
-async function deliverInviteViaWebRelay(rawToken: string): Promise<EmailDeliveryResult> {
-  const relayBase = (process.env.EMAIL_RELAY_URL || webAppUrl()).replace(/\/$/, '');
-  const url = `${relayBase}/api/internal/deliver-invite`;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 20_000);
-  try {
-    const res = await fetch(url, {
-      method: 'POST',
-      signal: controller.signal,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token: rawToken }),
-    });
-    const text = await res.text();
-    let parsed: any = null;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      // ignore
-    }
-    if (!res.ok || !parsed?.ok) {
-      const rawCode = String(parsed?.errorCode || parsed?.error || `relay_http_${res.status}`);
-      const detail = String(parsed?.detail || parsed?.hint || text.slice(0, 200));
-      const { errorCode, hint } = resendFailureMeta(detail, rawCode);
-      lastEmailDiag = {
-        at: new Date().toISOString(),
-        delivered: false,
-        mode: 'failed',
-        profile: 'resend_relay',
-        errorCode,
-      };
-      logger.error('email.failed', { profile: 'resend_relay', code: errorCode, message: detail });
-      return {
-        delivered: false,
-        mode: 'failed',
-        errorCode,
-        profile: 'resend_relay',
-        hint: hint || (typeof parsed?.hint === 'string' ? parsed.hint : undefined),
-      };
-    }
-    _activeProfile = 'resend_relay';
-    lastEmailDiag = {
-      at: new Date().toISOString(),
-      delivered: true,
-      mode: 'resend',
-      profile: 'resend_relay',
-      errorCode: null,
-    };
-    logger.info('email.sent', { profile: 'resend_relay' });
-    return { delivered: true, mode: 'resend_relay', profile: 'resend_relay' };
-  } catch (err) {
-    const e = err as Error & { name?: string };
-    const errorCode = e.name === 'AbortError' ? 'ETIMEDOUT' : 'relay_error';
-    lastEmailDiag = {
-      at: new Date().toISOString(),
-      delivered: false,
-      mode: 'failed',
-      profile: 'resend_relay',
-      errorCode,
-    };
-    return { delivered: false, mode: 'failed', errorCode, profile: 'resend_relay' };
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 async function send(
   to: string,
   subject: string,
   html: string,
-  debugLink?: string
+  debugLink?: string,
+  text?: string
 ): Promise<EmailDeliveryResult> {
   const selection = resolveEmailProvider();
 
-  if (selection.explicit && selection.missing.length) {
-    const errorCode = `provider_missing_${selection.missing.join('_').toLowerCase()}`;
+  if (!selection.explicit || selection.missing.length) {
+    const missing = selection.explicit ? selection.missing : ['EMAIL_PROVIDER'];
+    const errorCode = `provider_missing_${missing.join('_').toLowerCase()}`;
     logger.error('email.provider_misconfigured', {
       provider: selection.mode,
-      missing: selection.missing,
+      missing,
     });
     lastEmailDiag = {
       at: new Date().toISOString(),
@@ -574,15 +520,27 @@ async function send(
       mode: 'failed',
       errorCode,
       profile: selection.mode,
-      hint: `Email provider "${selection.mode}" is selected but required configuration is missing: ${selection.missing.join(', ')}.`,
+      hint:
+        missing.includes('EMAIL_PROVIDER')
+          ? 'Set EMAIL_PROVIDER to resend or smtp on the API service.'
+          : `Email provider "${selection.mode}" is selected but required configuration is missing: ${missing.join(', ')}.`,
+    };
+  }
+
+  if (selection.mode === 'none') {
+    logger.info('email.console_fallback', { to, subject, debugLink: debugLink || null });
+    if (debugLink) console.log(`[email:console] ${subject} → ${to}\nLink: ${debugLink}`);
+    return {
+      delivered: false,
+      mode: 'console_fallback',
+      errorCode: 'not_configured',
+      hint: 'EMAIL_PROVIDER=none — emails are logged locally only.',
     };
   }
 
   if (selection.mode === 'resend') {
-    const result = await sendViaResend({ to, subject, html });
-    if (result.delivered) return result;
-    // Never fall through to SMTP when Resend is the selected provider.
-    if (debugLink) console.log(`[email:failed] ${subject} → ${to}\nLink: ${debugLink}`);
+    const result = await sendViaResend({ to, subject, html, text });
+    if (!result.delivered && debugLink) console.log(`[email:failed] ${subject} → ${to}\nLink: ${debugLink}`);
     return result;
   }
 
@@ -596,7 +554,13 @@ async function send(
         hint: 'SMTP provider selected but EMAIL_USER / EMAIL_PASS are not configured.',
       };
     }
-    const result = await sendViaProfiles(creds, { from: mailFromAddress(), to, subject, html });
+    const result = await sendViaProfiles(creds, {
+      from: mailFromAddress(),
+      to,
+      subject,
+      html,
+      ...(text ? { text } : {}),
+    });
     if (result.delivered) {
       logger.info('email.sent', { to, subject, profile: result.profile });
       return result;
@@ -605,13 +569,11 @@ async function send(
     return result;
   }
 
-  logger.info('email.console_fallback', { to, subject, debugLink: debugLink || null });
-  if (debugLink) console.log(`[email:console] ${subject} → ${to}\nLink: ${debugLink}`);
   return {
     delivered: false,
-    mode: 'console_fallback',
-    errorCode: 'not_configured',
-    hint: 'No email provider configured. Set EMAIL_PROVIDER=resend and RESEND_API_KEY.',
+    mode: 'failed',
+    errorCode: 'unknown_provider',
+    hint: 'Unsupported EMAIL_PROVIDER value.',
   };
 }
 
@@ -836,37 +798,38 @@ export const mailer = {
     const invitedEmail = escapeHtml(opts.to);
     const expires = escapeHtml(opts.expiresAt.toUTCString());
     const subject = `Nexora OS — You've been invited to join ${opts.workspaceName}`;
-    const first = await send(
+    const plainText = [
+      `You've been invited to join ${opts.workspaceName} on Nexora OS.`,
+      '',
+      `Invited by: ${opts.inviterName || 'A teammate'}`,
+      `Role: ${opts.role}`,
+      '',
+      'ACCESS WORKSPACE:',
+      acceptUrl,
+      '',
+      `This invitation is intended for: ${opts.to}`,
+      `This invitation expires on ${opts.expiresAt.toUTCString()}.`,
+      '',
+      'If you did not expect this invitation, you can ignore this email.',
+    ].join('\n');
+    return send(
       opts.to,
       subject,
       baseTemplate(
         `You've been invited to join ${workspace}`,
-        `<p style="font-size:16px;color:#e2e8f0;margin:0 0 8px;">You've been invited to join:</p>
-         <p style="font-size:20px;font-weight:650;color:#ffffff;margin:0 0 20px;">${workspace}</p>
+        `<p style="font-size:16px;color:#e2e8f0;margin:0 0 20px;">You've been invited to join <strong>${workspace}</strong> on Nexora OS.</p>
          <table style="width:100%;font-size:14px;color:#cbd5e1;margin:0 0 20px;border-collapse:collapse;">
            <tr><td style="padding:6px 0;color:#94a3b8;width:110px;">Invited by</td><td style="padding:6px 0;"><strong>${inviter}</strong></td></tr>
            <tr><td style="padding:6px 0;color:#94a3b8;">Role</td><td style="padding:6px 0;"><strong>${role}</strong></td></tr>
          </table>
-         <p>You've been invited to collaborate with your team in Nexora OS.</p>
          ${ctaButton(acceptUrl, 'ACCESS WORKSPACE')}
-         <p style="font-size:13px;color:#94a3b8;margin-top:20px;">Access Workspace:<br/><span style="word-break:break-all;">${escapeHtml(acceptUrl)}</span></p>
+         <p style="font-size:13px;color:#94a3b8;margin-top:20px;">Or copy this link:<br/><span style="word-break:break-all;">${escapeHtml(acceptUrl)}</span></p>
          <p style="font-size:13px;color:#94a3b8;margin-top:16px;">This invitation is intended for:<br/><strong style="color:#e2e8f0;">${invitedEmail}</strong></p>
          <p style="font-size:12px;color:#64748b;margin-top:16px;">This invitation expires on ${expires}.</p>
          <p style="font-size:12px;color:#64748b;margin-top:12px;">If you did not expect this invitation, you can ignore this email.</p>`
       ),
-      acceptUrl
+      acceptUrl,
+      plainText
     );
-    if (first.delivered) return first;
-    // Domain restriction cannot be fixed by the Vercel relay (same Resend account / from).
-    if (first.errorCode === 'resend_domain_unverified') return first;
-    // Railway often cannot reach Gmail SMTP / may miss RESEND_API_KEY on the running service.
-    // Fall back to Vercel HTTPS relay (Resend) using the invite token.
-    const relay = await deliverInviteViaWebRelay(opts.rawToken);
-    if (relay.delivered) return relay;
-    return {
-      ...relay,
-      hint: relay.hint || first.hint,
-      errorCode: relay.errorCode || first.errorCode,
-    };
   },
 };
