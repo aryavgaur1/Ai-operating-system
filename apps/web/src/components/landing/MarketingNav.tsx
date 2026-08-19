@@ -81,9 +81,9 @@ export function MarketingNav({
         {/* Logo */}
         <Link href="/" className="relative z-10 flex shrink-0 items-center gap-2.5">
           <span className="relative h-9 w-9 overflow-hidden rounded-2xl">
-            <Image src="/nexora-logo.png" alt="Nexora OS" fill className="object-contain" sizes="36px" />
+            <Image src="/nexora-logo.png" alt="Nexora" fill className="object-contain" sizes="36px" />
           </span>
-          <span className="font-display text-sm font-semibold tracking-[0.12em] text-white">Nexora OS</span>
+          <span className="font-display text-sm font-semibold tracking-[0.2em] text-white">NEXORA</span>
         </Link>
 
         {/* Floating glass pill — stays fixed, does not slide away */}

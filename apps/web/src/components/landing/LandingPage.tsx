@@ -72,7 +72,7 @@ const PRICING = [
 ];
 
 const FAQS = [
-  ['What is Nexora OS?', 'Nexora OS is an AI Operating System that connects Gmail, Slack, Jira, and Notion. It helps teams search email, send messages, and run approved actions across connected tools.'],
+  ['What is Nexora?', 'Nexora is a Work Action OS: it proposes real actions in Slack, Jira, and Notion, then pauses for a human gate before it acts.'],
   ['How does Propose → Approve → Act work?', 'Nexora classifies intent, plans tool calls, and queues high-consequence writes for Approve & run — so nothing posts or creates until you confirm.'],
   ['How are integrations connected?', 'Connect Slack, Jira, and Notion under Integrations (OAuth or workspace tokens). Demo mode can also use secure .env credentials.'],
   ['Can I use my own Slack?', 'Yes — your workspace bot powers live channel posts and related actions after you approve them.'],
@@ -101,7 +101,7 @@ function SectionHeading({ eyebrow, title, body }: { eyebrow: string; title: stri
   );
 }
 
-export function LandingPage({ hideStaticHero = false }: { hideStaticHero?: boolean }) {
+export function LandingPage() {
   const [yearly, setYearly] = useState(true);
   const [openFaq, setOpenFaq] = useState<number | null>(0);
   const [cmdIndex, setCmdIndex] = useState(0);
@@ -134,18 +134,16 @@ export function LandingPage({ hideStaticHero = false }: { hideStaticHero?: boole
       {/* Nav — glass + scroll hide/reveal */}
       <MarketingNav />
 
-      {/* Hero — static intro rendered server-side when hideStaticHero (see page.tsx) */}
-      <section className={cn('relative mx-auto max-w-7xl px-4 pb-16 sm:px-6', hideStaticHero ? 'pt-4' : 'pt-28 sm:pt-32')}>
+      {/* Hero */}
+      <section className="relative mx-auto max-w-7xl px-4 pb-16 pt-28 sm:px-6 sm:pt-32">
         <motion.div style={{ opacity: heroOpacity }} className="grid items-center gap-12 lg:grid-cols-[1.05fr_0.95fr]">
           <div>
-            {!hideStaticHero && (
-              <>
             <motion.div
               initial={{ opacity: 0, y: 16 }}
               animate={{ opacity: 1, y: 0 }}
               className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] uppercase tracking-[0.22em] text-neutral-300"
             >
-              <span className="h-1.5 w-1.5 rounded-full bg-accent2" /> Nexora OS · AI Operating System
+              <span className="h-1.5 w-1.5 rounded-full bg-accent2" /> Nexora · Work Action OS
             </motion.div>
             <motion.h1
               initial={{ opacity: 0, y: 20 }}
@@ -153,37 +151,19 @@ export function LandingPage({ hideStaticHero = false }: { hideStaticHero?: boole
               transition={{ delay: 0.08 }}
               className="font-display mt-6 text-4xl font-semibold leading-[1.05] tracking-tight text-white sm:text-5xl md:text-6xl lg:text-[4.1rem]"
             >
-              <span className="gradient-text">Nexora OS</span>
+              <span className="gradient-text">Propose → Approve → Act</span>
               <span className="block text-[0.72em] font-medium text-neutral-200 sm:text-[0.68em] md:mt-2">
-                Propose → Approve → Act across Slack, Jira, Notion, and Gmail.
+                across Slack, Jira, and Notion.
               </span>
             </motion.h1>
             <motion.p
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.16 }}
-              className="mt-5 max-w-xl text-base leading-8 text-neutral-300 sm:text-lg"
+              className="mt-5 max-w-xl text-base leading-8 text-neutral-400 sm:text-lg"
             >
-              <strong className="font-semibold text-white">Nexora OS</strong> is an AI Operating System for
-              modern teams. It connects Gmail, Slack, Notion, and Jira so your team can search messages,
-              summarize threads, send email, and execute approved actions from one workspace.
+              Nexora is the Work Action OS with a human gate — it plans real writes, then waits for your approval before anything lands in your tools.
             </motion.p>
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.2 }}
-              className="mt-5 max-w-xl rounded-2xl border border-white/10 bg-white/[0.04] px-5 py-4 text-sm leading-7 text-neutral-300"
-              id="about"
-            >
-              <p className="font-semibold text-white">What Nexora OS does</p>
-              <p className="mt-2">
-                Nexora OS is a productivity app with OAuth integrations. Users sign in, connect their own
-                Gmail and workspace tools, then use AI chat to read email, draft replies, search Slack and
-                Notion, and approve real actions before anything is sent or changed.
-              </p>
-            </motion.div>
-              </>
-            )}
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}

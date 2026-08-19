@@ -3,9 +3,9 @@ import { AppShell } from '@/components/AppShell';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Nexora OS — AI Operating System for Gmail, Slack, Notion & Jira',
+  title: 'Nexora OS — The AI Operating System for Modern Teams',
   description:
-    'Nexora OS is an AI Operating System that connects Gmail, Slack, Notion, and Jira. Search email, send messages, and run approved team actions from one workspace.',
+    'Nexora is an AI Operating System that connects your tools, reasons over context, and executes real work across Slack, Notion, and more.',
   verification: {
     google: 'BhLKa_C6zSqokDt3bsGkxHFTcEvQrDaFOct-2iEiZfo',
   },
