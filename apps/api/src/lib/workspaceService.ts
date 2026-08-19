@@ -296,6 +296,134 @@ export async function listWorkspaceMembers(opts: {
   }));
 }
 
+/**
+ * Rename a TEAM workspace. Only owner (or admin, per policy) may rename.
+ * Personal home workspace cannot be renamed through this path.
+ */
+export async function renameWorkspace(opts: {
+  actorUserId: string;
+  organizationId: string;
+  name: string;
+}): Promise<{ id: string; name: string; slug: string; kind: string }> {
+  const organizationId = assertUuid(opts.organizationId);
+  const name = String(opts.name || '').trim();
+  if (name.length < 2) throw new AppError('Workspace name must be at least 2 characters', 422);
+  if (name.length > 80) throw new AppError('Workspace name must be at most 80 characters', 422);
+
+  const membership = await assertActiveMembership(opts.actorUserId, organizationId);
+  if (!['owner', 'admin'].includes(membership.role)) {
+    throw new AppError('Only owners and admins can rename this workspace', 403);
+  }
+
+  // Block renaming personal home org via this path
+  const { homeOrganizationId } = await loadUserHome(opts.actorUserId);
+  if (organizationId === homeOrganizationId) {
+    throw new AppError('Personal workspace cannot be renamed here', 403);
+  }
+
+  const { rows } = await query<{ id: string; name: string; slug: string; kind: string }>(
+    `update organizations set name = $1 where id = $2 and kind = 'team'
+     returning id, name, slug, kind`,
+    [name, organizationId]
+  );
+  if (!rows[0]) throw new AppError('Workspace not found or not a team workspace', 404);
+  return rows[0];
+}
+
+/**
+ * Update a member's role. Only owner can change roles.
+ * Cannot change own role. Cannot demote the last owner.
+ */
+export async function updateMemberRole(opts: {
+  actorUserId: string;
+  organizationId: string;
+  targetUserId: string;
+  role: string;
+}): Promise<{ userId: string; role: string }> {
+  const organizationId = assertUuid(opts.organizationId);
+  const targetUserId = assertUuid(opts.targetUserId, 'userId');
+  const allowedRoles = ['owner', 'admin', 'member'];
+  const newRole = String(opts.role || '').toLowerCase();
+  if (!allowedRoles.includes(newRole)) throw new AppError('Invalid role', 422);
+
+  const actor = await assertActiveMembership(opts.actorUserId, organizationId);
+  if (actor.role !== 'owner') throw new AppError('Only owners can change member roles', 403);
+  if (opts.actorUserId === targetUserId) throw new AppError('Cannot change your own role', 422);
+
+  // Verify target is a member
+  const target = await assertActiveMembership(targetUserId, organizationId);
+
+  // If demoting an owner, ensure at least one owner remains
+  if (target.role === 'owner' && newRole !== 'owner') {
+    const { rows } = await query<{ cnt: string }>(
+      `select count(*) as cnt from organization_memberships
+       where organization_id = $1 and role = 'owner' and status = 'active'`,
+      [organizationId]
+    );
+    if (parseInt(rows[0]?.cnt ?? '0') <= 1) {
+      throw new AppError('Cannot demote the last owner', 422);
+    }
+  }
+
+  await query(
+    `update organization_memberships set role = $1, updated_at = now()
+     where organization_id = $2 and user_id = $3 and status = 'active'`,
+    [newRole, organizationId, targetUserId]
+  );
+  return { userId: targetUserId, role: newRole };
+}
+
+/**
+ * Remove a member from a workspace. Only owner/admin can remove.
+ * Cannot remove yourself. Cannot remove the last owner.
+ */
+export async function removeMember(opts: {
+  actorUserId: string;
+  organizationId: string;
+  targetUserId: string;
+}): Promise<void> {
+  const organizationId = assertUuid(opts.organizationId);
+  const targetUserId = assertUuid(opts.targetUserId, 'userId');
+
+  const actor = await assertActiveMembership(opts.actorUserId, organizationId);
+  if (!['owner', 'admin'].includes(actor.role)) {
+    throw new AppError('Only owners and admins can remove members', 403);
+  }
+  if (opts.actorUserId === targetUserId) throw new AppError('Cannot remove yourself', 422);
+
+  const target = await assertActiveMembership(targetUserId, organizationId);
+
+  // Block removing an owner unless another owner exists
+  if (target.role === 'owner') {
+    const { rows } = await query<{ cnt: string }>(
+      `select count(*) as cnt from organization_memberships
+       where organization_id = $1 and role = 'owner' and status = 'active'`,
+      [organizationId]
+    );
+    if (parseInt(rows[0]?.cnt ?? '0') <= 1) {
+      throw new AppError('Cannot remove the last owner', 422);
+    }
+  }
+
+  // Admin cannot remove another admin or owner
+  if (actor.role === 'admin' && ['owner', 'admin'].includes(target.role)) {
+    throw new AppError('Admins can only remove members', 403);
+  }
+
+  await query(
+    `update organization_memberships set status = 'removed', updated_at = now()
+     where organization_id = $1 and user_id = $2`,
+    [organizationId, targetUserId]
+  );
+
+  // Reset active workspace if the removed user had this as active
+  await query(
+    `update users set active_organization_id = organization_id
+     where id = $1 and active_organization_id = $2`,
+    [targetUserId, organizationId]
+  );
+}
+
 export function membershipErrorToAppError(err: unknown): never {
   if (err instanceof MembershipAuthorizationError) {
     const status =

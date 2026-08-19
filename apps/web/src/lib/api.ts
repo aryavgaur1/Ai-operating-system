@@ -572,6 +572,22 @@ export const api = {
       alreadyMember: boolean;
     }>(`/invitations/${encodeURIComponent(token)}/accept`, { method: 'POST' }),
 
+  renameWorkspace: (organizationId: string, name: string) =>
+    request<{ workspace: { id: string; name: string; slug: string; kind: string } }>(
+      `/workspaces/${encodeURIComponent(organizationId)}`,
+      { method: 'PATCH', body: JSON.stringify({ name }) }
+    ),
+  updateMemberRole: (organizationId: string, userId: string, role: string) =>
+    request<{ userId: string; role: string }>(
+      `/workspaces/${encodeURIComponent(organizationId)}/members/${encodeURIComponent(userId)}`,
+      { method: 'PATCH', body: JSON.stringify({ role }) }
+    ),
+  removeMember: (organizationId: string, userId: string) =>
+    request<Record<string, never>>(
+      `/workspaces/${encodeURIComponent(organizationId)}/members/${encodeURIComponent(userId)}`,
+      { method: 'DELETE' }
+    ),
+
   adminMetrics: () => request<any>('/admin/metrics'),
   adminUsers: (search?: string) =>
     request<{ users: any[] }>(`/admin/users${search ? `?search=${encodeURIComponent(search)}` : ''}`),

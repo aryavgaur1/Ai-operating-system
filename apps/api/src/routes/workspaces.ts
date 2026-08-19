@@ -13,8 +13,11 @@ import {
   listWorkspaceMembers,
   listWorkspacesForUser,
   membershipErrorToAppError,
+  removeMember,
+  renameWorkspace,
   resolveWorkspaceContext,
   selectActiveWorkspace,
+  updateMemberRole,
 } from '../lib/workspaceService';
 import { MembershipAuthorizationError } from '../lib/workspaceAuth';
 
@@ -186,6 +189,68 @@ workspacesRouter.get(
       ok(res, { invitations });
     } catch (err) {
       if (err instanceof MembershipAuthorizationError) wrapInvitationMembershipError(err);
+      throw err;
+    }
+  })
+);
+
+/**
+ * PATCH /workspaces/:organizationId — rename a team workspace (owner/admin only).
+ * Personal workspace is blocked server-side.
+ */
+workspacesRouter.patch(
+  '/:organizationId',
+  asyncHandler(async (req, res) => {
+    try {
+      const workspace = await renameWorkspace({
+        actorUserId: req.user!.id,
+        organizationId: req.params.organizationId,
+        name: String(req.body?.name ?? ''),
+      });
+      ok(res, { workspace }, 'Workspace renamed');
+    } catch (err) {
+      if (err instanceof MembershipAuthorizationError) membershipErrorToAppError(err);
+      throw err;
+    }
+  })
+);
+
+/**
+ * PATCH /workspaces/:organizationId/members/:userId — change role (owner only).
+ */
+workspacesRouter.patch(
+  '/:organizationId/members/:userId',
+  asyncHandler(async (req, res) => {
+    try {
+      const result = await updateMemberRole({
+        actorUserId: req.user!.id,
+        organizationId: req.params.organizationId,
+        targetUserId: req.params.userId,
+        role: String(req.body?.role ?? ''),
+      });
+      ok(res, result, 'Member role updated');
+    } catch (err) {
+      if (err instanceof MembershipAuthorizationError) membershipErrorToAppError(err);
+      throw err;
+    }
+  })
+);
+
+/**
+ * DELETE /workspaces/:organizationId/members/:userId — remove a member (owner/admin).
+ */
+workspacesRouter.delete(
+  '/:organizationId/members/:userId',
+  asyncHandler(async (req, res) => {
+    try {
+      await removeMember({
+        actorUserId: req.user!.id,
+        organizationId: req.params.organizationId,
+        targetUserId: req.params.userId,
+      });
+      ok(res, {}, 'Member removed');
+    } catch (err) {
+      if (err instanceof MembershipAuthorizationError) membershipErrorToAppError(err);
       throw err;
     }
   })

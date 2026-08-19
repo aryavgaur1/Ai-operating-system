@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react';
 import { LayoutGrid, MessageSquare, ShieldCheck, Plug, Users, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { APP_ROUTES, chatResumeHref } from '@/lib/routes';
+// workspaceOverview used in rail nav
 import { resolveChatHref } from '@/lib/activeConversation';
 import { api } from '@/lib/api';
 
@@ -99,10 +100,10 @@ export function WorkspaceRail() {
         })}
         <div className="h-px w-6 bg-white/10" />
         <Link
-          href={APP_ROUTES.workspaceSettings}
+          href={APP_ROUTES.workspaceOverview}
           className={cn(
             'group relative flex h-10 w-10 items-center justify-center rounded-2xl transition-all',
-            pathname?.startsWith(APP_ROUTES.workspaceSettings)
+            pathname?.startsWith('/app/workspace') || pathname?.startsWith(APP_ROUTES.workspaceSettings)
               ? 'bg-accent/15 text-accent shadow-[0_0_0_1px_rgba(91,157,255,0.3)]'
               : 'text-neutral-500 hover:bg-white/5 hover:text-white'
           )}
