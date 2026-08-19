@@ -229,7 +229,7 @@ async function main() {
     // 13. Existing seeded user
     const existing = await client.query(
       `select id, organization_id from users where email=$1`,
-      ['aryavgaur1@gmail.com']
+      ['aryavgaur01@gmail.com']
     );
     if (existing.rows[0]) {
       const listExisting = await listWorkspacesForUser(existing.rows[0].id);

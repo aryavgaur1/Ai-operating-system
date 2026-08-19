@@ -6,7 +6,7 @@ He built Nexora to solve a real problem: teams drown in tools and context-switch
 
 ## Contact
 
-- Email: aryavgaur1@gmail.com
+- Email: aryavgaur01@gmail.com
 - GitHub: https://github.com/aryavgaur1
 - LinkedIn: https://www.linkedin.com/in/aryav-gaur-330a19412
 - Instagram: https://www.instagram.com/a4aryavav

@@ -29,7 +29,7 @@ async function login() {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      email: process.env.ADMIN_SEED_EMAIL || 'aryavgaur1@gmail.com',
+      email: process.env.ADMIN_SEED_EMAIL || process.env.PLATFORM_ADMIN_EMAIL || 'aryavgaur01@gmail.com',
       password: process.env.ADMIN_SEED_PASSWORD || 'keshuyashi',
       rememberMe: true,
     }),

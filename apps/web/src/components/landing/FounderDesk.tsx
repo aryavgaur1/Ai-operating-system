@@ -51,8 +51,8 @@ function DiscordIcon({ size = 16, className }: IconProps) {
 const LINKS = [
   {
     label: 'Email',
-    href: 'mailto:aryavgaur1@gmail.com',
-    detail: 'aryavgaur1@gmail.com',
+    href: 'mailto:aryavgaur01@gmail.com',
+    detail: 'aryavgaur01@gmail.com',
     icon: MailIcon,
   },
   {

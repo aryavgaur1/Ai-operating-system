@@ -184,7 +184,7 @@ async function main() {
     // Existing local user (if any) still loads
     const existing = await client.query(
       `select id, organization_id, active_organization_id from users where email = $1`,
-      ['aryavgaur1@gmail.com']
+      ['aryavgaur01@gmail.com']
     );
     if (existing.rows[0]) {
       const eu = existing.rows[0];
@@ -192,7 +192,7 @@ async function main() {
       assert(loaded && loaded.organizationId === eu.organization_id, 'existing user auth');
       console.log('PASS 8b existing seeded user still authenticates');
     } else {
-      console.log('SKIP 8b no seeded aryavgaur1 user');
+      console.log('SKIP 8b no seeded aryavgaur01 user');
     }
 
     console.log('SUMMARY P0.5 B2 membership authorization tests passed');

@@ -179,10 +179,13 @@ app.post('/internal/bootstrap-notion', async (req, res) => {
     };
     const workspaceName = me.bot?.workspace_name || me.name || 'Notion workspace';
     const { query, storeConnection } = await import('@enterprise-ai-os/stores');
+    const { getPlatformAdminEmail } = await import('./lib/platformAdmin');
+    const founderEmail = getPlatformAdminEmail();
     const users = await query<{ id: string; email: string; organization_id: string }>(
       `select id, email, organization_id from users
-       where lower(email) in ('aryavgaur1@gmail.com', 'aryavgaur01@gmail.com')
-       order by created_at asc`
+       where lower(email) = $1
+       order by created_at asc`,
+      [founderEmail]
     );
     if (!users.rows.length) {
       res.status(404).json({ ok: false, error: 'founder user not found' });

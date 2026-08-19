@@ -52,11 +52,20 @@ function encryptToken(plaintext) {
   const client = new Client({ connectionString: databaseUrl });
   await client.connect();
 
+  const founderEmail = (
+    process.env.PLATFORM_ADMIN_EMAIL ||
+    process.env.ADMIN_SEED_EMAIL ||
+    'aryavgaur01@gmail.com'
+  )
+    .trim()
+    .toLowerCase();
+
   const users = await client.query(
     `select id, email, organization_id
      from users
-     where lower(email) in ('aryavgaur1@gmail.com', 'aryavgaur01@gmail.com')
-     order by case when lower(email) = 'aryavgaur1@gmail.com' then 0 else 1 end, created_at asc`
+     where lower(email) = $1
+     order by created_at asc`,
+    [founderEmail]
   );
   if (!users.rows.length) {
     console.error('NO_MATCHING_USER');

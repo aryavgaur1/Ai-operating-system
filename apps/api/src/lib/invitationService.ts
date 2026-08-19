@@ -582,7 +582,7 @@ export async function acceptInvitation(opts: {
     throw new AppError('Invitations are only valid for team workspaces.', 403);
   }
 
-  return withTransaction(async (client) => {
+  const result = await withTransaction(async (client) => {
     const locked = await loadInvitationByRawToken(opts.rawToken, client);
     if (!locked) throw new AppError('Invitation not found', 404);
 
@@ -687,6 +687,56 @@ export async function acceptInvitation(opts: {
       },
       alreadyMember,
     };
+  });
+
+  if (!result.alreadyMember) {
+    void notifyPlatformAdminMemberJoined({
+      actorUserId: opts.actorUserId,
+      organizationId: result.membership.organizationId,
+      role: result.membership.role,
+      invitedByUserId: pre.invited_by_user_id,
+      organizationName: pre.organization_name,
+      invitedByDisplayName: pre.invited_by_display_name,
+      invitedByEmail: pre.invited_by_email,
+    }).catch(() => undefined);
+  }
+
+  return result;
+}
+
+async function notifyPlatformAdminMemberJoined(opts: {
+  actorUserId: string;
+  organizationId: string;
+  role: MembershipRole;
+  invitedByUserId: string;
+  organizationName: string;
+  invitedByDisplayName: string | null;
+  invitedByEmail: string | null;
+}): Promise<void> {
+  const { rows: userRows } = await query<{ display_name: string | null; email: string }>(
+    `select display_name, email from users where id = $1`,
+    [opts.actorUserId]
+  );
+  const member = userRows[0];
+  if (!member) return;
+
+  let inviterName = opts.invitedByDisplayName;
+  if (!inviterName) {
+    const { rows: inviterRows } = await query<{ display_name: string | null; email: string }>(
+      `select display_name, email from users where id = $1`,
+      [opts.invitedByUserId]
+    );
+    inviterName = inviterRows[0]?.display_name ?? inviterRows[0]?.email ?? opts.invitedByEmail ?? null;
+  }
+
+  const timestamp = new Date().toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
+  await mailer.sendPlatformAdminMemberJoinedNotification({
+    workspaceName: opts.organizationName,
+    userName: member.display_name,
+    email: member.email,
+    role: opts.role,
+    inviterName,
+    timestamp,
   });
 }
 

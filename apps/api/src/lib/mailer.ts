@@ -1,6 +1,7 @@
 import nodemailer from 'nodemailer';
 import { logger } from './logger';
 import { webAppUrl } from './authTokens';
+import { getPlatformAdminEmail } from './platformAdmin';
 
 type SmtpProfile = {
   label: string;
@@ -756,6 +757,67 @@ export const mailer = {
         `<p>Your Nexora account and workspace data have been deleted as requested.</p>`
       )
     ),
+
+  /** Notify platform admin of a new user signup (not login). */
+  sendPlatformAdminSignupNotification: (opts: {
+    name: string | null;
+    email: string;
+    timestamp: string;
+  }) => {
+    const admin = getPlatformAdminEmail();
+    const name = escapeHtml(opts.name || 'Unknown');
+    const email = escapeHtml(opts.email);
+    const time = escapeHtml(opts.timestamp);
+    return send(
+      admin,
+      'Nexora OS — New user successfully signed up',
+      baseTemplate(
+        'New user successfully signed up',
+        `<p>A new user has registered on Nexora OS.</p>
+         <table style="width:100%;font-size:14px;color:#cbd5e1;margin:16px 0;border-collapse:collapse;">
+           <tr><td style="padding:8px 0;color:#94a3b8;width:110px;">Name</td><td style="padding:8px 0;">${name}</td></tr>
+           <tr><td style="padding:8px 0;color:#94a3b8;">Email</td><td style="padding:8px 0;">${email}</td></tr>
+           <tr><td style="padding:8px 0;color:#94a3b8;">Time</td><td style="padding:8px 0;">${time}</td></tr>
+           <tr><td style="padding:8px 0;color:#94a3b8;">Status</td><td style="padding:8px 0;"><strong>Successfully registered</strong></td></tr>
+         </table>`
+      )
+    );
+  },
+
+  /** Notify platform admin when a user joins a team workspace via invitation. */
+  sendPlatformAdminMemberJoinedNotification: (opts: {
+    workspaceName: string;
+    userName: string | null;
+    email: string;
+    role: string;
+    inviterName: string | null;
+    timestamp: string;
+  }) => {
+    const admin = getPlatformAdminEmail();
+    const workspace = escapeHtml(opts.workspaceName);
+    const userName = escapeHtml(opts.userName || opts.email);
+    const email = escapeHtml(opts.email);
+    const role = escapeHtml(opts.role);
+    const inviter = escapeHtml(opts.inviterName || 'Unknown');
+    const time = escapeHtml(opts.timestamp);
+    return send(
+      admin,
+      `Nexora OS — ${opts.userName || opts.email} joined ${opts.workspaceName}`,
+      baseTemplate(
+        'A new member has successfully joined a workspace',
+        `<p>A new member has successfully joined a team workspace.</p>
+         <table style="width:100%;font-size:14px;color:#cbd5e1;margin:16px 0;border-collapse:collapse;">
+           <tr><td style="padding:8px 0;color:#94a3b8;width:120px;">Workspace</td><td style="padding:8px 0;"><strong>${workspace}</strong></td></tr>
+           <tr><td style="padding:8px 0;color:#94a3b8;">Member</td><td style="padding:8px 0;">${userName}</td></tr>
+           <tr><td style="padding:8px 0;color:#94a3b8;">Email</td><td style="padding:8px 0;">${email}</td></tr>
+           <tr><td style="padding:8px 0;color:#94a3b8;">Role</td><td style="padding:8px 0;">${role}</td></tr>
+           <tr><td style="padding:8px 0;color:#94a3b8;">Invited by</td><td style="padding:8px 0;">${inviter}</td></tr>
+           <tr><td style="padding:8px 0;color:#94a3b8;">Status</td><td style="padding:8px 0;"><strong>Successfully joined</strong></td></tr>
+           <tr><td style="padding:8px 0;color:#94a3b8;">Time</td><td style="padding:8px 0;">${time}</td></tr>
+         </table>`
+      )
+    );
+  },
 
   sendWorkspaceInvitation: async (opts: {
     to: string;

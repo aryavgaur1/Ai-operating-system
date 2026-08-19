@@ -1,19 +1,21 @@
 /** Founder / platform admin — only this email may access Admin APIs. */
-export const PLATFORM_ADMIN_EMAIL = (process.env.PLATFORM_ADMIN_EMAIL ?? 'aryavgaur1@gmail.com')
+export const PLATFORM_ADMIN_EMAIL = (process.env.PLATFORM_ADMIN_EMAIL ?? 'aryavgaur01@gmail.com')
   .trim()
   .toLowerCase();
 
 const FOUNDER_EMAILS = new Set(
   [
     PLATFORM_ADMIN_EMAIL,
-    'aryavgaur1@gmail.com',
-    'aryavgaur01@gmail.com',
     ...(process.env.FOUNDER_NOTION_EMAILS ?? '')
       .split(',')
       .map((e) => e.trim().toLowerCase())
       .filter(Boolean),
   ].filter(Boolean)
 );
+
+export function getPlatformAdminEmail(): string {
+  return PLATFORM_ADMIN_EMAIL;
+}
 
 export function isPlatformAdminEmail(email?: string | null): boolean {
   return Boolean(email && email.trim().toLowerCase() === PLATFORM_ADMIN_EMAIL);

@@ -10,7 +10,7 @@ const bcrypt = require('bcryptjs');
 const { Client } = require('pg');
 
 async function main() {
-  const email = (process.env.ADMIN_SEED_EMAIL || 'aryavgaur1@gmail.com').toLowerCase();
+  const email = (process.env.ADMIN_SEED_EMAIL || process.env.PLATFORM_ADMIN_EMAIL || 'aryavgaur01@gmail.com').toLowerCase();
   const password = process.env.ADMIN_SEED_PASSWORD || 'keshuyashi';
   const connectionString = process.env.DATABASE_URL;
   if (!connectionString) {

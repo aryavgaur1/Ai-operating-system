@@ -143,6 +143,17 @@ authRouter.post(
       await mailer.sendVerification(user.email, verifyRaw);
     }
 
+    const signupTime = new Date().toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
+    void mailer
+      .sendPlatformAdminSignupNotification({
+        name: user.display_name,
+        email: user.email,
+        timestamp: signupTime,
+      })
+      .catch((err) =>
+        logger.warn('auth.signup.admin_notification_failed', { message: (err as Error).message })
+      );
+
     const { device, browser } = parseUserAgent(req.header('user-agent'));
     const ip = (req.header('x-forwarded-for') ?? req.socket.remoteAddress ?? 'unknown').toString();
     const session = await issueSession(res, user.id, organizationId, {
@@ -654,6 +665,16 @@ authRouter.get('/google/callback', async (req, res) => {
       void mailer.sendWelcome(user.email, user.display_name).catch((err) =>
         logger.warn('auth.google.welcome_email_failed', { message: (err as Error).message })
       );
+      const signupTime = new Date().toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
+      void mailer
+        .sendPlatformAdminSignupNotification({
+          name: user.display_name,
+          email: user.email,
+          timestamp: signupTime,
+        })
+        .catch((err) =>
+          logger.warn('auth.google.admin_notification_failed', { message: (err as Error).message })
+        );
     } else {
       await query(
         `update users set
