@@ -21,7 +21,7 @@ export function buildApprovalBlocks(input: {
   /** Required — binds button to exact approval fingerprint (P0.3.3). */
   payloadFingerprint: string;
 }): { text: string; blocks: unknown[] } {
-  const web = (input.webAppUrl || process.env.WEB_APP_URL || 'https://ai-lilac-phi.vercel.app').replace(/\/$/, '');
+  const web = (input.webAppUrl || process.env.WEB_APP_URL || 'https://nexoraos-ai.vercel.app').replace(/\/$/, '');
   const summary = (input.summary || `${input.tool}.${input.action}`).slice(0, 500);
   const text = `Pending approval: ${input.tool}.${input.action} (${input.approvalId})`;
   const buttonValue = encodeApprovalButtonValue(input.approvalId, input.payloadFingerprint);

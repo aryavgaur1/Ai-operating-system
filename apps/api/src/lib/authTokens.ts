@@ -13,7 +13,7 @@ export function randomToken(bytes = 32): string {
 }
 
 /** Canonical production web app (Vercel). Never default to Netlify. */
-export const CANONICAL_WEB_APP_URL = 'https://ai-lilac-phi.vercel.app';
+export const CANONICAL_WEB_APP_URL = 'https://nexoraos-ai.vercel.app';
 
 /** Old Netlify host — treat as retired; never redirect users here. */
 const RETIRED_NETLIFY_ORIGIN = 'https://try-nexora.netlify.app';
