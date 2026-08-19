@@ -72,7 +72,7 @@ const PRICING = [
 ];
 
 const FAQS = [
-  ['What is Nexora?', 'Nexora is a Work Action OS: it proposes real actions in Slack, Jira, and Notion, then pauses for a human gate before it acts.'],
+  ['What is Nexora OS?', 'Nexora OS is an AI Operating System that connects Gmail, Slack, Jira, and Notion. It helps teams search email, send messages, and run approved actions across connected tools.'],
   ['How does Propose → Approve → Act work?', 'Nexora classifies intent, plans tool calls, and queues high-consequence writes for Approve & run — so nothing posts or creates until you confirm.'],
   ['How are integrations connected?', 'Connect Slack, Jira, and Notion under Integrations (OAuth or workspace tokens). Demo mode can also use secure .env credentials.'],
   ['Can I use my own Slack?', 'Yes — your workspace bot powers live channel posts and related actions after you approve them.'],
@@ -160,11 +160,26 @@ export function LandingPage() {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.16 }}
-              className="mt-5 max-w-xl text-base leading-8 text-neutral-400 sm:text-lg"
+              className="mt-5 max-w-xl text-base leading-8 text-neutral-300 sm:text-lg"
             >
-              Nexora OS is an AI Operating System for modern teams. It connects your tools, plans real
-              actions with full context, and waits for human approval before anything executes.
+              <strong className="font-semibold text-white">Nexora OS</strong> is an AI Operating System for
+              modern teams. It connects Gmail, Slack, Notion, and Jira so your team can search messages,
+              summarize threads, send email, and execute approved actions from one workspace.
             </motion.p>
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.2 }}
+              className="mt-5 max-w-xl rounded-2xl border border-white/10 bg-white/[0.04] px-5 py-4 text-sm leading-7 text-neutral-300"
+              id="about"
+            >
+              <p className="font-semibold text-white">What Nexora OS does</p>
+              <p className="mt-2">
+                Nexora OS is a productivity app with OAuth integrations. Users sign in, connect their own
+                Gmail and workspace tools, then use AI chat to read email, draft replies, search Slack and
+                Notion, and approve real actions before anything is sent or changed.
+              </p>
+            </motion.div>
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
