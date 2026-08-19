@@ -62,9 +62,11 @@ export function resolveEmailProvider(): {
     return { mode: 'none', configured: false, missing: [], explicit: true };
   }
 
-  // No EMAIL_PROVIDER — infer from credentials (Resend preferred; no silent SMTP when Resend key exists).
-  if (hasResend) return { mode: 'resend', configured: true, missing: [], explicit: false };
+  // No EMAIL_PROVIDER — infer from configured credentials. Prefer SMTP when both
+  // are present so production can use the already-working Gmail sender without
+  // silently selecting Resend's test-mode address.
   if (hasSmtp) return { mode: 'smtp', configured: true, missing: [], explicit: false };
+  if (hasResend) return { mode: 'resend', configured: true, missing: [], explicit: false };
   return { mode: 'none', configured: false, missing: ['RESEND_API_KEY or EMAIL_USER/EMAIL_PASS'], explicit: false };
 }
 
