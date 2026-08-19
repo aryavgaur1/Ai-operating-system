@@ -27,12 +27,14 @@ function buildInviteHtml(opts: {
   workspaceName: string;
   inviterName: string;
   role: string;
+  invitedEmail: string;
   expiresAt: string;
   acceptUrl: string;
 }): string {
   const workspace = escapeHtml(opts.workspaceName);
   const inviter = escapeHtml(opts.inviterName);
   const role = escapeHtml(opts.role);
+  const invitedEmail = escapeHtml(opts.invitedEmail);
   const expires = escapeHtml(opts.expiresAt);
   const acceptUrl = escapeHtml(opts.acceptUrl);
   return `<!DOCTYPE html>
@@ -41,17 +43,19 @@ function buildInviteHtml(opts: {
   <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#070b12;padding:40px 16px;color:#e5e7eb;">
     <div style="max-width:520px;margin:0 auto;background:#0f172a;border-radius:20px;padding:36px 32px;border:1px solid #1e293b;">
       <div style="font-size:12px;letter-spacing:.22em;text-transform:uppercase;color:#60a5fa;margin-bottom:18px;font-weight:600;">Nexora OS</div>
-      <h1 style="font-size:22px;margin:0 0 18px;color:#ffffff;">Nexora OS</h1>
-      <p style="font-size:16px;color:#e2e8f0;margin:0 0 16px;">You've been invited to join a team workspace.</p>
+      <h1 style="font-size:22px;margin:0 0 18px;color:#ffffff;">You've been invited to join ${workspace}</h1>
+      <p style="font-size:16px;color:#e2e8f0;margin:0 0 8px;">You've been invited to join:</p>
       <p style="font-size:20px;font-weight:650;color:#ffffff;margin:0 0 20px;">${workspace}</p>
       <table style="width:100%;font-size:14px;color:#cbd5e1;margin:0 0 20px;border-collapse:collapse;">
         <tr><td style="padding:6px 0;color:#94a3b8;width:110px;">Invited by</td><td style="padding:6px 0;"><strong>${inviter}</strong></td></tr>
         <tr><td style="padding:6px 0;color:#94a3b8;">Role</td><td style="padding:6px 0;"><strong>${role}</strong></td></tr>
-        <tr><td style="padding:6px 0;color:#94a3b8;">Expires</td><td style="padding:6px 0;">${expires}</td></tr>
       </table>
-      <p>This invitation can only be accepted with this email address.</p>
+      <p>You've been invited to collaborate with your team in Nexora OS.</p>
       <p style="margin:28px 0 8px;"><a href="${acceptUrl}" style="display:inline-block;background:linear-gradient(135deg,#3b82f6,#6366f1);color:#fff;padding:14px 24px;border-radius:999px;text-decoration:none;font-weight:600;font-size:14px;">ACCESS WORKSPACE</a></p>
-      <p style="font-size:12px;color:#94a3b8;word-break:break-all;margin-top:20px;">Or paste this link:<br/>${acceptUrl}</p>
+      <p style="font-size:13px;color:#94a3b8;margin-top:20px;">Access Workspace:<br/><span style="word-break:break-all;">${acceptUrl}</span></p>
+      <p style="font-size:13px;color:#94a3b8;margin-top:16px;">This invitation is intended for:<br/><strong style="color:#e2e8f0;">${invitedEmail}</strong></p>
+      <p style="font-size:12px;color:#64748b;margin-top:16px;">This invitation expires on ${expires}.</p>
+      <p style="font-size:12px;color:#64748b;margin-top:12px;">If you did not expect this invitation, you can ignore this email.</p>
     </div>
   </div>
 </body></html>`;
@@ -114,6 +118,7 @@ export async function POST(req: NextRequest) {
     workspaceName,
     inviterName,
     role,
+    invitedEmail: to,
     expiresAt,
     acceptUrl,
   });
@@ -129,8 +134,29 @@ export async function POST(req: NextRequest) {
   });
   const sendText = await sendRes.text();
   if (!sendRes.ok) {
+    let parsed: { name?: string; message?: string; statusCode?: number } | null = null;
+    try {
+      parsed = JSON.parse(sendText);
+    } catch {
+      // ignore
+    }
+    const message = String(parsed?.message || sendText.slice(0, 200));
+    const lower = message.toLowerCase();
+    const domainBlocked =
+      lower.includes('verify a domain') ||
+      lower.includes('only send testing emails') ||
+      lower.includes('domain is not verified') ||
+      lower.includes('from address is not verified');
     return NextResponse.json(
-      { ok: false, error: 'resend_failed', detail: sendText.slice(0, 200) },
+      {
+        ok: false,
+        error: domainBlocked ? 'resend_domain_unverified' : 'resend_failed',
+        errorCode: domainBlocked ? 'resend_domain_unverified' : String(parsed?.name || 'resend_failed'),
+        detail: message.slice(0, 240),
+        hint: domainBlocked
+          ? 'Resend is in test mode (onboarding@resend.dev only reaches the Resend account owner). Verify a domain at resend.com/domains, then set EMAIL_FROM to an address on that domain on the API and Vercel.'
+          : undefined,
+      },
       { status: 502 }
     );
   }

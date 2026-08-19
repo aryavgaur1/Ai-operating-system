@@ -69,7 +69,7 @@ export default function WorkspaceSettingsPage() {
   function applyInviteResult(
     res: {
       invitation: InvitationPublic;
-      email: { delivered: boolean; mode: string };
+      email: { delivered: boolean; mode: string; errorCode?: string; hint?: string };
       acceptToken?: string;
     },
     verb: 'created' | 'resent'
@@ -80,8 +80,15 @@ export default function WorkspaceSettingsPage() {
       );
       return;
     }
+    const hint =
+      res.email.hint ||
+      (res.email.errorCode === 'resend_domain_unverified'
+        ? 'Resend is in test mode — verify a domain at resend.com/domains and set EMAIL_FROM on the API and Vercel.'
+        : null);
     setMessage(
-      `Invitation ${verb}, but email was not delivered (${res.email.mode}). Share the accept link below, or set EMAIL_USER / EMAIL_PASS on the API and resend.`
+      hint
+        ? `Invitation ${verb}, but email was not delivered. ${hint} Share the accept link below.`
+        : `Invitation ${verb}, but email was not delivered (${res.email.mode}${res.email.errorCode ? `: ${res.email.errorCode}` : ''}). Share the accept link below. Gmail SMTP does not work on Railway — use Resend with a verified domain.`
     );
     if (res.acceptToken) {
       const origin = typeof window !== 'undefined' ? window.location.origin : '';

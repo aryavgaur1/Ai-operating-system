@@ -18,6 +18,8 @@ const SMTP_PROFILES: SmtpProfile[] = [
 let _transporter: nodemailer.Transporter | null = null;
 let _activeProfile: string | null = null;
 
+export type EmailProviderMode = 'resend' | 'smtp' | 'none';
+
 /** Last email outcome for /health (no secrets, no bodies). */
 let lastEmailDiag: {
   at: string;
@@ -27,11 +29,54 @@ let lastEmailDiag: {
   errorCode?: string | null;
 } | null = null;
 
+function normalizeProvider(raw: string | undefined): EmailProviderMode | null {
+  const v = String(raw || '').trim().toLowerCase();
+  if (v === 'resend') return 'resend';
+  if (v === 'smtp') return 'smtp';
+  if (v === 'none' || v === 'console') return 'none';
+  return null;
+}
+
+/** Deterministic provider selection — never silently fall back when Resend is expected. */
+export function resolveEmailProvider(): {
+  mode: EmailProviderMode;
+  configured: boolean;
+  missing: string[];
+  explicit: boolean;
+} {
+  const explicit = normalizeProvider(process.env.EMAIL_PROVIDER);
+  const hasResend = Boolean(resendApiKey());
+  const hasSmtp = Boolean(emailCredentials());
+  const missing: string[] = [];
+
+  if (explicit === 'resend') {
+    if (!hasResend) missing.push('RESEND_API_KEY');
+    return { mode: 'resend', configured: hasResend, missing, explicit: true };
+  }
+  if (explicit === 'smtp') {
+    if (!hasSmtp) missing.push('EMAIL_USER', 'EMAIL_PASS');
+    return { mode: 'smtp', configured: hasSmtp, missing, explicit: true };
+  }
+  if (explicit === 'none') {
+    return { mode: 'none', configured: false, missing: [], explicit: true };
+  }
+
+  // No EMAIL_PROVIDER — infer from credentials (Resend preferred; no silent SMTP when Resend key exists).
+  if (hasResend) return { mode: 'resend', configured: true, missing: [], explicit: false };
+  if (hasSmtp) return { mode: 'smtp', configured: true, missing: [], explicit: false };
+  return { mode: 'none', configured: false, missing: ['RESEND_API_KEY or EMAIL_USER/EMAIL_PASS'], explicit: false };
+}
+
 export function getEmailDiagnostics() {
+  const selection = resolveEmailProvider();
   return {
-    configured: Boolean(emailCredentials() || resendApiKey()),
-    provider: resendApiKey() ? ('resend' as const) : emailCredentials() ? ('smtp' as const) : ('none' as const),
+    configured: selection.configured,
+    provider: selection.mode,
+    providerExplicit: selection.explicit,
+    providerMissing: selection.missing,
     resendKeyPresent: Boolean(resendApiKey()),
+    emailFromConfigured: Boolean((process.env.EMAIL_FROM ?? '').trim()),
+    smtpConfigured: Boolean(emailCredentials()),
     last: lastEmailDiag,
     activeProfile: _activeProfile,
   };
@@ -126,7 +171,30 @@ export type EmailDeliveryResult = {
   mode: 'smtp' | 'resend' | 'resend_relay' | 'console_fallback' | 'failed';
   errorCode?: string;
   profile?: string;
+  /** Resend message id when available (safe to log). */
+  providerMessageId?: string;
+  /** Safe, user-facing guidance (no secrets). */
+  hint?: string;
 };
+
+const RESEND_DOMAIN_HINT =
+  'Resend is in test mode (onboarding@resend.dev only reaches the Resend account owner). Verify a domain at resend.com/domains, then set EMAIL_FROM to an address on that domain on the API and Vercel.';
+
+function resendFailureMeta(message: string | undefined, errorCode: string): {
+  errorCode: string;
+  hint?: string;
+} {
+  const m = (message || '').toLowerCase();
+  if (
+    m.includes('verify a domain') ||
+    m.includes('only send testing emails') ||
+    m.includes('domain is not verified') ||
+    m.includes('from address is not verified')
+  ) {
+    return { errorCode: 'resend_domain_unverified', hint: RESEND_DOMAIN_HINT };
+  }
+  return { errorCode };
+}
 
 async function sendViaResend(opts: {
   to: string;
@@ -160,7 +228,9 @@ async function sendViaResend(opts: {
       // ignore
     }
     if (!res.ok) {
-      const errorCode = String(parsed?.name || parsed?.statusCode || `resend_http_${res.status}`);
+      const rawCode = String(parsed?.name || parsed?.statusCode || `resend_http_${res.status}`);
+      const message = String(parsed?.message || bodyText.slice(0, 200));
+      const { errorCode, hint } = resendFailureMeta(message, rawCode);
       lastEmailDiag = {
         at: new Date().toISOString(),
         delivered: false,
@@ -173,10 +243,12 @@ async function sendViaResend(opts: {
         subject: opts.subject,
         profile: 'resend',
         code: errorCode,
-        message: parsed?.message || bodyText.slice(0, 200),
+        message,
       });
-      return { delivered: false, mode: 'failed', errorCode, profile: 'resend' };
+      return { delivered: false, mode: 'failed', errorCode, profile: 'resend', hint };
     }
+    const providerMessageId =
+      typeof parsed?.id === 'string' ? parsed.id : undefined;
     _activeProfile = 'resend';
     lastEmailDiag = {
       at: new Date().toISOString(),
@@ -185,8 +257,13 @@ async function sendViaResend(opts: {
       profile: 'resend',
       errorCode: null,
     };
-    logger.info('email.sent', { to: opts.to, subject: opts.subject, profile: 'resend' });
-    return { delivered: true, mode: 'resend', profile: 'resend' };
+    logger.info('email.sent', {
+      to: opts.to,
+      subject: opts.subject,
+      profile: 'resend',
+      providerMessageId,
+    });
+    return { delivered: true, mode: 'resend', profile: 'resend', providerMessageId };
   } catch (err) {
     const e = err as Error & { code?: string; name?: string };
     const errorCode = e.name === 'AbortError' ? 'ETIMEDOUT' : e.code || 'resend_error';
@@ -215,8 +292,16 @@ export async function probeSmtpConnectivity(): Promise<{
   ok: boolean;
   profile?: string;
   errorCode?: string;
+  missing?: string[];
 }> {
-  if (resendApiKey()) {
+  const selection = resolveEmailProvider();
+  if (selection.explicit && selection.missing.length) {
+    return { ok: false, errorCode: 'provider_misconfigured', missing: selection.missing };
+  }
+  if (selection.mode === 'none') {
+    return { ok: false, errorCode: 'not_configured' };
+  }
+  if (selection.mode === 'resend') {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 10_000);
     try {
@@ -281,8 +366,12 @@ export async function probeSmtpConnectivity(): Promise<{
     }
   }
 
+  if (selection.mode !== 'smtp') {
+    return { ok: false, errorCode: 'smtp_not_selected' };
+  }
+
   const creds = emailCredentials();
-  if (!creds) return { ok: false, errorCode: 'not_configured' };
+  if (!creds) return { ok: false, errorCode: 'not_configured', missing: ['EMAIL_USER', 'EMAIL_PASS'] };
 
   for (const profile of SMTP_PROFILES) {
     const transporter = buildTransport(profile, creds);
@@ -411,7 +500,9 @@ async function deliverInviteViaWebRelay(rawToken: string): Promise<EmailDelivery
       // ignore
     }
     if (!res.ok || !parsed?.ok) {
-      const errorCode = String(parsed?.error || `relay_http_${res.status}`);
+      const rawCode = String(parsed?.errorCode || parsed?.error || `relay_http_${res.status}`);
+      const detail = String(parsed?.detail || parsed?.hint || text.slice(0, 200));
+      const { errorCode, hint } = resendFailureMeta(detail, rawCode);
       lastEmailDiag = {
         at: new Date().toISOString(),
         delivered: false,
@@ -419,8 +510,14 @@ async function deliverInviteViaWebRelay(rawToken: string): Promise<EmailDelivery
         profile: 'resend_relay',
         errorCode,
       };
-      logger.error('email.failed', { profile: 'resend_relay', code: errorCode, message: text.slice(0, 200) });
-      return { delivered: false, mode: 'failed', errorCode, profile: 'resend_relay' };
+      logger.error('email.failed', { profile: 'resend_relay', code: errorCode, message: detail });
+      return {
+        delivered: false,
+        mode: 'failed',
+        errorCode,
+        profile: 'resend_relay',
+        hint: hint || (typeof parsed?.hint === 'string' ? parsed.hint : undefined),
+      };
     }
     _activeProfile = 'resend_relay';
     lastEmailDiag = {
@@ -454,33 +551,64 @@ async function send(
   html: string,
   debugLink?: string
 ): Promise<EmailDeliveryResult> {
-  // Prefer HTTPS Resend — Railway blocks outbound Gmail SMTP (ETIMEDOUT on 465/587).
-  if (resendApiKey()) {
-    const result = await sendViaResend({ to, subject, html });
-    if (result.delivered) return result;
+  const selection = resolveEmailProvider();
+
+  if (selection.explicit && selection.missing.length) {
+    const errorCode = `provider_missing_${selection.missing.join('_').toLowerCase()}`;
+    logger.error('email.provider_misconfigured', {
+      provider: selection.mode,
+      missing: selection.missing,
+    });
+    lastEmailDiag = {
+      at: new Date().toISOString(),
+      delivered: false,
+      mode: 'failed',
+      profile: selection.mode,
+      errorCode,
+    };
+    return {
+      delivered: false,
+      mode: 'failed',
+      errorCode,
+      profile: selection.mode,
+      hint: `Email provider "${selection.mode}" is selected but required configuration is missing: ${selection.missing.join(', ')}.`,
+    };
   }
 
-  const creds = emailCredentials();
-  if (creds) {
-    const result = await sendViaProfiles(creds, {
-      from: mailFromAddress(),
-      to,
-      subject,
-      html,
-    });
+  if (selection.mode === 'resend') {
+    const result = await sendViaResend({ to, subject, html });
+    if (result.delivered) return result;
+    // Never fall through to SMTP when Resend is the selected provider.
+    if (debugLink) console.log(`[email:failed] ${subject} → ${to}\nLink: ${debugLink}`);
+    return result;
+  }
+
+  if (selection.mode === 'smtp') {
+    const creds = emailCredentials();
+    if (!creds) {
+      return {
+        delivered: false,
+        mode: 'failed',
+        errorCode: 'smtp_not_configured',
+        hint: 'SMTP provider selected but EMAIL_USER / EMAIL_PASS are not configured.',
+      };
+    }
+    const result = await sendViaProfiles(creds, { from: mailFromAddress(), to, subject, html });
     if (result.delivered) {
       logger.info('email.sent', { to, subject, profile: result.profile });
       return result;
     }
-  } else if (!resendApiKey()) {
-    logger.info('email.console_fallback', { to, subject, debugLink: debugLink || null });
+    if (debugLink) console.log(`[email:failed] ${subject} → ${to}\nLink: ${debugLink}`);
+    return result;
   }
 
-  if (debugLink) console.log(`[email:failed-fallback] ${subject} → ${to}\nLink: ${debugLink}`);
+  logger.info('email.console_fallback', { to, subject, debugLink: debugLink || null });
+  if (debugLink) console.log(`[email:console] ${subject} → ${to}\nLink: ${debugLink}`);
   return {
     delivered: false,
-    mode: resendApiKey() || creds ? 'failed' : 'console_fallback',
-    errorCode: lastEmailDiag?.errorCode || (resendApiKey() || creds ? 'failed' : 'not_configured'),
+    mode: 'console_fallback',
+    errorCode: 'not_configured',
+    hint: 'No email provider configured. Set EMAIL_PROVIDER=resend and RESEND_API_KEY.',
   };
 }
 
@@ -641,29 +769,40 @@ export const mailer = {
     const inviter = opts.inviterName ? escapeHtml(opts.inviterName) : 'A teammate';
     const workspace = escapeHtml(opts.workspaceName);
     const role = escapeHtml(opts.role);
+    const invitedEmail = escapeHtml(opts.to);
     const expires = escapeHtml(opts.expiresAt.toUTCString());
     const subject = `Nexora OS — You've been invited to join ${opts.workspaceName}`;
     const first = await send(
       opts.to,
       subject,
       baseTemplate(
-        'Nexora OS',
-        `<p style="font-size:16px;color:#e2e8f0;margin:0 0 16px;">You've been invited to join a team workspace.</p>
+        `You've been invited to join ${workspace}`,
+        `<p style="font-size:16px;color:#e2e8f0;margin:0 0 8px;">You've been invited to join:</p>
          <p style="font-size:20px;font-weight:650;color:#ffffff;margin:0 0 20px;">${workspace}</p>
          <table style="width:100%;font-size:14px;color:#cbd5e1;margin:0 0 20px;border-collapse:collapse;">
            <tr><td style="padding:6px 0;color:#94a3b8;width:110px;">Invited by</td><td style="padding:6px 0;"><strong>${inviter}</strong></td></tr>
            <tr><td style="padding:6px 0;color:#94a3b8;">Role</td><td style="padding:6px 0;"><strong>${role}</strong></td></tr>
-           <tr><td style="padding:6px 0;color:#94a3b8;">Expires</td><td style="padding:6px 0;">${expires}</td></tr>
          </table>
-         <p>This invitation can only be accepted with this email address.</p>
+         <p>You've been invited to collaborate with your team in Nexora OS.</p>
          ${ctaButton(acceptUrl, 'ACCESS WORKSPACE')}
-         <p style="font-size:12px;color:#94a3b8;word-break:break-all;margin-top:20px;">Or paste this link:<br/>${escapeHtml(acceptUrl)}</p>`
+         <p style="font-size:13px;color:#94a3b8;margin-top:20px;">Access Workspace:<br/><span style="word-break:break-all;">${escapeHtml(acceptUrl)}</span></p>
+         <p style="font-size:13px;color:#94a3b8;margin-top:16px;">This invitation is intended for:<br/><strong style="color:#e2e8f0;">${invitedEmail}</strong></p>
+         <p style="font-size:12px;color:#64748b;margin-top:16px;">This invitation expires on ${expires}.</p>
+         <p style="font-size:12px;color:#64748b;margin-top:12px;">If you did not expect this invitation, you can ignore this email.</p>`
       ),
       acceptUrl
     );
     if (first.delivered) return first;
+    // Domain restriction cannot be fixed by the Vercel relay (same Resend account / from).
+    if (first.errorCode === 'resend_domain_unverified') return first;
     // Railway often cannot reach Gmail SMTP / may miss RESEND_API_KEY on the running service.
     // Fall back to Vercel HTTPS relay (Resend) using the invite token.
-    return deliverInviteViaWebRelay(opts.rawToken);
+    const relay = await deliverInviteViaWebRelay(opts.rawToken);
+    if (relay.delivered) return relay;
+    return {
+      ...relay,
+      hint: relay.hint || first.hint,
+      errorCode: relay.errorCode || first.errorCode,
+    };
   },
 };

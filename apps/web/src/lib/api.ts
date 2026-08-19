@@ -301,7 +301,10 @@ export interface InvitationPreview {
 
 export interface EmailDeliveryResult {
   delivered: boolean;
-  mode: 'smtp' | 'console_fallback' | 'failed';
+  mode: 'smtp' | 'resend' | 'resend_relay' | 'console_fallback' | 'failed';
+  errorCode?: string;
+  profile?: string;
+  hint?: string;
 }
 
 function persistSessionTokens(data: { accessToken?: string; token?: string; refreshToken?: string }) {

@@ -20,8 +20,13 @@ const RETIRED_NETLIFY_ORIGIN = 'https://try-nexora.netlify.app';
 
 export function webAppUrl(): string {
   const fromEnv = (process.env.WEB_APP_URL ?? '').trim().replace(/\/$/, '');
-  // Prefer env when set, but never send users to the retired Netlify URL even if
-  // Railway still has WEB_APP_URL=try-nexora.netlify.app.
+  const isProduction =
+    process.env.NODE_ENV === 'production' || Boolean(process.env.RAILWAY_ENVIRONMENT);
+
+  const isLocalOrigin = (url: string) =>
+    /^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?$/i.test(url);
+
+  // Prefer env when set, but never send users to retired Netlify or localhost in production.
   if (fromEnv) {
     if (
       fromEnv === RETIRED_NETLIFY_ORIGIN ||
@@ -29,9 +34,12 @@ export function webAppUrl(): string {
     ) {
       return CANONICAL_WEB_APP_URL;
     }
+    if (isProduction && isLocalOrigin(fromEnv)) {
+      return CANONICAL_WEB_APP_URL;
+    }
     return fromEnv;
   }
-  if (process.env.NODE_ENV === 'production' || process.env.RAILWAY_ENVIRONMENT) {
+  if (isProduction) {
     return CANONICAL_WEB_APP_URL;
   }
   return (

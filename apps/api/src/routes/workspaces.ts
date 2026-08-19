@@ -20,6 +20,22 @@ import { MembershipAuthorizationError } from '../lib/workspaceAuth';
 
 export const workspacesRouter = Router();
 
+function invitationEmailError(email: {
+  delivered: boolean;
+  mode: string;
+  errorCode?: string;
+  hint?: string;
+}): AppError {
+  const detail =
+    email.hint ||
+    (email.errorCode === 'resend_domain_unverified'
+      ? 'Email provider requires a verified domain. Set EMAIL_FROM to a verified sender on Railway and Vercel.'
+      : email.errorCode
+        ? `Email delivery failed (${email.errorCode}).`
+        : `Email delivery failed (${email.mode}).`);
+  return new AppError(`Invitation could not be sent. ${detail}`, 502);
+}
+
 function wrapMembership<T>(fn: () => Promise<T>): Promise<T> {
   return fn().catch((err) => membershipErrorToAppError(err));
 }
@@ -141,17 +157,16 @@ workspacesRouter.post(
         email: String(req.body?.email ?? ''),
         role: req.body?.role,
       });
+      if (!result.email.delivered) {
+        throw invitationEmailError(result.email);
+      }
       ok(
         res,
         {
           invitation: result.invitation,
           email: result.email,
-          // Only surface raw token when email was not delivered so accept still works locally.
-          ...(result.email.delivered ? {} : { acceptToken: result.rawToken }),
         },
-        result.email.delivered
-          ? 'Invitation created and email delivered'
-          : 'Invitation created; email not delivered',
+        'Invitation created and email delivered',
         201
       );
     } catch (err) {
@@ -209,16 +224,16 @@ workspacesRouter.post(
         organizationId: req.params.organizationId,
         invitationId: req.params.invitationId,
       });
+      if (!result.email.delivered) {
+        throw invitationEmailError(result.email);
+      }
       ok(
         res,
         {
           invitation: result.invitation,
           email: result.email,
-          ...(result.email.delivered ? {} : { acceptToken: result.rawToken }),
         },
-        result.email.delivered
-          ? 'Invitation resent and email delivered'
-          : 'Invitation resent; email not delivered'
+        'Invitation resent and email delivered'
       );
     } catch (err) {
       if (err instanceof MembershipAuthorizationError) wrapInvitationMembershipError(err);

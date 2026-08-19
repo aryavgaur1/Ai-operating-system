@@ -40,8 +40,12 @@ Do **not** commit `.env`.
 | `NOTION_OAUTH_REDIRECT_URI` | `https://YOUR-RAILWAY-API.up.railway.app/oauth/notion/callback` |
 | `ALLOW_NOTION_TOKEN_PASTE` | `true` for early testing |
 | `SLACK_*` | optional for live Slack |
-| `EMAIL_USER` / `EMAIL_PASS` | optional |
+| `EMAIL_USER` / `EMAIL_PASS` | optional — **not usable on Railway** (Gmail SMTP times out) |
+| `RESEND_API_KEY` | **required for invite email** — HTTPS mail via Resend |
+| `EMAIL_FROM` | `Nexora OS <invites@your-verified-domain.com>` after verifying a domain at [resend.com/domains](https://resend.com/domains). Default `onboarding@resend.dev` only delivers to the Resend account owner. |
 | `AUTO_VERIFY_SIGNUP` | `true` until email works |
+
+Also set `RESEND_API_KEY` + the same `EMAIL_FROM` on **Vercel** (web) so the invite relay at `/api/internal/deliver-invite` can send.
 
 `DATABASE_URL` should already be linked from Postgres.
 
@@ -64,6 +68,8 @@ Do **not** commit `.env`.
 |----------|--------|
 | `NEXT_PUBLIC_API_URL` | `https://YOUR-RAILWAY-API.up.railway.app` |
 | `NEXT_PUBLIC_DEMO_MODE` | `false` |
+| `RESEND_API_KEY` | same as Railway (invite email relay) |
+| `EMAIL_FROM` | same verified-domain sender as Railway |
 
 5. Deploy → copy URL e.g. `https://ai-operating-system.vercel.app`  
 6. Go back to Railway and set `WEB_APP_URL` + `CORS_ORIGINS` to that Vercel URL → redeploy API  
@@ -104,3 +110,4 @@ Do **not** commit `.env`.
 | Login works, API 401 | `JWT_SECRET` must be stable (don’t change after users exist) |
 | DB errors | Run `node db/migrate.js` on Railway; confirm `DATABASE_URL` |
 | Google OAuth fail | Redirect URI must match Railway URL exactly |
+| Invite email fails / “not delivered” | Resend test sender only emails the account owner. Verify a domain in Resend, set `EMAIL_FROM` + `RESEND_API_KEY` on Railway **and** Vercel. Gmail `EMAIL_USER`/`EMAIL_PASS` will not work on Railway (SMTP blocked). |
