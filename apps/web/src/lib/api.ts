@@ -1,3 +1,5 @@
+import { clearAutoSpeakAttempts } from '@/lib/jarvisGreeting';
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
 const TOKEN_KEY = 'nexora_access_token';
 const REFRESH_KEY = 'nexora_refresh_token';
@@ -27,7 +29,18 @@ export function setRefreshToken(token: string | null) {
 export function clearSession() {
   setAccessToken(null);
   setRefreshToken(null);
+  clearAutoSpeakAttempts();
+  if (typeof window !== 'undefined') {
+    try {
+      window.sessionStorage.removeItem('nexora.jarvis.sessionGreeting');
+      window.sessionStorage.removeItem('nexora.jarvis.pendingPrompt');
+      window.sessionStorage.removeItem('nexora.jarvis.welcomeDismissed');
+    } catch {
+      // ignore
+    }
+  }
 }
+
 
 async function refreshAccessToken(): Promise<string | null> {
   try {
