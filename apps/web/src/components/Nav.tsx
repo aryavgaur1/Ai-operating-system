@@ -23,6 +23,7 @@ import { APP_HOME, APP_ROUTES, LOGIN, chatResumeHref } from '@/lib/routes';
 import { resolveChatHref } from '@/lib/activeConversation';
 import { isPlatformAdminEmail } from '@/lib/platformAdmin';
 import { WorkspaceSwitcher } from '@/components/WorkspaceSwitcher';
+import { resetJarvisSessionGuards } from '@/components/JarvisProvider';
 
 const STATIC_LINKS = [
   { href: APP_ROUTES.dashboard, label: 'Dashboard', icon: LayoutGrid },
@@ -231,6 +232,7 @@ export function Nav() {
       // ignore
     }
     clearSession();
+    resetJarvisSessionGuards();
     router.push(LOGIN);
   }
 

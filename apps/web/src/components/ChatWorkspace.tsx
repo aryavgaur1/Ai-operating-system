@@ -31,12 +31,10 @@ import { writeActiveConversationHint, resolveResumeConversationId } from '@/lib/
 import {
   NexoraPresence,
   type NexoraAgentState,
-  stopNexoraSpeech,
   canUseSpeechSynthesis,
 } from '@/components/NexoraPresence';
 import { useJarvis } from '@/components/JarvisProvider';
 import { consumePendingJarvisPrompt } from '@/lib/jarvisGreeting';
-import { speakNexoraReliable } from '@/lib/jarvisSpeech';
 
 const riskScore: Record<string, number> = { low: 24, medium: 58, high: 88 };
 const riskColor: Record<string, string> = { low: '#8be9d0', medium: '#f5b95d', high: '#fb7185' };
@@ -487,13 +485,12 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
               setConversationId(event.result.conversationId);
             }
             if (reply) {
-              void speakNexoraReliable(reply, {
-                muted: voiceMutedRef.current,
-                preferMale: true,
-                onStart: () => setAgentState('speaking'),
-                onEnd: () => setAgentState('idle'),
-                onError: () => setAgentState('idle'),
-              });
+              if (!voiceMutedRef.current) {
+                if (jarvis?.speakReply) void jarvis.speakReply(reply);
+                else window.dispatchEvent(new CustomEvent('nexora:jarvis-speak', { detail: reply }));
+              } else {
+                setAgentState('idle');
+              }
             } else {
               setAgentState('idle');
             }
@@ -703,7 +700,8 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
       } catch {
         // ignore
       }
-      stopNexoraSpeech();
+      // Do NOT stopNexoraSpeech here — Jarvis TTS lives in AppShell and must
+      // continue across route changes (dashboard ↔ chat ↔ settings, etc.).
     };
   }, []);
 
@@ -833,7 +831,7 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
                       const next = !voiceMuted;
                       setVoiceMuted(next);
                       if (next) {
-                        stopNexoraSpeech();
+                        jarvis?.interruptSpeech?.();
                         setAgentState('idle');
                       }
                     }}
@@ -849,7 +847,7 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
                       type="button"
                       title="Stop speaking"
                       onClick={() => {
-                        stopNexoraSpeech();
+                        jarvis?.interruptSpeech?.();
                         setAgentState('idle');
                       }}
                       className="rounded-full border border-white/10 px-3 py-1.5 text-[11px] uppercase tracking-wide text-neutral-300 hover:text-white"

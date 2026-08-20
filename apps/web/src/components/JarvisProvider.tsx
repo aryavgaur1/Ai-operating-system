@@ -6,34 +6,39 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
-import { useRouter } from 'next/navigation';
-import { Volume2 } from 'lucide-react';
+import { usePathname } from 'next/navigation';
 import { api } from '@/lib/api';
 import { useWorkspaces } from '@/components/WorkspaceProvider';
-import { NexoraPresence, type NexoraAgentState, canUseSpeechSynthesis, stopNexoraSpeech } from '@/components/NexoraPresence';
+import { type NexoraAgentState, canUseSpeechSynthesis, stopNexoraSpeech } from '@/components/NexoraPresence';
+import { JarvisLayer, type JarvisUiMode } from '@/components/JarvisLayer';
 import {
   buildJarvisGreeting,
   shouldPresentGreeting,
   markGreetingPresented,
   markGreetingSpoken,
   readGreetingSession,
-  setPendingJarvisPrompt,
   hasAutoSpeakAttempted,
   markAutoSpeakAttempted,
   clearAutoSpeakAttempts,
-  JARVIS_SUGGESTIONS,
   GREETING_SESSION_KEY,
   PENDING_PROMPT_KEY,
   type BuiltGreeting,
 } from '@/lib/jarvisGreeting';
-import { enableAndSpeak, speakNexoraReliable } from '@/lib/jarvisSpeech';
-import { APP_ROUTES, chatResumeHref } from '@/lib/routes';
-import { cn } from '@/lib/utils';
+import { enableAndSpeak, interruptNexoraSpeech, speakNexoraReliable } from '@/lib/jarvisSpeech';
+import { isEditableTarget, isJarvisToggleHotkey } from '@/lib/jarvisHotkeys';
+import { buildContextualSuggestions, jarvisStatusLabel, jarvisToolNarration } from '@/lib/jarvisStatus';
+import { runJarvisTurn } from '@/lib/jarvisTurn';
+import { isStopCommand, matchesWakePhrase, stripWakePhrase } from '@/lib/jarvisWake';
+import { shouldAutoSpeakReply, humanToolResult } from '@/lib/humanizeTools';
 
 const WELCOME_DISMISSED_KEY = 'nexora.jarvis.welcomeDismissed';
+const WAKE_ENABLED_KEY = 'nexora.jarvis.wakeEnabled';
+
+type MiniTurn = { role: 'user' | 'assistant'; content: string };
 
 type JarvisContextValue = {
   ready: boolean;
@@ -41,15 +46,21 @@ type JarvisContextValue = {
   displayName: string | null;
   firstName: string | null;
   greeting: BuiltGreeting | null;
-  /** True while the welcome panel should show (first session entry). */
   showWelcome: boolean;
   speechBlocked: boolean;
   pendingSpeechText: string | null;
   agentState: NexoraAgentState;
   setAgentState: (s: NexoraAgentState) => void;
+  mode: JarvisUiMode;
+  setMode: (m: JarvisUiMode) => void;
+  statusLine: string;
+  busy: boolean;
   enableVoice: () => Promise<void>;
   dismissWelcome: () => void;
   runSuggestion: (prompt: string) => void;
+  sendPrompt: (message: string) => Promise<void>;
+  interruptSpeech: () => void;
+  speakReply: (text: string) => Promise<void>;
 };
 
 const JarvisCtx = createContext<JarvisContextValue | null>(null);
@@ -63,8 +74,14 @@ function sessionStorageOrNull(): Storage | null {
   }
 }
 
+function getSpeechRecognitionCtor(): any | null {
+  if (typeof window === 'undefined') return null;
+  const w = window as any;
+  return w.SpeechRecognition || w.webkitSpeechRecognition || null;
+}
+
 export function JarvisProvider({ children }: { children: ReactNode }) {
-  const router = useRouter();
+  const pathname = usePathname();
   const { current, loading: workspaceLoading } = useWorkspaces();
   const [ready, setReady] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
@@ -74,6 +91,36 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
   const [speechBlocked, setSpeechBlocked] = useState(false);
   const [pendingSpeechText, setPendingSpeechText] = useState<string | null>(null);
   const [agentState, setAgentState] = useState<NexoraAgentState>('idle');
+  const [statusCustom, setStatusCustom] = useState<string | null>(null);
+  const [activeTool, setActiveTool] = useState<{ tool: string; action: string } | null>(null);
+  const [mode, setMode] = useState<JarvisUiMode>('orb');
+  const [busy, setBusy] = useState(false);
+  const [turns, setTurns] = useState<MiniTurn[]>([]);
+  const [micActive, setMicActive] = useState(false);
+  const [wakeEnabled, setWakeEnabled] = useState(false);
+  const [voiceMuted, setVoiceMuted] = useState(false);
+
+  const abortRef = useRef<AbortController | null>(null);
+  const recognitionRef = useRef<any>(null);
+  const wakeRef = useRef<any>(null);
+  const sendPromptRef = useRef<(message: string) => Promise<void>>(async () => undefined);
+  const voiceMutedRef = useRef(false);
+  voiceMutedRef.current = voiceMuted;
+
+  const suggestions = useMemo(
+    () => buildContextualSuggestions({ pathname }),
+    [pathname]
+  );
+
+  const statusLine = useMemo(
+    () =>
+      jarvisStatusLabel(agentState, {
+        tool: activeTool?.tool,
+        action: activeTool?.action,
+        custom: statusCustom,
+      }),
+    [agentState, activeTool, statusCustom]
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -81,24 +128,184 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
       try {
         const me = await api.me();
         if (cancelled) return;
-        const id = me.user.id;
-        const name = (me.user.displayName || me.user.email || '').trim() || null;
-        setUserId(id);
-        setDisplayName(name);
+        setUserId(me.user.id);
+        setDisplayName((me.user.displayName || me.user.email || '').trim() || null);
         setReady(true);
       } catch {
-        if (!cancelled) {
-          setReady(true);
-        }
+        if (!cancelled) setReady(true);
       }
     })();
+    try {
+      setWakeEnabled(window.sessionStorage.getItem(WAKE_ENABLED_KEY) === '1');
+    } catch {
+      // ignore
+    }
     return () => {
       cancelled = true;
     };
   }, []);
 
-  // Initialize greeting once per browser session when user + workspace are ready.
-  // Workspace name refreshes / route changes must not re-greet or cancel a successful speak mark.
+  const interruptSpeech = useCallback(() => {
+    interruptNexoraSpeech();
+    setAgentState((s) => (s === 'speaking' ? 'idle' : s));
+  }, []);
+
+  const speakReply = useCallback(async (text: string) => {
+    if (voiceMutedRef.current || !text.trim()) return;
+    if (!shouldAutoSpeakReply(text) && text.length > 420) {
+      // Still speak a short lead-in for long replies
+      const lead = speakableLead(text);
+      if (!lead) return;
+      text = lead;
+    }
+    setAgentState('speaking');
+    const outcome = await speakNexoraReliable(text, {
+      preferMale: true,
+      rate: 0.88,
+      onStart: () => setAgentState('speaking'),
+      onEnd: () => setAgentState('idle'),
+      onError: () => setAgentState('idle'),
+    });
+    if (outcome.status === 'blocked') {
+      setSpeechBlocked(true);
+      setPendingSpeechText(text);
+      setAgentState('idle');
+    } else if (outcome.status !== 'started' && outcome.status !== 'interrupted') {
+      setAgentState('idle');
+    }
+  }, []);
+
+  const sendPrompt = useCallback(
+    async (message: string) => {
+      const trimmed = message.trim();
+      if (!trimmed || busy) return;
+
+      // Interrupt any current speech before a new turn
+      interruptSpeech();
+
+      if (isStopCommand(trimmed)) {
+        abortRef.current?.abort();
+        setBusy(false);
+        setStatusCustom(null);
+        setAgentState('idle');
+        return;
+      }
+
+      if (mode === 'orb') setMode('expanded');
+
+      setTurns((t) => [...t, { role: 'user', content: trimmed }]);
+      setBusy(true);
+      setAgentState('thinking');
+      setStatusCustom('Understanding…');
+      setActiveTool(null);
+
+      const controller = new AbortController();
+      abortRef.current = controller;
+      let assistantBuffer = '';
+
+      try {
+        const { result, conversationId } = await runJarvisTurn(trimmed, {
+          signal: controller.signal,
+          onEvent: (event) => {
+            if (event.type === 'status') {
+              setStatusCustom(event.message);
+              setAgentState('thinking');
+            }
+            if (event.type === 'token') {
+              assistantBuffer += event.text;
+              setTurns((prev) => {
+                const next = [...prev];
+                const last = next[next.length - 1];
+                if (last?.role === 'assistant') {
+                  next[next.length - 1] = { ...last, content: last.content + event.text };
+                } else {
+                  next.push({ role: 'assistant', content: event.text });
+                }
+                return next;
+              });
+            }
+            if (event.type === 'tool_start') {
+              setActiveTool({ tool: event.tool, action: event.action });
+              const narrate = jarvisToolNarration(event.tool, event.action);
+              setStatusCustom(narrate);
+              setAgentState('tool');
+              // Live transparency — short spoken status (non-blocking)
+              void speakNexoraReliable(narrate, {
+                muted: voiceMutedRef.current,
+                preferMale: true,
+                rate: 0.9,
+                onStart: () => setAgentState('speaking'),
+                onEnd: () => setAgentState('tool'),
+              });
+            }
+            if (event.type === 'tool_result') {
+              setStatusCustom(humanToolResult(event.tool, event.action, event.ok, event.error));
+              setAgentState(event.ok ? 'success' : 'error');
+            }
+            if (event.type === 'error') {
+              setStatusCustom(event.message);
+              setAgentState('error');
+            }
+            if (event.type === 'done') {
+              const reply = event.result.reply || assistantBuffer;
+              setTurns((prev) => {
+                const next = [...prev];
+                const last = next[next.length - 1];
+                if (last?.role === 'assistant') {
+                  next[next.length - 1] = { ...last, content: reply || last.content };
+                } else if (reply) {
+                  next.push({ role: 'assistant', content: reply });
+                }
+                return next;
+              });
+              if (reply) void speakReply(reply);
+              else setAgentState('idle');
+            }
+            if (event.type === 'conversation' || (event.type === 'done' && event.result.conversationId)) {
+              const id =
+                event.type === 'conversation' ? event.conversationId : event.result.conversationId;
+              window.dispatchEvent(
+                new CustomEvent('nexora:jarvis-turn', {
+                  detail: { conversationId: id, message: trimmed },
+                })
+              );
+            }
+          },
+        });
+
+        if (result?.reply && !assistantBuffer) {
+          setTurns((prev) => {
+            const last = prev[prev.length - 1];
+            if (last?.role === 'assistant') return prev;
+            return [...prev, { role: 'assistant', content: result.reply }];
+          });
+          void speakReply(result.reply);
+        }
+
+        if (conversationId) {
+          window.dispatchEvent(
+            new CustomEvent('nexora:jarvis-turn', {
+              detail: { conversationId, message: trimmed },
+            })
+          );
+        }
+      } catch (err) {
+        if ((err as Error).name !== 'AbortError') {
+          setStatusCustom((err as Error).message || 'Request failed');
+          setAgentState('error');
+        }
+      } finally {
+        setBusy(false);
+        setStatusCustom(null);
+        abortRef.current = null;
+        setAgentState((s) => (s === 'speaking' ? s : s === 'error' ? s : 'idle'));
+      }
+    },
+    [busy, interruptSpeech, mode, speakReply]
+  );
+  sendPromptRef.current = sendPrompt;
+
+  // Greeting once per session — expands Jarvis, speech owned by shell (survives navigation)
   useEffect(() => {
     if (!ready || !userId || workspaceLoading) return;
 
@@ -111,12 +318,10 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
 
     const restorePresentedWelcome = () => {
       const rec = readGreetingSession(storage);
-      if (!rec || rec.userId !== userId || !rec.presented || dismissed) {
-        setShowWelcome(false);
-        return;
-      }
+      if (!rec || rec.userId !== userId || !rec.presented || dismissed) return;
       setGreeting(built);
       setShowWelcome(true);
+      setMode('expanded');
       if (!rec.spoken) {
         setPendingSpeechText(built.spokenText);
         setSpeechBlocked(true);
@@ -130,6 +335,7 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
 
     setGreeting(built);
     setShowWelcome(true);
+    setMode('expanded');
     markGreetingPresented(userId, storage, { spoken: false });
     setPendingSpeechText(built.spokenText);
 
@@ -138,7 +344,6 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    // One auto-speak attempt per user per JS session (survives Strict Mode remount).
     if (hasAutoSpeakAttempted(userId)) {
       setSpeechBlocked(true);
       return;
@@ -149,6 +354,7 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
       setAgentState('speaking');
       const outcome = await speakNexoraReliable(built.spokenText, {
         preferMale: true,
+        rate: 0.88,
         onStart: () => setAgentState('speaking'),
         onEnd: () => setAgentState('idle'),
         onError: () => setAgentState('idle'),
@@ -160,14 +366,15 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
         setPendingSpeechText(null);
         window.setTimeout(() => {
           setAgentState((s) => (s === 'speaking' ? 'idle' : s));
-        }, 8000);
+        }, 12000);
+      } else if (outcome.status === 'interrupted') {
+        setAgentState('idle');
       } else {
-        // blocked | unsupported | error | empty — never pretend we spoke
         setSpeechBlocked(outcome.status !== 'empty');
         setAgentState('idle');
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- greet once when auth+workspace ready
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, userId, workspaceLoading]);
 
   const enableVoice = useCallback(async () => {
@@ -177,6 +384,7 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
     setAgentState('speaking');
     const outcome = await enableAndSpeak(text, {
       preferMale: true,
+      rate: 0.88,
       onStart: () => setAgentState('speaking'),
       onEnd: () => setAgentState('idle'),
       onError: () => setAgentState('idle'),
@@ -185,7 +393,7 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
       markGreetingSpoken(userId, sessionStorageOrNull());
       setPendingSpeechText(null);
       setSpeechBlocked(false);
-    } else {
+    } else if (outcome.status !== 'interrupted') {
       setSpeechBlocked(true);
       setAgentState('idle');
     }
@@ -193,6 +401,7 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
 
   const dismissWelcome = useCallback(() => {
     setShowWelcome(false);
+    setMode('orb');
     try {
       window.sessionStorage.setItem(WELCOME_DISMISSED_KEY, '1');
     } catch {
@@ -202,17 +411,192 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
 
   const runSuggestion = useCallback(
     (prompt: string) => {
-      setPendingJarvisPrompt(sessionStorageOrNull(), prompt);
       setShowWelcome(false);
-      const href = chatResumeHref();
-      if (typeof window !== 'undefined' && window.location.pathname.startsWith(APP_ROUTES.chat)) {
-        window.dispatchEvent(new CustomEvent('nexora:jarvis-prompt', { detail: prompt }));
-      } else {
-        router.push(href);
-      }
+      void sendPromptRef.current(prompt);
     },
-    [router]
+    []
   );
+
+  const stopMic = useCallback(() => {
+    try {
+      recognitionRef.current?.stop?.();
+    } catch {
+      // ignore
+    }
+    recognitionRef.current = null;
+    setMicActive(false);
+    setAgentState((s) => (s === 'listening' ? 'idle' : s));
+  }, []);
+
+  const toggleMic = useCallback(() => {
+    const Ctor = getSpeechRecognitionCtor();
+    if (!Ctor) {
+      setStatusCustom('Voice input is not supported in this browser.');
+      return;
+    }
+    if (micActive) {
+      stopMic();
+      return;
+    }
+    interruptSpeech();
+    const recognition = new Ctor();
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    recognition.lang = typeof navigator !== 'undefined' ? navigator.language || 'en-IN' : 'en-IN';
+    recognition.onstart = () => {
+      setMicActive(true);
+      setAgentState('listening');
+      setMode((m) => (m === 'orb' ? 'voice' : m));
+      setStatusCustom('Listening…');
+    };
+    recognition.onerror = () => {
+      setMicActive(false);
+      setAgentState('idle');
+      recognitionRef.current = null;
+    };
+    recognition.onend = () => {
+      setMicActive(false);
+      recognitionRef.current = null;
+      setAgentState((s) => (s === 'listening' ? 'idle' : s));
+    };
+    recognition.onresult = (event: any) => {
+      let transcript = '';
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        transcript += event.results[i][0]?.transcript || '';
+      }
+      transcript = transcript.trim();
+      if (!transcript) return;
+      const final = event.results[event.results.length - 1]?.isFinal;
+      if (final) {
+        if (isStopCommand(transcript)) {
+          interruptSpeech();
+          abortRef.current?.abort();
+          setAgentState('idle');
+          return;
+        }
+        const command = stripWakePhrase(transcript) || transcript;
+        void sendPromptRef.current(command);
+      }
+    };
+    recognitionRef.current = recognition;
+    try {
+      recognition.start();
+    } catch {
+      setMicActive(false);
+      setStatusCustom('Could not start microphone. Check browser permission.');
+    }
+  }, [interruptSpeech, micActive, stopMic]);
+
+  const toggleWake = useCallback(() => {
+    setWakeEnabled((prev) => {
+      const next = !prev;
+      try {
+        window.sessionStorage.setItem(WAKE_ENABLED_KEY, next ? '1' : '0');
+      } catch {
+        // ignore
+      }
+      if (!next) {
+        try {
+          wakeRef.current?.stop?.();
+        } catch {
+          // ignore
+        }
+        wakeRef.current = null;
+      }
+      return next;
+    });
+  }, []);
+
+  // Wake phrase — only when explicitly enabled; continuous listen with user consent
+  useEffect(() => {
+    if (!wakeEnabled) return;
+    const Ctor = getSpeechRecognitionCtor();
+    if (!Ctor) return;
+
+    let stopped = false;
+    const startWake = () => {
+      if (stopped || micActive || busy) return;
+      try {
+        wakeRef.current?.stop?.();
+      } catch {
+        // ignore
+      }
+      const rec = new Ctor();
+      rec.continuous = true;
+      rec.interimResults = true;
+      rec.lang = typeof navigator !== 'undefined' ? navigator.language || 'en-IN' : 'en-IN';
+      rec.onresult = (event: any) => {
+        let transcript = '';
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          transcript += event.results[i][0]?.transcript || '';
+        }
+        const final = event.results[event.results.length - 1]?.isFinal;
+        if (!final) return;
+        if (!matchesWakePhrase(transcript)) return;
+        const command = stripWakePhrase(transcript);
+        setMode('voice');
+        setAgentState('listening');
+        if (command) {
+          void sendPromptRef.current(command);
+        } else {
+          toggleMic();
+        }
+      };
+      rec.onend = () => {
+        if (!stopped && wakeEnabled) window.setTimeout(startWake, 400);
+      };
+      rec.onerror = () => {
+        if (!stopped && wakeEnabled) window.setTimeout(startWake, 1200);
+      };
+      wakeRef.current = rec;
+      try {
+        rec.start();
+      } catch {
+        // permission or busy
+      }
+    };
+
+    startWake();
+    return () => {
+      stopped = true;
+      try {
+        wakeRef.current?.stop?.();
+      } catch {
+        // ignore
+      }
+      wakeRef.current = null;
+    };
+  }, [wakeEnabled, micActive, busy, toggleMic]);
+
+  // Global hotkey ⌘/Ctrl+J
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (!isJarvisToggleHotkey(e)) return;
+      if (isEditableTarget(e.target) && !(e.metaKey || e.ctrlKey)) return;
+      e.preventDefault();
+      setMode((m) => (m === 'orb' ? 'expanded' : 'orb'));
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  // Chat page can ask Jarvis to speak without owning TTS lifecycle
+  useEffect(() => {
+    function onChatSpeak(e: Event) {
+      const text = String((e as CustomEvent<string>).detail || '');
+      if (text) void speakReply(text);
+    }
+    function onChatState(e: Event) {
+      const s = (e as CustomEvent<NexoraAgentState>).detail;
+      if (s) setAgentState(s);
+    }
+    window.addEventListener('nexora:jarvis-speak', onChatSpeak as EventListener);
+    window.addEventListener('nexora:jarvis-state', onChatState as EventListener);
+    return () => {
+      window.removeEventListener('nexora:jarvis-speak', onChatSpeak as EventListener);
+      window.removeEventListener('nexora:jarvis-state', onChatState as EventListener);
+    };
+  }, [speakReply]);
 
   const value = useMemo<JarvisContextValue>(
     () => ({
@@ -226,9 +610,16 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
       pendingSpeechText,
       agentState,
       setAgentState,
+      mode,
+      setMode,
+      statusLine,
+      busy,
       enableVoice,
       dismissWelcome,
       runSuggestion,
+      sendPrompt,
+      interruptSpeech,
+      speakReply,
     }),
     [
       ready,
@@ -239,111 +630,74 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
       speechBlocked,
       pendingSpeechText,
       agentState,
+      mode,
+      statusLine,
+      busy,
       enableVoice,
       dismissWelcome,
       runSuggestion,
+      sendPrompt,
+      interruptSpeech,
+      speakReply,
     ]
   );
 
   return (
     <JarvisCtx.Provider value={value}>
       {children}
-      {showWelcome && greeting ? (
-        <JarvisWelcomePanel
-          greeting={greeting}
-          workspaceName={current?.name || null}
-          agentState={agentState}
-          speechBlocked={speechBlocked}
-          onEnableVoice={enableVoice}
-          onDismiss={dismissWelcome}
-          onSuggestion={runSuggestion}
-        />
-      ) : null}
+      <JarvisLayer
+        mode={showWelcome && mode === 'orb' ? 'expanded' : mode}
+        agentState={agentState}
+        statusLine={statusLine}
+        greeting={greeting}
+        suggestions={suggestions}
+        speechBlocked={speechBlocked}
+        wakeEnabled={wakeEnabled}
+        micActive={micActive}
+        busy={busy}
+        turns={turns}
+        onSetMode={(m) => {
+          setMode(m);
+          if (m === 'orb') {
+            setShowWelcome(false);
+            try {
+              window.sessionStorage.setItem(WELCOME_DISMISSED_KEY, '1');
+            } catch {
+              // ignore
+            }
+          }
+        }}
+        onEnableVoice={() => void enableVoice()}
+        onToggleMic={toggleMic}
+        onInterrupt={interruptSpeech}
+        onSend={(t) => void sendPrompt(t)}
+        onSuggestion={runSuggestion}
+        onToggleWake={toggleWake}
+      />
     </JarvisCtx.Provider>
   );
+}
+
+function speakableLead(text: string): string {
+  const plain = text.replace(/\s+/g, ' ').trim();
+  const sentence = plain.split(/(?<=[.!?])\s+/)[0];
+  return (sentence || plain).slice(0, 180);
 }
 
 export function useJarvis(): JarvisContextValue | null {
   return useContext(JarvisCtx);
 }
 
-function JarvisWelcomePanel({
-  greeting,
-  workspaceName,
-  agentState,
-  speechBlocked,
-  onEnableVoice,
-  onDismiss,
-  onSuggestion,
-}: {
-  greeting: BuiltGreeting;
-  workspaceName: string | null;
-  agentState: NexoraAgentState;
-  speechBlocked: boolean;
-  onEnableVoice: () => void;
-  onDismiss: () => void;
-  onSuggestion: (prompt: string) => void;
-}) {
-  return (
-    <div className="pointer-events-none fixed inset-x-0 bottom-20 z-[220] flex justify-center px-3 sm:bottom-8 sm:px-6 md:bottom-10">
-      <div className="pointer-events-auto w-full max-w-xl rounded-[24px] border border-white/12 bg-[#0b0e16]/95 p-4 shadow-soft backdrop-blur-md sm:p-5">
-        <div className="flex items-start justify-between gap-3">
-          <NexoraPresence state={agentState} />
-          <button
-            type="button"
-            onClick={onDismiss}
-            className="rounded-full px-2 py-1 text-[11px] uppercase tracking-wide text-neutral-500 hover:text-white"
-          >
-            Dismiss
-          </button>
-        </div>
-
-        <h2 className="font-display mt-4 text-xl font-semibold text-white sm:text-2xl">{greeting.headline}</h2>
-        <p className="mt-1 text-sm text-neutral-300">{greeting.subline}</p>
-        {workspaceName ? (
-          <p className="mt-2 text-xs text-neutral-500">
-            Workspace · <span className="text-neutral-300">{workspaceName}</span>
-          </p>
-        ) : null}
-
-        {speechBlocked ? (
-          <button
-            type="button"
-            onClick={onEnableVoice}
-            className="mt-4 inline-flex items-center gap-2 rounded-full border border-accent/30 bg-accent/10 px-3.5 py-2 text-sm text-accent hover:bg-accent/20"
-          >
-            <Volume2 size={15} /> Enable Jarvis voice
-          </button>
-        ) : null}
-
-        <div className="mt-4 grid gap-2 sm:grid-cols-2">
-          {JARVIS_SUGGESTIONS.map((s) => (
-            <button
-              key={s.id}
-              type="button"
-              onClick={() => onSuggestion(s.prompt)}
-              className={cn(
-                'rounded-2xl border border-white/10 bg-white/5 px-3.5 py-3 text-left text-sm text-neutral-200 transition',
-                'hover:border-accent/35 hover:bg-accent/10 hover:text-white'
-              )}
-            >
-              {s.label}
-            </button>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 /** Call on logout so the next login can greet again. */
 export function resetJarvisSessionGuards() {
   stopNexoraSpeech();
+  interruptNexoraSpeech();
   clearAutoSpeakAttempts();
   try {
     window.sessionStorage.removeItem(GREETING_SESSION_KEY);
     window.sessionStorage.removeItem(PENDING_PROMPT_KEY);
     window.sessionStorage.removeItem(WELCOME_DISMISSED_KEY);
+    window.sessionStorage.removeItem(WAKE_ENABLED_KEY);
   } catch {
     // ignore
   }

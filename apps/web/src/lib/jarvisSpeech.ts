@@ -5,7 +5,14 @@
 
 import { speakableText, canUseSpeechSynthesis } from '@/components/NexoraPresence';
 
-export type SpeakStatus = 'started' | 'blocked' | 'muted' | 'unsupported' | 'error' | 'empty';
+export type SpeakStatus =
+  | 'started'
+  | 'blocked'
+  | 'muted'
+  | 'unsupported'
+  | 'error'
+  | 'empty'
+  | 'interrupted';
 
 export type SpeakOutcome = {
   status: SpeakStatus;
@@ -17,12 +24,33 @@ export type SpeakOptions = {
   /** Prefer male voice when available */
   preferMale?: boolean;
   lang?: string;
+  /** Calm executive-assistant pace. Default ~0.88 */
+  rate?: number;
+  pitch?: number;
   onStart?: () => void;
   onEnd?: () => void;
   onError?: (reason: string) => void;
   /** How long to wait for speech to actually begin (ms) */
   startTimeoutMs?: number;
 };
+
+/** Generation token so intentional interrupt ≠ autoplay block. */
+let speakGeneration = 0;
+
+export function getSpeakGeneration(): number {
+  return speakGeneration;
+}
+
+/** Hard-stop current utterance (user interrupt or new turn). */
+export function interruptNexoraSpeech(): void {
+  speakGeneration += 1;
+  if (typeof window === 'undefined' || !window.speechSynthesis) return;
+  try {
+    window.speechSynthesis.cancel();
+  } catch {
+    // ignore
+  }
+}
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -63,7 +91,6 @@ export function pickMaleVoice(voices: SpeechSynthesisVoice[], lang = 'en'): Spee
   const explicitMale = pool.find((v) => /male/i.test(v.name) && !/female/i.test(v.name));
   if (explicitMale) return explicitMale;
 
-  // Common system defaults that sound male on macOS/Windows
   const system = pool.find((v) => /^(Alex|Daniel|David|Fred|Microsoft David|Google US English)$/i.test(v.name));
   if (system) return system;
 
@@ -84,15 +111,17 @@ export async function speakNexoraReliable(text: string, opts: SpeakOptions = {})
   const voices = await ensureSpeechVoices();
   const voice = opts.preferMale === false ? null : pickMaleVoice(voices, opts.lang || 'en');
   const startTimeoutMs = opts.startTimeoutMs ?? 1200;
+  const myGen = ++speakGeneration;
 
   try {
     window.speechSynthesis.cancel();
-    // Chrome sometimes needs a tick after cancel before the next speak works.
     await wait(30);
+    if (myGen !== speakGeneration) return { status: 'interrupted', reason: 'superseded' };
 
     const utterance = new SpeechSynthesisUtterance(clean);
-    utterance.rate = 1.0;
-    utterance.pitch = 0.95;
+    // Calm senior EA pace — slightly slower, easy for Indian + US English listeners
+    utterance.rate = typeof opts.rate === 'number' ? opts.rate : 0.88;
+    utterance.pitch = typeof opts.pitch === 'number' ? opts.pitch : 0.92;
     utterance.lang = opts.lang || voice?.lang || 'en-US';
     if (voice) utterance.voice = voice;
 
@@ -106,17 +135,20 @@ export async function speakNexoraReliable(text: string, opts: SpeakOptions = {})
       };
 
       utterance.onstart = () => {
+        if (myGen !== speakGeneration) {
+          settle({ status: 'interrupted', reason: 'superseded' });
+          return;
+        }
         opts.onStart?.();
         settle({ status: 'started' });
       };
       utterance.onend = () => {
-        opts.onEnd?.();
+        if (myGen === speakGeneration) opts.onEnd?.();
       };
       utterance.onerror = (event) => {
         const reason = String((event as SpeechSynthesisErrorEvent).error || 'speech_error');
         if (reason === 'canceled' || reason === 'interrupted') {
-          // Cancelled by us / newer speech — not a hard failure for greeting start detection.
-          settle({ status: 'blocked', reason });
+          settle({ status: 'interrupted', reason });
           return;
         }
         if (reason === 'not-allowed' || reason === 'synthesis-failed') {
@@ -129,7 +161,10 @@ export async function speakNexoraReliable(text: string, opts: SpeakOptions = {})
       };
 
       const timer = window.setTimeout(() => {
-        // If onstart never fired, treat as autoplay block (common without a user gesture).
+        if (myGen !== speakGeneration) {
+          settle({ status: 'interrupted', reason: 'superseded' });
+          return;
+        }
         const speaking = window.speechSynthesis.speaking || window.speechSynthesis.pending;
         if (!speaking) {
           try {
@@ -146,7 +181,6 @@ export async function speakNexoraReliable(text: string, opts: SpeakOptions = {})
 
       try {
         window.speechSynthesis.speak(utterance);
-        // Safari quirk: resume if paused
         if (window.speechSynthesis.paused) {
           window.speechSynthesis.resume();
         }
@@ -169,7 +203,6 @@ export async function speakNexoraReliable(text: string, opts: SpeakOptions = {})
 export async function enableAndSpeak(text: string, opts: SpeakOptions = {}): Promise<SpeakOutcome> {
   if (!canUseSpeechSynthesis()) return { status: 'unsupported' };
   try {
-    // Tiny unlock utterance discarded — helps some browsers after autoplay block.
     window.speechSynthesis.cancel();
     const warm = new SpeechSynthesisUtterance(' ');
     warm.volume = 0;
@@ -180,3 +213,4 @@ export async function enableAndSpeak(text: string, opts: SpeakOptions = {}): Pro
   }
   return speakNexoraReliable(text, { ...opts, preferMale: opts.preferMale !== false });
 }
+
