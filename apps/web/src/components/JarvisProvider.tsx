@@ -13,7 +13,7 @@ import {
 import { usePathname } from 'next/navigation';
 import { api } from '@/lib/api';
 import { useWorkspaces } from '@/components/WorkspaceProvider';
-import { type NexoraAgentState, canUseSpeechSynthesis, stopNexoraSpeech } from '@/components/NexoraPresence';
+import { type NexoraAgentState, canUseSpeechSynthesis } from '@/components/NexoraPresence';
 import { JarvisLayer, type JarvisUiMode } from '@/components/JarvisLayer';
 import {
   buildJarvisGreeting,
@@ -28,9 +28,21 @@ import {
   PENDING_PROMPT_KEY,
   type BuiltGreeting,
 } from '@/lib/jarvisGreeting';
-import { enableAndSpeak, interruptNexoraSpeech, speakNexoraReliable } from '@/lib/jarvisSpeech';
+import {
+  enableAndSpeak,
+  interruptJarvisVoice,
+  setJarvisVoiceMuted,
+  isJarvisVoiceMuted,
+  speakJarvis,
+} from '@/lib/jarvisSpeech';
 import { isEditableTarget, isJarvisToggleHotkey } from '@/lib/jarvisHotkeys';
-import { buildContextualSuggestions, jarvisStatusLabel, jarvisToolNarration } from '@/lib/jarvisStatus';
+import {
+  buildConnectHints,
+  buildContextualSuggestions,
+  jarvisStatusLabel,
+  jarvisToolNarration,
+  type ConnectedTools,
+} from '@/lib/jarvisStatus';
 import { runJarvisTurn } from '@/lib/jarvisTurn';
 import { isStopCommand, matchesWakePhrase, stripWakePhrase } from '@/lib/jarvisWake';
 import { shouldAutoSpeakReply, humanToolResult } from '@/lib/humanizeTools';
@@ -55,6 +67,8 @@ type JarvisContextValue = {
   setMode: (m: JarvisUiMode) => void;
   statusLine: string;
   busy: boolean;
+  voiceMuted: boolean;
+  setVoiceMuted: (muted: boolean) => void;
   enableVoice: () => Promise<void>;
   dismissWelcome: () => void;
   runSuggestion: (prompt: string) => void;
@@ -98,7 +112,8 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
   const [turns, setTurns] = useState<MiniTurn[]>([]);
   const [micActive, setMicActive] = useState(false);
   const [wakeEnabled, setWakeEnabled] = useState(false);
-  const [voiceMuted, setVoiceMuted] = useState(false);
+  const [voiceMuted, setVoiceMutedState] = useState(false);
+  const [connected, setConnected] = useState<ConnectedTools | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
   const recognitionRef = useRef<any>(null);
@@ -107,10 +122,15 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
   const voiceMutedRef = useRef(false);
   voiceMutedRef.current = voiceMuted;
 
-  const suggestions = useMemo(
-    () => buildContextualSuggestions({ pathname }),
-    [pathname]
-  );
+  const suggestions = useMemo(() => {
+    const contextual = buildContextualSuggestions({ pathname, connected });
+    const hints = buildConnectHints(connected);
+    const merged = [...contextual];
+    for (const h of hints) {
+      if (!merged.some((m) => m.id === h.id)) merged.push(h);
+    }
+    return merged.slice(0, 4);
+  }, [pathname, connected]);
 
   const statusLine = useMemo(
     () =>
@@ -118,9 +138,20 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
         tool: activeTool?.tool,
         action: activeTool?.action,
         custom: statusCustom,
+        muted: voiceMuted,
       }),
-    [agentState, activeTool, statusCustom]
+    [agentState, activeTool, statusCustom, voiceMuted]
   );
+
+  const setVoiceMuted = useCallback((next: boolean) => {
+    setVoiceMutedState(next);
+    setJarvisVoiceMuted(next);
+    try {
+      window.sessionStorage.setItem('nexora.jarvis.voiceMuted', next ? '1' : '0');
+    } catch {
+      // ignore
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -137,6 +168,9 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
     })();
     try {
       setWakeEnabled(window.sessionStorage.getItem(WAKE_ENABLED_KEY) === '1');
+      const mutedPref = window.sessionStorage.getItem('nexora.jarvis.voiceMuted') === '1';
+      setVoiceMutedState(mutedPref);
+      setJarvisVoiceMuted(mutedPref);
     } catch {
       // ignore
     }
@@ -145,32 +179,60 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  // Load real integration connection status for honest suggestions
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await api.listIntegrations();
+        if (cancelled) return;
+        const tools = res.tools || [];
+        const map: ConnectedTools = {};
+        for (const t of tools) {
+          const name = String(t.tool || '').toLowerCase();
+          const active = String(t.status || '').toLowerCase() === 'active';
+            if (name.includes('gmail')) map.gmail = active;
+            if (name.includes('slack')) map.slack = active;
+            if (name.includes('jira')) map.jira = active;
+            if (name.includes('notion')) map.notion = active;
+        }
+        setConnected(map);
+      } catch {
+        if (!cancelled) setConnected(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [pathname]);
+
   const interruptSpeech = useCallback(() => {
-    interruptNexoraSpeech();
+    interruptJarvisVoice();
     setAgentState((s) => (s === 'speaking' ? 'idle' : s));
   }, []);
 
   const speakReply = useCallback(async (text: string) => {
-    if (voiceMutedRef.current || !text.trim()) return;
+    if (voiceMutedRef.current || isJarvisVoiceMuted() || !text.trim()) return;
+    let toSpeak = text;
     if (!shouldAutoSpeakReply(text) && text.length > 420) {
-      // Still speak a short lead-in for long replies
       const lead = speakableLead(text);
       if (!lead) return;
-      text = lead;
+      toSpeak = lead;
     }
     setAgentState('speaking');
-    const outcome = await speakNexoraReliable(text, {
+    const outcome = await speakJarvis(toSpeak, {
       preferMale: true,
-      rate: 0.88,
+      rate: 0.9,
+      interrupt: true,
       onStart: () => setAgentState('speaking'),
       onEnd: () => setAgentState('idle'),
       onError: () => setAgentState('idle'),
     });
     if (outcome.status === 'blocked') {
       setSpeechBlocked(true);
-      setPendingSpeechText(text);
+      setPendingSpeechText(toSpeak);
       setAgentState('idle');
-    } else if (outcome.status !== 'started' && outcome.status !== 'interrupted') {
+    } else if (outcome.status !== 'completed' && outcome.status !== 'interrupted') {
       setAgentState('idle');
     }
   }, []);
@@ -226,17 +288,9 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
             }
             if (event.type === 'tool_start') {
               setActiveTool({ tool: event.tool, action: event.action });
-              const narrate = jarvisToolNarration(event.tool, event.action);
-              setStatusCustom(narrate);
+              setStatusCustom(jarvisToolNarration(event.tool, event.action));
               setAgentState('tool');
-              // Live transparency — short spoken status (non-blocking)
-              void speakNexoraReliable(narrate, {
-                muted: voiceMutedRef.current,
-                preferMale: true,
-                rate: 0.9,
-                onStart: () => setAgentState('speaking'),
-                onEnd: () => setAgentState('tool'),
-              });
+              // UI-only status — do NOT speak tool narration (it was canceling full replies mid-sentence).
             }
             if (event.type === 'tool_result') {
               setStatusCustom(humanToolResult(event.tool, event.action, event.ok, event.error));
@@ -273,13 +327,13 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
           },
         });
 
+        // Avoid double-speak: stream `done` already called speakReply when tokens/reply arrived.
         if (result?.reply && !assistantBuffer) {
           setTurns((prev) => {
             const last = prev[prev.length - 1];
             if (last?.role === 'assistant') return prev;
             return [...prev, { role: 'assistant', content: result.reply }];
           });
-          void speakReply(result.reply);
         }
 
         if (conversationId) {
@@ -352,25 +406,27 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
 
     (async () => {
       setAgentState('speaking');
-      const outcome = await speakNexoraReliable(built.spokenText, {
+      const outcome = await speakJarvis(built.spokenText, {
         preferMale: true,
-        rate: 0.88,
-        onStart: () => setAgentState('speaking'),
+        rate: 0.9,
+        interrupt: true,
+        onStart: () => {
+          setAgentState('speaking');
+          // Mark spoken once audio actually begins (session guard) — not merely on text create
+          markGreetingSpoken(userId, storage);
+          setSpeechBlocked(false);
+          setPendingSpeechText(null);
+        },
         onEnd: () => setAgentState('idle'),
         onError: () => setAgentState('idle'),
       });
 
-      if (outcome.status === 'started') {
-        markGreetingSpoken(userId, storage);
-        setSpeechBlocked(false);
-        setPendingSpeechText(null);
-        window.setTimeout(() => {
-          setAgentState((s) => (s === 'speaking' ? 'idle' : s));
-        }, 12000);
+      if (outcome.status === 'completed') {
+        // already marked on start
       } else if (outcome.status === 'interrupted') {
         setAgentState('idle');
       } else {
-        setSpeechBlocked(outcome.status !== 'empty');
+        setSpeechBlocked(outcome.status !== 'empty' && outcome.status !== 'muted');
         setAgentState('idle');
       }
     })();
@@ -384,12 +440,12 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
     setAgentState('speaking');
     const outcome = await enableAndSpeak(text, {
       preferMale: true,
-      rate: 0.88,
+      rate: 0.9,
       onStart: () => setAgentState('speaking'),
       onEnd: () => setAgentState('idle'),
       onError: () => setAgentState('idle'),
     });
-    if (outcome.status === 'started') {
+    if (outcome.status === 'completed' || outcome.status === 'started') {
       markGreetingSpoken(userId, sessionStorageOrNull());
       setPendingSpeechText(null);
       setSpeechBlocked(false);
@@ -614,6 +670,8 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
       setMode,
       statusLine,
       busy,
+      voiceMuted,
+      setVoiceMuted,
       enableVoice,
       dismissWelcome,
       runSuggestion,
@@ -633,6 +691,8 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
       mode,
       statusLine,
       busy,
+      voiceMuted,
+      setVoiceMuted,
       enableVoice,
       dismissWelcome,
       runSuggestion,
@@ -669,6 +729,8 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
         }}
         onEnableVoice={() => void enableVoice()}
         onToggleMic={toggleMic}
+        voiceMuted={voiceMuted}
+        onToggleMute={() => setVoiceMuted(!voiceMuted)}
         onInterrupt={interruptSpeech}
         onSend={(t) => void sendPrompt(t)}
         onSuggestion={runSuggestion}
@@ -690,14 +752,14 @@ export function useJarvis(): JarvisContextValue | null {
 
 /** Call on logout so the next login can greet again. */
 export function resetJarvisSessionGuards() {
-  stopNexoraSpeech();
-  interruptNexoraSpeech();
+  interruptJarvisVoice();
   clearAutoSpeakAttempts();
   try {
     window.sessionStorage.removeItem(GREETING_SESSION_KEY);
     window.sessionStorage.removeItem(PENDING_PROMPT_KEY);
     window.sessionStorage.removeItem(WELCOME_DISMISSED_KEY);
     window.sessionStorage.removeItem(WAKE_ENABLED_KEY);
+    window.sessionStorage.removeItem('nexora.jarvis.voiceMuted');
   } catch {
     // ignore
   }
