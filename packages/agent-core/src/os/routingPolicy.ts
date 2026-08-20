@@ -23,6 +23,11 @@ import {
   buildCapabilityScope,
   filterCallsByCapabilityScope,
 } from './capabilityRegistry';
+import {
+  buildGmailSearchQuery,
+  isGmailDestinationQuery,
+  isGmailSendQuery,
+} from './gmailQuery';
 
 /**
  * Authoritative routing — ONE decision before planner/workflow/executor.
@@ -125,6 +130,10 @@ export function detectRequestMode(query: string): RequestMode {
   if (isCancelRequest(query)) return 'cancel';
   if (isClarifyRequest(query)) return 'clarify';
   if (isDryRunRequest(query)) return 'dry_run';
+  // Gmail read/search questions must execute the connector — not stall in clarify mode.
+  if (isGmailDestinationQuery(query) && !isGmailSendQuery(query)) {
+    return 'execute';
+  }
   if (/\?/.test(query) && !/\b(create|open|post|send|delete|update|launch)\b/i.test(query)) {
     return 'question';
   }
@@ -199,13 +208,7 @@ function destinations(query: string): { jira: boolean; slack: boolean; notion: b
       (/\b(ticket|issue)\b/.test(t) && !/\b(slack|notion|channel|war\s*room|page|doc|message)\b/.test(t)));
 
   // Gmail destination — explicit email/gmail language not claimed by other systems
-  const gmail =
-    !slack &&
-    !notion &&
-    !jira &&
-    (/\b(gmail|my email|my inbox|my emails)\b/.test(t) ||
-      (/\b(email|e-mail|mail)\b/.test(t) &&
-        /\b(search|find|show|read|get|latest|recent|send|draft|check|look|inbox)\b/.test(t)));
+  const gmail = !slack && !notion && !jira && isGmailDestinationQuery(query);
 
   return { jira, slack, notion, gmail };
 }
@@ -267,6 +270,28 @@ export function resolveAuthoritativeRoute(query: string): AuthoritativeRoute {
     };
   }
   if (mode === 'clarify' || mode === 'question') {
+    // Gmail inbox questions are actionable reads — lock searchEmails instead of clarifying.
+    if (dest.gmail && !isGmailSendQuery(query)) {
+      return {
+        mode: 'execute',
+        family: 'gmail_read',
+        osIntent: {
+          ...osIntent,
+          kind: 'simple_action',
+          confidence: 0.95,
+          rationale: 'Gmail read/search question — execute searchEmails',
+          legacyIntent: 'action',
+        },
+        lockedTool: 'gmail',
+        lockedAction: 'searchEmails',
+        routeAction: 'search',
+        entities,
+        confidence: 0.95,
+        ambiguous: false,
+        allowWorkflow: false,
+        rationale: 'Locked gmail.searchEmails (question treated as read)',
+      };
+    }
     return {
       mode: mode === 'question' ? 'clarify' : mode,
       family: 'meta',
@@ -420,9 +445,15 @@ export function resolveAuthoritativeRoute(query: string): AuthoritativeRoute {
     };
   }
 
-  // Gmail — email read/search/send commands
+  // Gmail — email read/search/send commands (beats workspace_intelligence / Slack steal)
   if (dest.gmail) {
-    const isSend = /\b(send|email|draft|reply)\b/i.test(query) && /\b(to|reply)\b/i.test(query);
+    const isSend = isGmailSendQuery(query);
+    console.info('[route/gmail]', {
+      intent: isSend ? 'gmail_write' : 'gmail_read',
+      tool: 'gmail',
+      action: isSend ? 'sendEmail' : 'searchEmails',
+      queryPreview: query.slice(0, 120),
+    });
     return {
       mode: 'execute',
       family: isSend ? 'gmail_write' : 'gmail_read',
@@ -431,7 +462,7 @@ export function resolveAuthoritativeRoute(query: string): AuthoritativeRoute {
         kind: 'simple_action',
         confidence: 0.95,
         rationale: isSend ? 'Explicit Gmail send command' : 'Explicit Gmail read/search command',
-        legacyIntent: isSend ? 'action' : 'read',
+        legacyIntent: 'action',
       },
       lockedTool: 'gmail',
       lockedAction: isSend ? 'sendEmail' : 'searchEmails',
@@ -741,6 +772,43 @@ export function toolCallFromRoute(route: AuthoritativeRoute, query: string): Too
     };
   }
 
+  if (route.lockedTool === 'gmail' && route.lockedAction === 'searchEmails') {
+    const gmailQ = buildGmailSearchQuery(query);
+    console.info('[gmail] search_query', {
+      nlPreview: query.slice(0, 120),
+      gmailQuery: gmailQ,
+    });
+    return {
+      tool: 'gmail',
+      action: 'searchEmails',
+      input: {
+        query: gmailQ,
+        maxResults: /\b(priority|important|top)\b/i.test(query) ? 8 : 10,
+      },
+      riskLevel: 'low',
+      requiresApproval: false,
+    };
+  }
+
+  if (route.lockedTool === 'gmail' && route.lockedAction === 'sendEmail') {
+    const emailTo = query.match(/\bto\s+([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})\b/i)?.[1];
+    const subjectMatch =
+      query.match(/\babout\s+(.+?)(?:\.|$)/i)?.[1]?.trim() ||
+      query.match(/\bregarding\s+(.+?)(?:\.|$)/i)?.[1]?.trim() ||
+      query.match(/\bsubject\s+["']?([^"'\n]+)["']?/i)?.[1]?.trim();
+    return {
+      tool: 'gmail',
+      action: 'sendEmail',
+      input: {
+        ...(emailTo ? { to: emailTo } : {}),
+        ...(subjectMatch ? { subject: subjectMatch.slice(0, 120) } : {}),
+        body: `Hi,\n\n${query.trim()}\n\n— Drafted by Nexora (awaiting approval before send)`,
+      },
+      riskLevel: requiresApproval ? 'high' : 'low',
+      requiresApproval,
+    };
+  }
+
   return {
     tool: route.lockedTool,
     action: route.lockedAction,
@@ -774,6 +842,11 @@ export function buildDecisionRecord(args: {
   for (const c of args.selected) {
     if (c.tool === 'jira' && c.action === 'createIssue') {
       missingFields.push(...missingFieldsForJiraCreate(c.input));
+    }
+    if (c.tool === 'gmail' && c.action === 'sendEmail') {
+      if (!String(c.input.to ?? '').trim()) missingFields.push('to');
+      if (!String(c.input.subject ?? '').trim()) missingFields.push('subject');
+      if (!String(c.input.body ?? c.input.text ?? '').trim()) missingFields.push('body');
     }
   }
 

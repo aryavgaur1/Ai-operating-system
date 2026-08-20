@@ -4,7 +4,7 @@ import { FormEvent, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 
-const STEPS = ['Workspace', 'Profile', 'Notion', 'Slack', 'Jira', 'Finish'] as const;
+const STEPS = ['Workspace', 'Profile', 'Gmail', 'Notion', 'Slack', 'Jira', 'Finish'] as const;
 
 export default function OnboardingPage() {
   const router = useRouter();
@@ -15,9 +15,11 @@ export default function OnboardingPage() {
   const [slackUrl, setSlackUrl] = useState<string | null>(null);
   const [notionUrl, setNotionUrl] = useState<string | null>(null);
   const [jiraUrl, setJiraUrl] = useState<string | null>(null);
+  const [gmailUrl, setGmailUrl] = useState<string | null>(null);
   const [slackConnected, setSlackConnected] = useState(false);
   const [notionConnected, setNotionConnected] = useState(false);
   const [jiraConnected, setJiraConnected] = useState(false);
+  const [gmailConnected, setGmailConnected] = useState(false);
   const [notionToken, setNotionToken] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -41,12 +43,15 @@ export default function OnboardingPage() {
         const slack = res.tools.find((t) => t.tool === 'slack');
         const notion = res.tools.find((t) => t.tool === 'notion');
         const jira = res.tools.find((t) => t.tool === 'jira');
+        const gmail = res.tools.find((t) => t.tool === 'gmail');
         setSlackConnected(slack?.status === 'active');
         setNotionConnected(notion?.status === 'active');
         setJiraConnected(jira?.status === 'active');
+        setGmailConnected(gmail?.status === 'active');
         setSlackUrl(slack?.connectUrl || null);
         setNotionUrl(notion?.connectUrl || null);
         setJiraUrl(jira?.connectUrl || null);
+        setGmailUrl(gmail?.connectUrl || null);
       })
       .catch(() => undefined);
   }, [router]);
@@ -74,10 +79,14 @@ export default function OnboardingPage() {
     <div className="flex min-h-screen items-center justify-center px-4">
       <div className="glass w-full max-w-lg rounded-[28px] p-8">
         <div className="text-[11px] uppercase tracking-[0.2em] text-accent2">Setup</div>
-        <h1 className="font-display mt-3 text-3xl font-semibold text-white">Welcome to your workspace</h1>
+        <h1 className="font-display mt-3 text-2xl font-semibold text-white sm:text-3xl">
+          {displayName.trim()
+            ? `Hi ${displayName.trim().split(/\s+/)[0]}, I'm Nexora`
+            : "Hi, I'm Nexora"}
+        </h1>
         <p className="mt-2 text-sm text-neutral-400">
-          Every user gets a private workspace. Connect <em>your</em> Notion, Slack, and Jira — never shared with other
-          accounts.
+          How can I assist you? Connect Gmail, Slack, Notion, and Jira with your own accounts — never shared with other
+          workspaces.
         </p>
 
         <div className="mt-6 flex flex-wrap gap-2">
@@ -137,6 +146,30 @@ export default function OnboardingPage() {
 
           {step === 2 && (
             <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+              <div className="text-sm font-medium text-white">Connect Gmail</div>
+              <p className="mt-1 text-xs text-neutral-400">
+                Optional — grants Nexora permission to <strong className="text-neutral-300">read</strong> your mail and{' '}
+                <strong className="text-neutral-300">send</strong> when you approve. Tokens stay encrypted on the server.
+              </p>
+              {gmailConnected ? (
+                <div className="mt-3 text-sm text-emerald-300">Gmail connected</div>
+              ) : (
+                <button
+                  type="button"
+                  className="mt-4 rounded-full bg-accent/25 px-4 py-2 text-sm text-white"
+                  onClick={() => {
+                    if (gmailUrl) window.location.href = gmailUrl;
+                    else setError('Gmail OAuth is not configured on the server yet');
+                  }}
+                >
+                  Connect Gmail
+                </button>
+              )}
+            </div>
+          )}
+
+          {step === 3 && (
+            <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
               <div className="text-sm font-medium text-white">Connect Notion</div>
               <p className="mt-1 text-xs text-neutral-400">Optional — one-click OAuth into your Notion workspace only.</p>
               {notionConnected ? (
@@ -195,7 +228,7 @@ export default function OnboardingPage() {
             </div>
           )}
 
-          {step === 3 && (
+          {step === 4 && (
             <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
               <div className="text-sm font-medium text-white">Connect Slack</div>
               <p className="mt-1 text-xs text-neutral-400">Optional — installs into your Slack workspace only.</p>
@@ -216,7 +249,7 @@ export default function OnboardingPage() {
             </div>
           )}
 
-          {step === 4 && (
+          {step === 5 && (
             <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
               <div className="text-sm font-medium text-white">Connect Jira</div>
               <p className="mt-1 text-xs text-neutral-400">
@@ -239,11 +272,12 @@ export default function OnboardingPage() {
             </div>
           )}
 
-          {step === 5 && (
+          {step === 6 && (
             <div className="space-y-2 text-sm text-neutral-300">
               <p>You&apos;re ready. Your chats, approvals, and integrations stay private to this account.</p>
               <ul className="list-disc space-y-1 pl-5 text-neutral-400">
                 <li>Workspace: {workspaceName || 'Personal'}</li>
+                <li>Gmail: {gmailConnected ? 'Connected' : 'Skipped for now'}</li>
                 <li>Notion: {notionConnected ? 'Connected' : 'Skipped for now'}</li>
                 <li>Slack: {slackConnected ? 'Connected' : 'Skipped for now'}</li>
                 <li>Jira: {jiraConnected ? 'Connected' : 'Skipped for now'}</li>
@@ -251,22 +285,22 @@ export default function OnboardingPage() {
             </div>
           )}
 
-          <div className="flex gap-2 pt-2">
+          <div className="flex flex-wrap gap-2 pt-2">
             {step > 0 && (
               <button type="button" onClick={() => setStep((s) => s - 1)} className="rounded-full border border-white/10 px-4 py-2.5 text-sm text-neutral-300">
                 Back
               </button>
             )}
-            <button type="submit" disabled={loading} className="flex-1 rounded-full bg-accent px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60">
+            <button type="submit" disabled={loading} className="min-w-[7rem] flex-1 rounded-full bg-accent px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60">
               {loading
                 ? 'Saving…'
                 : step === STEPS.length - 1
                   ? 'Finish setup'
-                  : step === 2 || step === 3 || step === 4
+                  : step >= 2 && step <= 5
                     ? 'Continue'
                     : 'Next'}
             </button>
-            {(step === 2 || step === 3 || step === 4) && (
+            {step >= 2 && step <= 5 && (
               <button type="button" onClick={() => setStep((s) => s + 1)} className="rounded-full border border-white/10 px-4 py-2.5 text-sm text-neutral-400">
                 Skip
               </button>

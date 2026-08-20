@@ -55,12 +55,14 @@ const TOOL_RULES: ToolRule[] = [
       /\b(draft|compose|write|send)\b/i.test(query) && /\b(email|e-mail|mail|gmail)\b/i.test(query),
     buildInput: (query) => {
       const emailTo = query.match(/\bto\s+([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})\b/i)?.[1];
+      if (!emailTo) return { _skip: true };
       const subjectMatch =
         query.match(/\babout\s+(.+?)(?:\.|$)/i)?.[1]?.trim() ||
         query.match(/\bregarding\s+(.+?)(?:\.|$)/i)?.[1]?.trim() ||
-        'Update on your project';
+        query.match(/\bsubject\s+["']?([^"'\n]+)["']?/i)?.[1]?.trim() ||
+        'Message from Nexora';
       return {
-        to: emailTo || 'client@example.com',
+        to: emailTo,
         subject: subjectMatch.slice(0, 120),
         body: `Hi,\n\n${query.trim()}\n\n— Drafted by Nexora (awaiting approval before send)`,
       };

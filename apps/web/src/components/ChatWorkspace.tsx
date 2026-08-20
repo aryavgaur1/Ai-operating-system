@@ -16,6 +16,8 @@ import {
   Sparkles,
   Square,
   Terminal,
+  Volume2,
+  VolumeX,
   Wand2,
   X,
 } from 'lucide-react';
@@ -26,6 +28,13 @@ import { RiskRadial } from '@/components/charts';
 import { cn } from '@/lib/utils';
 import { APP_ROUTES, chatConversationPath } from '@/lib/routes';
 import { writeActiveConversationHint, resolveResumeConversationId } from '@/lib/activeConversation';
+import {
+  NexoraPresence,
+  type NexoraAgentState,
+  speakNexora,
+  stopNexoraSpeech,
+  canUseSpeechSynthesis,
+} from '@/components/NexoraPresence';
 
 const riskScore: Record<string, number> = { low: 24, medium: 58, high: 88 };
 const riskColor: Record<string, string> = { low: '#8be9d0', medium: '#f5b95d', high: '#fb7185' };
@@ -39,10 +48,10 @@ interface Turn {
 }
 
 const SUGGESTIONS = [
-  'Explain recursion with a short example',
-  'Write a React TypeScript button component',
+  'Find my top priority emails',
+  'Show my unread emails',
   'Create a launch war room for Project Atlas on slack',
-  'What is Nexora and how do Approvals work?',
+  'Create a Notion page named Investor Notes',
 ];
 
 const riskBadgeClasses: Record<string, string> = {
@@ -107,6 +116,11 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
   const [uploading, setUploading] = useState(false);
   const [micState, setMicState] = useState<MicState>('idle');
   const [micHint, setMicHint] = useState<string | null>(null);
+  const [userFirstName, setUserFirstName] = useState<string | null>(null);
+  const [voiceMuted, setVoiceMuted] = useState(false);
+  const [ttsSupported, setTtsSupported] = useState(false);
+  const [agentState, setAgentState] = useState<NexoraAgentState>('idle');
+  const voiceMutedRef = useRef(false);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -115,6 +129,24 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
   const loadedIdRef = useRef<string | undefined>(undefined);
   const turnsRef = useRef<Turn[]>([]);
   turnsRef.current = turns;
+  voiceMutedRef.current = voiceMuted;
+
+  useEffect(() => {
+    setTtsSupported(canUseSpeechSynthesis());
+    let cancelled = false;
+    api
+      .me()
+      .then((res) => {
+        if (cancelled) return;
+        const raw = (res.user.displayName || '').trim();
+        const first = raw.split(/\s+/)[0] || null;
+        setUserFirstName(first && first.length > 1 ? first : null);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   function setConversationId(id: string | undefined) {
     setConversationIdState(id);
@@ -351,6 +383,7 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
     setInput('');
     setError(null);
     setStatusLine('Understanding request…');
+    setAgentState('thinking');
     lastUserMessageRef.current = payload;
     if (!opts?.regenerate) {
       setTurns((t) => [...t, { role: 'user', content: payload, timestamp: now }]);
@@ -382,7 +415,10 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
         attachmentIds: attachmentIds.length ? attachmentIds : undefined,
         signal: controller.signal,
         onEvent: (event) => {
-          if (event.type === 'status') setStatusLine(event.message);
+          if (event.type === 'status') {
+            setStatusLine(event.message);
+            setAgentState('thinking');
+          }
           if (event.type === 'token') {
             setTurns((prev) => {
               const next = [...prev];
@@ -395,25 +431,31 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
           }
           if (event.type === 'tool_start') {
             setStatusLine(`Running ${event.tool}.${event.action}…`);
+            setAgentState('tool');
           }
           if (event.type === 'tool_result') {
             setStatusLine(
               event.ok ? `✓ ${event.tool}.${event.action}` : `✗ ${event.tool}.${event.action}: ${event.error || 'failed'}`
             );
+            setAgentState(event.ok ? 'success' : 'error');
           }
-          if (event.type === 'error') setError(event.message);
+          if (event.type === 'error') {
+            setError(event.message);
+            setAgentState('error');
+          }
           if (event.type === 'conversation') {
             loadedIdRef.current = event.conversationId;
             setConversationId(event.conversationId);
           }
           if (event.type === 'done') {
+            const reply = event.result.reply || '';
             setTurns((prev) => {
               const next = [...prev];
               const last = next[next.length - 1];
               if (last?.role === 'assistant') {
                 next[next.length - 1] = {
                   ...last,
-                  content: event.result.reply || last.content,
+                  content: reply || last.content,
                   detail: event.result,
                 };
               }
@@ -422,6 +464,16 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
             if (event.result.conversationId) {
               loadedIdRef.current = event.result.conversationId;
               setConversationId(event.result.conversationId);
+            }
+            if (reply) {
+              speakNexora(reply, {
+                muted: voiceMutedRef.current,
+                onStart: () => setAgentState('speaking'),
+                onEnd: () => setAgentState('idle'),
+                onError: () => setAgentState('idle'),
+              });
+            } else {
+              setAgentState('idle');
             }
           }
         },
@@ -447,6 +499,7 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
       setLoading(false);
       setStatusLine(null);
       abortRef.current = null;
+      setAgentState((s) => (s === 'speaking' ? s : 'idle'));
     }
   }
 
@@ -529,6 +582,7 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
     }
     recognitionRef.current = null;
     setMicState('idle');
+    setAgentState((s) => (s === 'listening' ? 'idle' : s));
   }
 
   function toggleMicrophone() {
@@ -550,7 +604,10 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
     recognition.interimResults = true;
     recognition.lang = typeof navigator !== 'undefined' ? navigator.language || 'en-US' : 'en-US';
 
-    recognition.onstart = () => setMicState('listening');
+    recognition.onstart = () => {
+      setMicState('listening');
+      setAgentState('listening');
+    };
     recognition.onerror = (event: any) => {
       const code = String(event?.error || '');
       if (code === 'not-allowed' || code === 'service-not-allowed') {
@@ -602,6 +659,7 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
       } catch {
         // ignore
       }
+      stopNexoraSpeech();
     };
   }, []);
 
@@ -642,24 +700,45 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
   }
 
   return (
-    <div className="space-y-6">
+    <div className="app-page space-y-4 sm:space-y-6">
       <Reveal>
-        <GlassCard variant="glow" className="p-7" hoverLift={false}>
-          <div className="flex flex-col gap-6 xl:flex-row xl:items-center xl:justify-between">
-            <div className="max-w-2xl">
-              <span className="badge border-white/10 bg-white/5 text-white">
-                <Sparkles size={12} className="text-accent2" /> Agent core
-              </span>
-              <h1 className="font-display mt-4 text-3xl font-semibold tracking-tight text-white sm:text-4xl">
-                Mission control for <span className="gradient-text">Nexora OS</span>
+        <GlassCard variant="glow" className="p-4 sm:p-7" hoverLift={false}>
+          <div className="flex flex-col gap-5 xl:flex-row xl:items-center xl:justify-between">
+            <div className="min-w-0 max-w-2xl">
+              <div className="flex flex-wrap items-center gap-3">
+                <NexoraPresence
+                  state={
+                    micState === 'listening'
+                      ? 'listening'
+                      : loading
+                        ? agentState === 'idle'
+                          ? 'thinking'
+                          : agentState
+                        : agentState
+                  }
+                />
+                <span className="badge border-white/10 bg-white/5 text-white">
+                  <Sparkles size={12} className="text-accent2" /> Agent core
+                </span>
+              </div>
+              <h1 className="font-display mt-4 text-2xl font-semibold tracking-tight text-white sm:text-3xl lg:text-4xl">
+                {userFirstName ? (
+                  <>
+                    Hi {userFirstName}, I&apos;m <span className="gradient-text">Nexora</span>
+                  </>
+                ) : (
+                  <>
+                    Hi, I&apos;m <span className="gradient-text">Nexora</span>
+                  </>
+                )}
               </h1>
-              <p className="mt-3 text-sm leading-7 text-neutral-400">
-                Ask the agent anything across your connected tools. Nexora combines hybrid retrieval, intent
-                planning, and safe tool execution to deliver fast, contextual answers and trusted action proposals.
+              <p className="mt-2 text-sm leading-6 text-neutral-400 sm:leading-7">
+                How can I assist you today? I use your connected Gmail, Slack, Notion, and Jira — with approvals for
+                consequential actions.
               </p>
             </div>
 
-            <div className="w-full max-w-sm rounded-[24px] border border-white/10 bg-black/25 p-5">
+            <div className="hidden w-full max-w-sm rounded-[24px] border border-white/10 bg-black/25 p-5 sm:block">
               <div className="text-xs uppercase tracking-[0.24em] text-neutral-500">Live system state</div>
               <div className="mt-2 text-sm text-neutral-400">Secure reasoning · tool orchestration · human approval</div>
               <div className="mt-4 grid gap-2 text-sm text-neutral-300">
@@ -675,16 +754,56 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
         </GlassCard>
       </Reveal>
 
-      <div className="grid gap-6 xl:grid-cols-[1.6fr_0.9fr]">
-        <GlassCard className="flex min-h-[560px] flex-col p-6" hoverLift={false}>
-          <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+      <div className="grid gap-4 sm:gap-6 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,0.9fr)]">
+        <GlassCard
+          className="flex min-h-[min(70vh,640px)] flex-col p-3 sm:min-h-[560px] sm:p-6"
+          hoverLift={false}
+        >
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 sm:mb-5">
             <div>
               <div className="text-xs uppercase tracking-[0.24em] text-neutral-500">Agent session</div>
-              <h2 className="font-display text-xl font-semibold text-white">Conversation</h2>
+              <h2 className="font-display text-lg font-semibold text-white sm:text-xl">Conversation</h2>
             </div>
-            <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] uppercase tracking-[0.24em] text-accent">
-              Realtime
-            </span>
+            <div className="flex items-center gap-2">
+              {ttsSupported && (
+                <>
+                  <button
+                    type="button"
+                    title={voiceMuted ? 'Unmute voice replies' : 'Mute voice replies'}
+                    onClick={() => {
+                      const next = !voiceMuted;
+                      setVoiceMuted(next);
+                      if (next) {
+                        stopNexoraSpeech();
+                        setAgentState('idle');
+                      }
+                    }}
+                    className={cn(
+                      'flex h-9 w-9 items-center justify-center rounded-full border border-white/10 transition',
+                      voiceMuted ? 'bg-white/5 text-neutral-500' : 'bg-accent/10 text-accent'
+                    )}
+                  >
+                    {voiceMuted ? <VolumeX size={15} /> : <Volume2 size={15} />}
+                  </button>
+                  {agentState === 'speaking' && (
+                    <button
+                      type="button"
+                      title="Stop speaking"
+                      onClick={() => {
+                        stopNexoraSpeech();
+                        setAgentState('idle');
+                      }}
+                      className="rounded-full border border-white/10 px-3 py-1.5 text-[11px] uppercase tracking-wide text-neutral-300 hover:text-white"
+                    >
+                      Stop
+                    </button>
+                  )}
+                </>
+              )}
+              <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] uppercase tracking-[0.24em] text-accent">
+                Realtime
+              </span>
+            </div>
           </div>
 
           <div className="thin-scroll flex-1 space-y-4 overflow-y-auto pr-1">
@@ -846,14 +965,18 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
             </AnimatePresence>
 
             {turns.length === 0 && (
-              <div className="mx-auto max-w-lg rounded-[28px] border border-white/10 bg-black/20 px-8 py-14 text-center">
+              <div className="mx-auto w-full max-w-lg rounded-[28px] border border-white/10 bg-black/20 px-5 py-10 text-center sm:px-8 sm:py-14">
                 <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-3xl bg-white/5 text-accent2">
                   <Wand2 size={26} />
                 </div>
-                <h3 className="mb-2 text-xl font-semibold text-white">Your Nexora session is ready.</h3>
+                <h3 className="mb-2 text-lg font-semibold text-white sm:text-xl">
+                  {userFirstName
+                    ? `Hi ${userFirstName}, I'm Nexora.`
+                    : "Hi, I'm Nexora."}
+                </h3>
                 <p className="text-sm leading-6 text-neutral-400">
-                  Start with a question about your project, tools, or team and watch Nexora turn it into a safe
-                  action plan.
+                  How can I assist you today? Ask about your inbox, Slack, Notion, or Jira — I run real tools, never
+                  demo data.
                 </p>
               </div>
             )}
@@ -920,7 +1043,7 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
               }
               send(input);
             }}
-            className="mt-5 flex items-center gap-2 rounded-[26px] border border-white/10 bg-black/25 p-2 pl-4 transition focus-within:border-accent/50 focus-within:ring-2 focus-within:ring-accent/15"
+            className="mt-4 flex flex-wrap items-center gap-2 rounded-[22px] border border-white/10 bg-black/25 p-2 pl-3 transition focus-within:border-accent/50 focus-within:ring-2 focus-within:ring-accent/15 sm:mt-5 sm:flex-nowrap sm:rounded-[26px] sm:pl-4"
           >
             <input
               ref={fileRef}
@@ -934,7 +1057,7 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
               title="Attach a file"
               disabled={uploading || loading}
               onClick={() => fileRef.current?.click()}
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-neutral-500 transition hover:bg-white/5 hover:text-white disabled:opacity-40"
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-neutral-500 transition hover:bg-white/5 hover:text-white disabled:opacity-40"
             >
               <FileUp size={16} />
             </button>
@@ -944,7 +1067,7 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
               disabled={loading}
               onClick={toggleMicrophone}
               className={cn(
-                'flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition hover:bg-white/5 disabled:opacity-40',
+                'flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition hover:bg-white/5 disabled:opacity-40',
                 micState === 'listening' ? 'bg-rose-500/20 text-rose-300' : 'text-neutral-500 hover:text-white',
                 (micState === 'denied' || micState === 'unsupported' || micState === 'error') && 'text-amber-300'
               )}
@@ -954,8 +1077,8 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
             <input
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="Ask anything — coding, planning, Slack, Notion…"
-              className="min-h-[44px] flex-1 bg-transparent text-sm text-white outline-none placeholder:text-neutral-500"
+              placeholder="Ask Nexora — emails, Slack, Notion, Jira…"
+              className="min-h-[44px] min-w-0 flex-1 bg-transparent text-sm text-white outline-none placeholder:text-neutral-500"
             />
             {loading ? (
               <button

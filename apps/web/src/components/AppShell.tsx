@@ -40,7 +40,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <>
       {app && <Nav />}
       {app && <WorkspaceRail />}
-      <main className={auth || !app ? 'min-h-screen' : 'mx-auto max-w-7xl px-4 pb-16 pt-8 sm:px-6 xl:pl-28'}>
+      <main
+        className={
+          auth || !app
+            ? 'min-h-screen'
+            : 'app-main mx-auto max-w-7xl px-3 pb-24 pt-4 sm:px-6 sm:pb-16 sm:pt-8 xl:pl-28'
+        }
+      >
         {children}
       </main>
     </>

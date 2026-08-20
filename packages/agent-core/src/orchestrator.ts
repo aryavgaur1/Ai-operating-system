@@ -18,6 +18,7 @@ import {
   dryRunReplyForPlan,
   stampCapabilityContext,
 } from './os';
+import { formatGmailSearchReply } from './os/gmailQuery';
 
 // ============================================================
 // Agent Orchestrator — Enterprise AI OS execution loop
@@ -150,10 +151,7 @@ function formatReply(executedCalls: AgentTurnResult['executedCalls'], plan: Agen
     }
     if (call.tool === 'gmail') {
       if (call.action === 'searchEmails') {
-        const emails = (output?.emails as unknown[]) ?? [];
-        const query = output?.query ? ` for "${output.query}"` : '';
-        const account = output?.account ? ` (${output.account})` : '';
-        return `Found ${emails.length} email(s)${query}${account}.`;
+        return formatGmailSearchReply(output as Record<string, unknown> | undefined);
       }
       if (call.action === 'getThread') {
         const count = Number(output?.messageCount ?? 0);
@@ -166,7 +164,10 @@ function formatReply(executedCalls: AgentTurnResult['executedCalls'], plan: Agen
         return `✅ Email sent${to}${subject}.${url}`;
       }
       if (call.action === 'getEmail') {
-        return `Retrieved email.`;
+        const email = output?.email as { metadata?: { subject?: string; from?: string }; title?: string } | undefined;
+        const subject = email?.metadata?.subject || email?.title || 'email';
+        const from = email?.metadata?.from ? ` from ${email.metadata.from}` : '';
+        return `Retrieved **${subject}**${from}.`;
       }
       return `✅ gmail.${call.action} completed.`;
     }
@@ -339,6 +340,31 @@ export async function runAgentTurn(
   plan.toolCalls = plan.toolCalls.map((c) => stampCapabilityContext(c, route));
 
   planSteps.push(...plan.toolCalls.map((c) => `${c.tool}.${c.action}`));
+
+  // Gmail send without a real recipient — never invent one; ask first.
+  const gmailSend = plan.toolCalls.find((c) => c.tool === 'gmail' && c.action === 'sendEmail');
+  if (gmailSend && !String(gmailSend.input.to ?? '').trim()) {
+    const reply =
+      `I can send email via your connected Gmail, but I need a real recipient.\n\n` +
+      `Reply like: **Send an email to name@company.com about &lt;subject&gt;**`;
+    return {
+      reply,
+      plan: { ...plan, toolCalls: [], responseDraft: reply, reasoning: 'gmail.sendEmail missing to' },
+      executedCalls: [],
+      pendingApprovalIds: [],
+      workflow: {
+        intent: osIntent,
+        reasoning: [...reasoning, 'Blocked gmail.sendEmail — missing recipient'],
+        planSteps: [],
+        steps: [],
+        retries: 0,
+        durationMs: Date.now() - started,
+        decision: emptyDecision([], [
+          { tool: 'gmail', action: 'sendEmail', reason: 'missing_field:to' },
+        ]),
+      },
+    };
+  }
 
   if (requestMode === 'dry_run') {
     let previewCalls = plan.toolCalls;

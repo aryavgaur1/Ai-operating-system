@@ -133,7 +133,7 @@ export function WorkspaceSwitcher({
           animate={{ opacity: 1, y: 0, scale: 1 }}
           transition={{ duration: 0.16 }}
           style={{ top: coords.top, left: coords.left }}
-          className="menu-panel fixed z-[300] w-[320px] max-h-[min(70vh,520px)] overflow-y-auto rounded-[22px] border border-accent/30 p-2"
+          className="menu-panel fixed z-[300] w-[min(320px,calc(100vw-16px))] max-h-[min(70vh,520px)] overflow-y-auto rounded-[22px] border border-accent/30 p-2"
           role="listbox"
         >
           {(error || actionError) && (

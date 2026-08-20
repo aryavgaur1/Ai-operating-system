@@ -30,12 +30,13 @@ Do **not** commit `.env`.
 | `NODE_ENV` | `production` |
 | `JWT_SECRET` | long random string |
 | `TOKEN_ENCRYPTION_KEY` | 64 hex chars (32 bytes) |
-| `WEB_APP_URL` | `https://YOUR-APP.vercel.app` (set after Vercel) |
-| `CORS_ORIGINS` | same as WEB_APP_URL (comma-separated if multiple) |
+| `WEB_APP_URL` | `https://nexoraos.co.in` |
+| `CORS_ORIGINS` | `https://nexoraos.co.in,https://www.nexoraos.co.in` |
 | `LLM_PROVIDER` | `anthropic` or `openai` or `mock` |
 | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | your key |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | from Google Cloud |
 | `GOOGLE_OAUTH_REDIRECT_URI` | `https://YOUR-RAILWAY-API.up.railway.app/auth/google/callback` |
+| `GOOGLE_GMAIL_REDIRECT_URI` | `https://YOUR-RAILWAY-API.up.railway.app/oauth/gmail/callback` |
 | `NOTION_OAUTH_CLIENT_ID` / `NOTION_OAUTH_CLIENT_SECRET` | optional |
 | `NOTION_OAUTH_REDIRECT_URI` | `https://YOUR-RAILWAY-API.up.railway.app/oauth/notion/callback` |
 | `ALLOW_NOTION_TOKEN_PASTE` | `true` for early testing |

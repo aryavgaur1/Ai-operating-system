@@ -47,6 +47,12 @@ export {
 } from './capabilityRegistry';
 export type { Capability, CapabilityScope, CapabilityGateResult } from './capabilityRegistry';
 export {
+  buildGmailSearchQuery,
+  formatGmailSearchReply,
+  isGmailDestinationQuery,
+  isGmailSendQuery,
+} from './gmailQuery';
+export {
   ApprovalIntegrityError,
   assertApprovalAuthorized,
   assertApprovalExecutable,

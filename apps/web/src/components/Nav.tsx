@@ -484,7 +484,7 @@ export function Nav() {
       {notifMenu}
       {profileMenu}
 
-      <nav className="glass mx-auto mt-3 flex max-w-7xl items-center gap-1 overflow-x-auto rounded-2xl p-1.5 md:hidden">
+      <nav className="glass fixed bottom-3 left-3 right-3 z-[190] flex items-center gap-1 overflow-x-auto rounded-2xl p-1.5 md:hidden">
         {LINKS.map((link) => {
           const matchPrefix = 'matchPrefix' in link && link.matchPrefix ? link.matchPrefix : link.href;
           const active = pathname?.startsWith(matchPrefix);
@@ -495,12 +495,12 @@ export function Nav() {
               key={link.label}
               href={link.href}
               className={cn(
-                'flex shrink-0 items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs transition-colors',
+                'flex min-w-0 flex-1 flex-col items-center gap-0.5 rounded-xl px-2 py-2 text-[10px] transition-colors sm:flex-row sm:gap-1.5 sm:px-3.5 sm:text-xs',
                 active ? 'bg-white/10 text-white' : 'text-neutral-400'
               )}
             >
-              <Icon size={13} />
-              {link.label}
+              <Icon size={14} className="shrink-0" />
+              <span className="truncate">{link.label}</span>
               {showApprovalBadge ? (
                 <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-400 px-1 text-[9px] font-bold text-black">
                   {pendingApprovals > 9 ? '9+' : pendingApprovals}

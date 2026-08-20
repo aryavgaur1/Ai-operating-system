@@ -123,6 +123,7 @@ interface GmailMessage {
   id: string;
   threadId?: string;
   snippet?: string;
+  labelIds?: string[];
   internalDate?: string;
   payload?: {
     headers?: Array<{ name: string; value: string }>;
@@ -141,13 +142,14 @@ function normalizeMessage(msg: GmailMessage, userEmail: string | null): Normaliz
     ? new Date(parseInt(msg.internalDate)).toISOString()
     : '';
   const body = msg.payload ? extractBody(msg.payload) : (msg.snippet ?? '');
+  const labels = Array.isArray(msg.labelIds) ? msg.labelIds : [];
 
   return {
     externalId: msg.id,
     resourceType: 'email',
     title: `${subject} — from ${from}`,
     url: `https://mail.google.com/mail/u/0/#inbox/${msg.id}`,
-    text: `From: ${from}\nTo: ${to}\nDate: ${date}\nSubject: ${subject}\n\n${body}`,
+    text: `From: ${from}\nTo: ${to}\nDate: ${date}\nSubject: ${subject}\nLabels: ${labels.join(', ')}\n\n${body}`,
     metadata: {
       threadId: msg.threadId,
       subject,
@@ -155,6 +157,7 @@ function normalizeMessage(msg: GmailMessage, userEmail: string | null): Normaliz
       to,
       date,
       snippet: msg.snippet ?? '',
+      labels,
       gmailAccount: userEmail,
     },
   };
@@ -282,6 +285,10 @@ class GmailConnector implements ToolConnector {
     const listRes = await gmailFetch(`/users/me/messages?${params.toString()}`, token);
     if (!listRes.ok) {
       const body = await listRes.text();
+      console.warn('[gmail] searchEmails_fail', {
+        status: listRes.status,
+        query: q.slice(0, 120),
+      });
       return {
         tool: 'gmail',
         action: 'searchEmails',
@@ -297,6 +304,13 @@ class GmailConnector implements ToolConnector {
     };
 
     const messageIds = (listData.messages ?? []).map((m) => m.id);
+    console.info('[gmail] searchEmails', {
+      query: q.slice(0, 160),
+      resultCount: messageIds.length,
+      estimate: listData.resultSizeEstimate ?? null,
+      account: userEmail,
+      status: 'ok',
+    });
     if (!messageIds.length) {
       return {
         tool: 'gmail',
