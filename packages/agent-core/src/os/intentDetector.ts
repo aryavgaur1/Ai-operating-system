@@ -107,14 +107,14 @@ export function isExplicitNotionCommand(q: string): boolean {
   // Require Notion + document artifact / CRUD — not just the word "Notion" or "update"
   if (
     /\bnotion\b/.test(text) &&
-    /\b(page|doc|document|prd|wiki|database|meeting\s+notes|roadmap)\b/.test(text)
+    /\b(pages?|docs?|documents?|prd|wiki|databases?|meeting\s+notes|roadmap)\b/.test(text)
   ) {
     return true;
   }
   if (
     /\bnotion\b/.test(text) &&
     /\b(create|search|archive|publish|update|edit|make|new)\b/.test(text) &&
-    /\b(page|doc|document|prd|wiki|database|project|meeting|roadmap)\b/.test(text)
+    /\b(pages?|docs?|documents?|prd|wiki|databases?|project|meeting|roadmap)\b/.test(text)
   ) {
     return true;
   }

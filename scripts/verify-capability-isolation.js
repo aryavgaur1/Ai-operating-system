@@ -133,13 +133,14 @@ async function main() {
     console.log('PASS TEST5 stale cross-conversation capability REJECTED');
   }
 
-  // TEST 6 — Malformed / unknown capability
+  // TEST 6 — Malformed / unknown capability (registered tools still reject unknown actions)
   {
     const gate = validateCapabilityExecution(inject('jira', 'totallyFakeAction'));
     assert.strictEqual(gate.ok, false);
     assert.strictEqual(gate.code, 'CAPABILITY_UNKNOWN');
-    const gmail = validateCapabilityExecution(inject('gmail', 'sendEmail'));
-    assert.strictEqual(gmail.ok, false);
+    const gmailFake = validateCapabilityExecution(inject('gmail', 'totallyFakeAction'));
+    assert.strictEqual(gmailFake.ok, false);
+    assert.strictEqual(gmailFake.code, 'CAPABILITY_UNKNOWN');
     console.log('PASS TEST6 malformed/unknown capability REJECTED');
   }
 
