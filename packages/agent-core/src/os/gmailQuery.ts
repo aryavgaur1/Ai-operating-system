@@ -9,13 +9,21 @@ export function isGmailDestinationQuery(query: string): boolean {
   if (/\bmy\s+(e-?mails?|mail)\b/.test(t)) return true;
   if (
     /\b(e-?mails?|mail)\b/.test(t) &&
-    /\b(search|find|show|read|get|list|check|look|open|fetch|latest|recent|unread|priority|important|starred|attachment|from|about|regarding)\b/.test(
+    /\b(search|find|show|read|get|list|check|look|open|fetch|latest|recent|unread|priority|important|starred|attachment|from|about|regarding|urgent|manager|boss)\b/.test(
       t
     )
   ) {
     return true;
   }
   if (/\b(top\s+priority|most\s+important)\b/.test(t) && /\b(e-?mails?|mail|inbox)\b/.test(t)) {
+    return true;
+  }
+  // Soft NL: urgency / manager without repeating "email"
+  if (
+    /\b(manager|boss|lead|director)\b/.test(t) &&
+    /\b(urgent|important|priority|anything|from|message)\b/.test(t) &&
+    !/\b(jira|slack|notion|ticket|issue)\b/.test(t)
+  ) {
     return true;
   }
   return false;
@@ -66,6 +74,15 @@ export function buildGmailSearchQuery(raw: string): string {
   if (/\b(starred|star)\b/.test(lower)) parts.push('is:starred');
   if (/\b(important|priority|urgent|top\s+priority|most\s+important)\b/.test(lower)) {
     parts.push('is:important');
+  }
+  if (
+    /\bfrom\s+(?:my\s+)?(manager|boss|lead|director)\b/.test(lower) ||
+    (/\b(manager|boss|lead|director)\b/.test(lower) && /\b(urgent|important|from|mail|message)\b/.test(lower))
+  ) {
+    const role = lower.match(/\b(manager|boss|lead|director)\b/)?.[1];
+    if (role && !parts.some((p) => p.startsWith('from:'))) {
+      parts.push(role);
+    }
   }
   if (/\b(attachment|attachments|attached|with\s+files?)\b/.test(lower)) {
     parts.push('has:attachment');
@@ -152,20 +169,26 @@ export function buildGmailSearchQuery(raw: string): string {
 }
 
 export function formatGmailSearchReply(output: Record<string, unknown> | undefined): string {
-  if (!output) return 'Gmail search returned no data.';
+  if (!output) return 'I could not read Gmail right now.';
   const emails = Array.isArray(output.emails) ? output.emails : [];
   const account = typeof output.account === 'string' ? output.account : null;
   const query = typeof output.query === 'string' ? output.query : null;
+  const urgentish = query && /\bis:important\b/.test(query);
   const header =
-    `Found **${emails.length}** email${emails.length === 1 ? '' : 's'}` +
-    (query ? ` matching \`${query}\`` : '') +
-    (account ? ` in **${account}**` : '') +
-    '.';
+    emails.length === 0
+      ? 'I did not find matching emails' + (account ? ` in **${account}**` : '') + '.'
+      : urgentish
+        ? `I found **${emails.length}** important email${emails.length === 1 ? '' : 's'}` +
+          (account ? ` in **${account}**` : '') +
+          '.'
+        : `I found **${emails.length}** email${emails.length === 1 ? '' : 's'}` +
+          (account ? ` in **${account}**` : '') +
+          '.';
 
   if (emails.length === 0) {
     return (
       header +
-      '\n\nNo messages matched. Try a narrower query (sender, subject keywords, or `is:unread`).'
+      '\n\nTry a narrower ask — for example a sender name, “unread”, or “this week”.'
     );
   }
 

@@ -19,6 +19,8 @@ import {
   stampCapabilityContext,
 } from './os';
 import { formatGmailSearchReply } from './os/gmailQuery';
+import { expandGmailFollowUp, type GmailSearchMemory } from './os/workAssistantIntent';
+import { recall } from './os/threadMemory';
 
 // ============================================================
 // Agent Orchestrator — Enterprise AI OS execution loop
@@ -32,11 +34,33 @@ function formatReply(executedCalls: AgentTurnResult['executedCalls'], plan: Agen
     if (approvalNote) {
       const pending = plan.toolCalls.filter((c) => c.requiresApproval);
       if (pending.length > 0) {
-        const lines = pending.map(
-          (c) => `• **${c.tool}.${c.action}** (${c.riskLevel} risk) — queued for human approval`
-        );
+        const lines = pending.map((c) => {
+          const product =
+            c.tool === 'slack'
+              ? 'Slack'
+              : c.tool === 'gmail'
+                ? 'Gmail'
+                : c.tool === 'jira'
+                  ? 'Jira'
+                  : c.tool === 'notion'
+                    ? 'Notion'
+                    : c.tool;
+          if (c.tool === 'slack' && (c.action === 'postMessage' || c.action === 'postMessageExternalChannel')) {
+            const ch = String(c.input?.channel ?? 'channel').replace(/^#/, '');
+            return `• Prepared a Slack message for **#${ch}** — waiting for your approval before send`;
+          }
+          if (c.tool === 'gmail' && c.action === 'sendEmail') {
+            const to = c.input?.to ? ` to ${c.input.to}` : '';
+            return `• Prepared a Gmail draft${to} — waiting for your approval before send`;
+          }
+          if (c.tool === 'jira' && c.action === 'createIssue') {
+            const summary = String(c.input?.summary ?? 'new issue');
+            return `• Prepared a Jira ticket “${summary.slice(0, 80)}” — waiting for your approval`;
+          }
+          return `• Prepared a ${product} action — waiting for your approval`;
+        });
         return (
-          `I prepared ${pending.length} high-impact action(s) and paused them for your review:\n\n` +
+          `I've prepared ${pending.length} action${pending.length === 1 ? '' : 's'} and paused for your review:\n\n` +
           lines.join('\n') +
           `\n\nOpen **Approvals** → **Approve & run** to execute (or reject).` +
           approvalNote
@@ -48,14 +72,19 @@ function formatReply(executedCalls: AgentTurnResult['executedCalls'], plan: Agen
 
   const lines = executedCalls.map((call, idx) => {
     if (call.mocked) {
-      return `Not connected / not live: ${call.tool}.${call.action}. ${call.error ?? 'Connect a live integration under Integrations, then ask again.'}`;
+      const product = call.tool === 'gmail' ? 'Gmail' : call.tool === 'slack' ? 'Slack' : call.tool === 'jira' ? 'Jira' : call.tool === 'notion' ? 'Notion' : call.tool;
+      return `${product} isn't connected for live actions yet. Connect it under Integrations, then ask again.`;
     }
     if (!call.ok) {
       const err = call.error ?? 'still blocked';
       if (/^Not (connected|implemented)/i.test(err)) {
         return err;
       }
-      return `I tried ${call.tool}.${call.action} and self-healed where possible — ${err}.`;
+      if (/isn't connected|not connected|Integrations/i.test(err)) {
+        return err;
+      }
+      const product = call.tool === 'gmail' ? 'Gmail' : call.tool === 'slack' ? 'Slack' : call.tool === 'jira' ? 'Jira' : call.tool === 'notion' ? 'Notion' : 'that tool';
+      return `I couldn't complete that because ${product} didn't respond. ${err}`;
     }
 
     const output = call.output as Record<string, unknown> | undefined;
@@ -65,14 +94,13 @@ function formatReply(executedCalls: AgentTurnResult['executedCalls'], plan: Agen
       const name = String(output?.name ?? planned?.input?.name ?? 'channel');
       const id = output?.id ? ` (id: ${output.id})` : '';
       const url = output?.url ? `\nOpen: ${output.url}` : '';
-      if (output?.reused) return `✅ Slack channel #${name} already existed — reused it${id}.${url}`;
-      return `✅ Slack channel #${name} created successfully${id}.${url}`;
+      if (output?.reused) return `Slack channel #${name} already existed — reused it${id}.${url}`;
+      return `Created Slack channel #${name}${id}.${url}`;
     }
     if (call.tool === 'slack' && (call.action === 'postMessage' || call.action === 'postMessageExternalChannel')) {
       const channelName = String(output?.channelName ?? planned?.input?.channel ?? output?.channel ?? 'channel');
       const display = channelName.startsWith('@') ? channelName : `#${channelName.replace(/^#/, '')}`;
-      const ts = output?.ts ? ` (ts: ${output.ts})` : '';
-      return `✅ Posted to ${display}${ts}.`;
+      return `Done. Posted to ${display}.`;
     }
     if (call.tool === 'slack' && call.action === 'listChannels') {
       const channels = (output?.channels as Array<{ name?: string }>) ?? [];
@@ -80,7 +108,7 @@ function formatReply(executedCalls: AgentTurnResult['executedCalls'], plan: Agen
         .slice(0, 15)
         .map((c) => `#${c.name ?? '?'}`)
         .join(', ');
-      return `Found ${channels.length} Slack channel(s): ${names}${channels.length > 15 ? '…' : ''}`;
+      return `I found ${channels.length} Slack channel${channels.length === 1 ? '' : 's'}: ${names}${channels.length > 15 ? '…' : ''}`;
     }
     if (call.tool === 'slack' && call.action === 'listUsers') {
       const users = (output?.users as Array<{ name?: string; real_name?: string; display_name?: string }>) ?? [];
@@ -88,34 +116,35 @@ function formatReply(executedCalls: AgentTurnResult['executedCalls'], plan: Agen
         .slice(0, 15)
         .map((u) => u.real_name || u.display_name || u.name || '?')
         .join(', ');
-      return `Found ${users.length} Slack user(s): ${names}${users.length > 15 ? '…' : ''}`;
+      return `I found ${users.length} Slack user${users.length === 1 ? '' : 's'}: ${names}${users.length > 15 ? '…' : ''}`;
     }
     if (call.tool === 'slack' && call.action === 'inviteUsers') {
       const invited = (output?.invited as string[]) ?? (output?.users as string[]) ?? [];
       const channelName = String(output?.channelName ?? planned?.input?.channel ?? 'channel').replace(/^#/, '');
-      return `✅ Invited ${invited.length || 'member(s)'} to #${channelName}.`;
+      return `Invited ${invited.length || 'member(s)'} to #${channelName}.`;
     }
     if (call.tool === 'slack' && call.action === 'getChannelHistory') {
       const messages = (output?.messages as unknown[]) ?? [];
       const channelName = String(output?.channelName ?? planned?.input?.channel ?? 'channel').replace(/^#/, '');
-      return `Fetched ${messages.length} message(s) from #${channelName}.`;
+      return `I pulled ${messages.length} recent message${messages.length === 1 ? '' : 's'} from #${channelName}.`;
     }
     if (call.tool === 'slack' && call.action === 'searchHistory') {
       const matches = (output?.matches as unknown[]) ?? (output?.messages as unknown[]) ?? [];
-      return `Found ${matches.length} Slack search match(es) for “${String(planned?.input?.query ?? '')}”.`;
+      const q = String(planned?.input?.query ?? '');
+      return `I found ${matches.length} recent Slack discussion${matches.length === 1 ? '' : 's'}${q ? ` about “${q}”` : ''}.`;
     }
     if (call.tool === 'slack' && call.action === 'setChannelTopic') {
       const channelName = String(output?.channelName ?? planned?.input?.channel ?? 'channel').replace(/^#/, '');
-      return `✅ Set topic on #${channelName} to “${String(planned?.input?.topic ?? output?.topic ?? '')}”.`;
+      return `Updated the topic on #${channelName}.`;
     }
     if (call.tool === 'slack' && call.action === 'createBookmark') {
       const channelName = String(output?.channelName ?? planned?.input?.channel ?? 'channel').replace(/^#/, '');
-      return `✅ Bookmarked ${String(planned?.input?.url ?? output?.url ?? 'link')} in #${channelName}.`;
+      return `Bookmarked a link in #${channelName}.`;
     }
     if (call.tool === 'slack' && call.action === 'createCanvas') {
       const title = String(output?.title ?? planned?.input?.title ?? 'Canvas');
       const channelName = String(output?.channelName ?? planned?.input?.channel ?? 'channel').replace(/^#/, '');
-      return `✅ Created canvas “${title}” in #${channelName}.`;
+      return `Created canvas “${title}” in #${channelName}.`;
     }
     if (
       call.tool === 'slack' &&
@@ -136,18 +165,25 @@ function formatReply(executedCalls: AgentTurnResult['executedCalls'], plan: Agen
         'summarizeThread',
         'summarizeChannel',
         'generateMeetingNotes',
+        'searchMessages',
       ].includes(call.action)
     ) {
-      return String(output?.summary ?? `✅ slack.${call.action} completed.`);
+      return String(output?.summary ?? `Finished checking Slack.`);
     }
     if (call.tool === 'notion') {
       const url = output?.url ? ` ${output.url}` : '';
-      const id = output?.id ? ` (id: ${output.id})` : '';
       if (call.action === 'searchPages') {
         const results = (output?.results as unknown[]) ?? [];
-        return `Found ${results.length} Notion page(s).`;
+        return `I found ${results.length} Notion page${results.length === 1 ? '' : 's'}.`;
       }
-      return `✅ Notion ${call.action} completed${id}.${url}`;
+      if (call.action === 'createPage') {
+        const title = String(output?.title ?? planned?.input?.title ?? 'page');
+        return `Created Notion page “${title}”.${url}`;
+      }
+      if (call.action === 'updatePage') {
+        return `Updated the Notion page.${url}`;
+      }
+      return `Finished in Notion.${url}`;
     }
     if (call.tool === 'gmail') {
       if (call.action === 'searchEmails') {
@@ -155,24 +191,62 @@ function formatReply(executedCalls: AgentTurnResult['executedCalls'], plan: Agen
       }
       if (call.action === 'getThread') {
         const count = Number(output?.messageCount ?? 0);
-        return `Retrieved Gmail thread with ${count} message(s).`;
+        return `I opened that Gmail thread (${count} message${count === 1 ? '' : 's'}).`;
       }
       if (call.action === 'sendEmail') {
         const to = output?.to ? ` to ${output.to}` : '';
         const subject = output?.subject ? ` — "${output.subject}"` : '';
         const url = output?.url ? ` ${output.url}` : '';
-        return `✅ Email sent${to}${subject}.${url}`;
+        return `Email sent${to}${subject}.${url}`;
       }
       if (call.action === 'getEmail') {
-        const email = output?.email as { metadata?: { subject?: string; from?: string }; title?: string } | undefined;
+        const email = output?.email as
+          | { metadata?: { subject?: string; from?: string; snippet?: string }; title?: string; text?: string }
+          | undefined;
         const subject = email?.metadata?.subject || email?.title || 'email';
         const from = email?.metadata?.from ? ` from ${email.metadata.from}` : '';
-        return `Retrieved **${subject}**${from}.`;
+        const body = (email?.text || email?.metadata?.snippet || '').replace(/\s+/g, ' ').trim().slice(0, 500);
+        return (
+          `Here's **${subject}**${from}.` +
+          (body ? `\n\n${body}${body.length >= 500 ? '…' : ''}` : '')
+        );
       }
-      return `✅ gmail.${call.action} completed.`;
+      return `Finished with Gmail.`;
+    }
+    if (call.tool === 'jira') {
+      if (call.action === 'searchIssues') {
+        const results = (output?.results as Array<{
+          key?: string;
+          summary?: string;
+          status?: string;
+          priority?: string;
+          dueDate?: string;
+          url?: string;
+        }>) ?? [];
+        const overdue = Number(output?.overdueCount ?? 0);
+        if (results.length === 0) {
+          return 'I did not find matching Jira tasks.';
+        }
+        const head =
+          overdue > 0
+            ? `You have **${results.length}** open Jira task${results.length === 1 ? '' : 's'}. **${overdue}** look overdue.`
+            : `You have **${results.length}** open Jira task${results.length === 1 ? '' : 's'}.`;
+        const lines = results.slice(0, 10).map((r, i) => {
+          const due = r.dueDate ? ` · due ${r.dueDate}` : '';
+          const link = r.url ? ` — [Open](${r.url})` : '';
+          return `${i + 1}. **${r.key}** [${r.status || '?'}] ${r.summary || ''}${due}${link}`;
+        });
+        return `${head}\n\n${lines.join('\n')}`;
+      }
+      if (call.action === 'createIssue') {
+        const key = output?.key ? ` **${output.key}**` : '';
+        const url = output?.url ? ` ${output.url}` : '';
+        return `Jira ticket${key} is ready.${url}`;
+      }
+      return String(output?.summary ?? 'Finished checking Jira.');
     }
     const url = output?.url ? ` ${output.url}` : '';
-    return `✅ ${call.tool}.${call.action} completed.${url}`;
+    return `Done.${url}`;
   });
 
   return lines.join('\n') + approvalNote;
@@ -188,8 +262,47 @@ export async function runAgentTurn(
 ): Promise<AgentTurnResult> {
   const started = Date.now();
 
+  // Follow-up refinements (“only this week”, “summarize the second”) reuse last Gmail search memory
+  let effectiveQuery = query;
+  let followUpEmailId: string | undefined;
+  try {
+    const gmailMem = (await recall(organizationId, 'gmail:search:latest')) as GmailSearchMemory | null;
+    const expanded = expandGmailFollowUp(query, gmailMem);
+    if (expanded.getEmailId) {
+      followUpEmailId = expanded.getEmailId;
+      effectiveQuery = query;
+    } else if (expanded.query !== query.trim()) {
+      effectiveQuery = expanded.query;
+    }
+  } catch {
+    // memory optional
+  }
+
   // ONE authoritative decision for the entire turn
-  const route = resolveAuthoritativeRoute(query);
+  let route = resolveAuthoritativeRoute(effectiveQuery);
+  if (followUpEmailId) {
+    route = {
+      ...route,
+      mode: 'execute',
+      family: 'gmail_read',
+      osIntent: {
+        ...route.osIntent,
+        kind: 'simple_action',
+        confidence: 0.98,
+        rationale: 'Gmail follow-up — open prior search result',
+        legacyIntent: 'action',
+      },
+      lockedTool: 'gmail',
+      lockedAction: 'getEmail',
+      routeAction: 'read',
+      entities: { ...route.entities, emailId: followUpEmailId },
+      confidence: 0.98,
+      ambiguous: false,
+      allowWorkflow: false,
+      clarifyMessage: undefined,
+      rationale: 'Follow-up: gmail.getEmail from prior search memory',
+    };
+  }
   const osIntent = route.osIntent;
   const requestMode = route.mode;
   const intentFamily = route.family;
@@ -303,7 +416,7 @@ export async function runAgentTurn(
     reasoning.push(...workflow.reasoning);
   } else {
     // Prefer locked tool call from route; planner only fills within family
-    const locked = toolCallFromRoute(route, query);
+    const locked = toolCallFromRoute(route, effectiveQuery);
     if (locked && route.lockedAction) {
       plan = {
         intent: { ...legacyIntent, intent: 'action' },
@@ -313,7 +426,7 @@ export async function runAgentTurn(
       };
     } else {
       plan = await buildPlan(
-        query,
+        effectiveQuery,
         legacyIntent.intent === 'action' ? legacyIntent : { ...legacyIntent, intent: 'action' },
         context,
         llm,
@@ -332,7 +445,7 @@ export async function runAgentTurn(
 
   // If lock exists but filter emptied, rebuild from lock
   if (route.lockedTool && route.lockedAction && plan.toolCalls.length === 0) {
-    const rebuilt = toolCallFromRoute(route, query);
+    const rebuilt = toolCallFromRoute(route, effectiveQuery);
     if (rebuilt) plan.toolCalls = [rebuilt];
   }
 
@@ -369,7 +482,7 @@ export async function runAgentTurn(
   if (requestMode === 'dry_run') {
     let previewCalls = plan.toolCalls;
     if (previewCalls.length === 0 && route.lockedTool && route.lockedAction) {
-      const rebuilt = toolCallFromRoute({ ...route, mode: 'dry_run' }, query);
+      const rebuilt = toolCallFromRoute({ ...route, mode: 'dry_run' }, effectiveQuery);
       if (rebuilt) previewCalls = [rebuilt];
     }
     const reply = dryRunReplyForPlan(previewCalls);

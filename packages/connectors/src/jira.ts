@@ -637,16 +637,21 @@ class JiraConnector implements ToolConnector {
           const q = String(input.query ?? input.summary ?? '').trim();
           const project = String(input.project ?? input.projectKey ?? process.env.JIRA_DEFAULT_PROJECT ?? '').trim();
           if (!jql) {
-            if (/\bblock/i.test(q) || input.blockedOnly) {
-              const proj = project ? `project = ${project.toUpperCase()} AND ` : '';
+            const proj = project ? `project = ${project.toUpperCase()} AND ` : '';
+            if (input.overdueOnly || /\boverdue|past\s+due/i.test(q)) {
+              jql = `${proj}duedate < endOfDay() AND resolution = Unresolved ORDER BY duedate ASC`;
+            } else if (input.dueToday || (/\btoday\b/i.test(q) && /\b(finish|due|complete|need)\b/i.test(q))) {
+              jql = `${proj}duedate = endOfDay() AND resolution = Unresolved ORDER BY priority DESC`;
+            } else if (input.pendingOnly || /\b(pending|open|unresolved|to\s*do|in\s+progress)\b/i.test(q)) {
+              const me = input.assigneeMe ? ' AND assignee = currentUser()' : '';
+              jql = `${proj}resolution = Unresolved${me} ORDER BY priority DESC, updated DESC`;
+            } else if (/\bblock/i.test(q) || input.blockedOnly) {
               jql = `${proj}(status = Blocked OR labels = blocked OR text ~ "blocked") ORDER BY updated DESC`;
             } else if (q.includes('=') || /\bORDER BY\b/i.test(q)) {
               jql = q;
             } else if (q) {
-              const proj = project ? `project = ${project.toUpperCase()} AND ` : '';
               jql = `${proj}text ~ "${q.replace(/"/g, '\\"')}" ORDER BY updated DESC`;
             } else {
-              const proj = project ? `project = ${project.toUpperCase()} AND ` : '';
               jql = `${proj}updated >= -14d ORDER BY updated DESC`;
             }
           }
@@ -671,9 +676,14 @@ class JiraConnector implements ToolConnector {
             status: issue.fields?.status?.name,
             assignee: issue.fields?.assignee?.displayName,
             priority: issue.fields?.priority?.name,
+            dueDate: issue.fields?.duedate,
             labels: issue.fields?.labels,
             url: browseUrl(siteUrl, issue.key),
           }));
+          const overdueCount = results.filter((r) => {
+            if (!r.dueDate) return false;
+            return new Date(String(r.dueDate)).getTime() < Date.now();
+          }).length;
           const summaryText =
             results.length === 0
               ? 'No matching Jira issues.'
@@ -682,7 +692,14 @@ class JiraConnector implements ToolConnector {
             tool: 'jira',
             action,
             ok: true,
-            output: { results, count: results.length, jql, summary: summaryText, verified: true },
+            output: {
+              results,
+              count: results.length,
+              overdueCount,
+              jql,
+              summary: summaryText,
+              verified: true,
+            },
             mocked: false,
           };
         }

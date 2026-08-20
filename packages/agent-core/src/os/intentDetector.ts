@@ -51,7 +51,7 @@ export function isSlackReadQuestion(q: string): boolean {
   if (hasWriteVerb) return false;
 
   const asksWhy =
-    /\b(why|what happened|what'?s happening|whats happening|how come|reason|status of)\b/.test(lower) ||
+    /\b(why|what happened|what'?s happening|whats happening|how come|reason|status of|what'?s going on)\b/.test(lower) ||
     /\?/.test(q);
   const delayOrBlocker =
     /\b(delay|delayed|slip|slipped|blocked|blocker|stuck|behind|didn'?t happen|not happen|not happening)\b/.test(
@@ -62,9 +62,21 @@ export function isSlackReadQuestion(q: string): boolean {
       lower
     );
   const slackish = /\bslack\b/.test(lower) || /\bon\s+slack\b/.test(lower) || /#([a-z0-9_-]+)/i.test(q);
+  const teamPulse =
+    /\b(engineering|eng|product|design|sales|finance|ops)\s+team\b/.test(lower) ||
+    (/\b(team)\b/.test(lower) && /\b(happening|update|status|discuss)\b/.test(lower));
+  const findConversation =
+    /\b(find|search|where)\b/.test(lower) && /\b(conversation|thread|discussion)\b/.test(lower);
 
   // why/delay questions are intelligence even without saying "slack"
-  if ((asksWhy && delayOrBlocker) || (asksWhy && slackish) || (delayOrBlocker && slackish) || discusses) {
+  if (
+    (asksWhy && delayOrBlocker) ||
+    (asksWhy && slackish) ||
+    (delayOrBlocker && slackish) ||
+    discusses ||
+    (asksWhy && teamPulse) ||
+    findConversation
+  ) {
     return true;
   }
   return false;

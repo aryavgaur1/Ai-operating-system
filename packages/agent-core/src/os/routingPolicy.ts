@@ -28,6 +28,12 @@ import {
   isGmailDestinationQuery,
   isGmailSendQuery,
 } from './gmailQuery';
+import {
+  isGmailSoftReadQuery,
+  isJiraReadQuery,
+  isSlackSoftReadQuery,
+  jiraSearchFlags,
+} from './workAssistantIntent';
 
 /**
  * Authoritative routing — ONE decision before planner/workflow/executor.
@@ -131,7 +137,14 @@ export function detectRequestMode(query: string): RequestMode {
   if (isClarifyRequest(query)) return 'clarify';
   if (isDryRunRequest(query)) return 'dry_run';
   // Gmail read/search questions must execute the connector — not stall in clarify mode.
-  if (isGmailDestinationQuery(query) && !isGmailSendQuery(query)) {
+  if ((isGmailDestinationQuery(query) || isGmailSoftReadQuery(query)) && !isGmailSendQuery(query)) {
+    return 'execute';
+  }
+  // Jira pending/overdue reads are actionable — not clarify.
+  if (isJiraReadQuery(query)) {
+    return 'execute';
+  }
+  if (isSlackSoftReadQuery(query)) {
     return 'execute';
   }
   if (/\?/.test(query) && !/\b(create|open|post|send|delete|update|launch)\b/i.test(query)) {
@@ -193,6 +206,8 @@ function destinations(query: string): { jira: boolean; slack: boolean; notion: b
 
   const slack =
     isExplicitSlackCommand(query) ||
+    isSlackReadQuestion(query) ||
+    isSlackSoftReadQuery(query) ||
     /\b(war\s*room|launch\s+war)\b/.test(t);
 
   // Notion destination only via explicit Notion command (already yields to Slack/Jira dest)
@@ -203,12 +218,15 @@ function destinations(query: string): { jira: boolean; slack: boolean; notion: b
     !notion &&
     (isExplicitJiraCreate(query) ||
       isExplicitJiraDelete(query) ||
+      isJiraReadQuery(query) ||
       (/\bjira\b/.test(t) &&
-        /\b(create|open|file|log|track|update|delete|transition|assign|comment|ticket|issue)\b/.test(t)) ||
+        /\b(create|open|file|log|track|update|delete|transition|assign|comment|ticket|issue|search|find|show|list|pending|overdue)\b/.test(
+          t
+        )) ||
       (/\b(ticket|issue)\b/.test(t) && !/\b(slack|notion|channel|war\s*room|page|doc|message)\b/.test(t)));
 
   // Gmail destination — explicit email/gmail language not claimed by other systems
-  const gmail = !slack && !notion && !jira && isGmailDestinationQuery(query);
+  const gmail = !slack && !notion && !jira && (isGmailDestinationQuery(query) || isGmailSoftReadQuery(query));
 
   return { jira, slack, notion, gmail };
 }
@@ -290,6 +308,49 @@ export function resolveAuthoritativeRoute(query: string): AuthoritativeRoute {
         ambiguous: false,
         allowWorkflow: false,
         rationale: 'Locked gmail.searchEmails (question treated as read)',
+      };
+    }
+    // Jira pending/overdue questions → searchIssues
+    if (dest.jira && isJiraReadQuery(query)) {
+      return {
+        mode: 'execute',
+        family: 'jira',
+        osIntent: {
+          ...osIntent,
+          kind: 'simple_action',
+          confidence: 0.94,
+          rationale: 'Jira read/search question — execute searchIssues',
+          legacyIntent: 'action',
+        },
+        lockedTool: 'jira',
+        lockedAction: 'searchIssues',
+        routeAction: 'search',
+        entities,
+        confidence: 0.94,
+        ambiguous: false,
+        allowWorkflow: false,
+        rationale: 'Locked jira.searchIssues (question treated as read)',
+      };
+    }
+    if (dest.slack && (isSlackReadQuestion(query) || isSlackSoftReadQuery(query))) {
+      return {
+        mode: 'execute',
+        family: 'slack_read',
+        osIntent: {
+          ...osIntent,
+          kind: 'workspace_intelligence',
+          confidence: 0.93,
+          rationale: 'Slack team/conversation question — search history',
+          legacyIntent: 'read',
+        },
+        lockedTool: 'slack',
+        lockedAction: null,
+        routeAction: 'read',
+        entities,
+        confidence: 0.93,
+        ambiguous: false,
+        allowWorkflow: true,
+        rationale: 'Slack soft-read question',
       };
     }
     return {
@@ -472,6 +533,29 @@ export function resolveAuthoritativeRoute(query: string): AuthoritativeRoute {
       ambiguous: false,
       allowWorkflow: false,
       rationale: isSend ? 'Locked gmail.sendEmail' : 'Locked gmail.searchEmails',
+    };
+  }
+
+  // Jira pending / overdue / finish-today reads
+  if (dest.jira && isJiraReadQuery(query) && routeAction !== 'create' && routeAction !== 'delete') {
+    return {
+      mode: 'execute',
+      family: 'jira',
+      osIntent: {
+        ...osIntent,
+        kind: 'simple_action',
+        confidence: 0.94,
+        rationale: 'Jira read/search — searchIssues',
+        legacyIntent: 'action',
+      },
+      lockedTool: 'jira',
+      lockedAction: 'searchIssues',
+      routeAction: 'search',
+      entities,
+      confidence: 0.94,
+      ambiguous: false,
+      allowWorkflow: false,
+      rationale: 'Locked jira.searchIssues',
     };
   }
 
@@ -783,7 +867,36 @@ export function toolCallFromRoute(route: AuthoritativeRoute, query: string): Too
       action: 'searchEmails',
       input: {
         query: gmailQ,
-        maxResults: /\b(priority|important|top)\b/i.test(query) ? 8 : 10,
+        maxResults: /\b(priority|important|top|urgent)\b/i.test(query) ? 8 : 10,
+      },
+      riskLevel: 'low',
+      requiresApproval: false,
+    };
+  }
+
+  if (route.lockedTool === 'gmail' && route.lockedAction === 'getEmail') {
+    return {
+      tool: 'gmail',
+      action: 'getEmail',
+      input: {
+        id: route.entities.emailId || route.entities.messageId || '',
+      },
+      riskLevel: 'low',
+      requiresApproval: false,
+    };
+  }
+
+  if (route.lockedTool === 'jira' && route.lockedAction === 'searchIssues') {
+    const flags = jiraSearchFlags(query);
+    const project = (route.entities.project || process.env.JIRA_DEFAULT_PROJECT || '').trim().toUpperCase();
+    return {
+      tool: 'jira',
+      action: 'searchIssues',
+      input: {
+        query,
+        ...(project ? { project } : {}),
+        ...flags,
+        limit: 10,
       },
       riskLevel: 'low',
       requiresApproval: false,

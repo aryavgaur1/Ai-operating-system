@@ -29,6 +29,8 @@ const ACTION_START: Record<string, string> = {
   'jira.updateIssue': "I'm preparing a Jira update.",
   'jira.searchIssues': "I'm searching Jira.",
   'jira.deleteIssue': "I'm preparing to delete a Jira issue.",
+  'slack.searchHistory': "I'm searching Slack conversations.",
+  'slack.semanticSearch': "I'm searching Slack for relevant discussions.",
 };
 
 const ACTION_OK: Record<string, string> = {
@@ -40,6 +42,7 @@ const ACTION_OK: Record<string, string> = {
   'slack.createChannel': 'Slack channel created.',
   'slack.createWarRoom': 'War room is ready.',
   'slack.searchMessages': 'Finished searching Slack.',
+  'slack.searchHistory': 'Finished searching Slack.',
   'slack.dailyDigest': 'Digest ready.',
   'notion.createPage': 'Notion page created.',
   'notion.updatePage': 'Notion page updated.',

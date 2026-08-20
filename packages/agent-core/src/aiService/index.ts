@@ -80,6 +80,10 @@ export function wantsWorkspaceTools(message: string): boolean {
   if (/\b(jira|kan-\d+|create (?:a )?(?:channel|war room|incident|notion|page|issue))\b/i.test(q)) return true;
   if (/\b(post|send|invite|summarize #|find blockers|standup|digest)\b/i.test(q)) return true;
   if (/\b(what happened in|our (?:team|engineering|slack|notion)|workspace)\b/i.test(q)) return true;
+  if (/\b(gmail|inbox|e-?mails?|mail)\b/i.test(q)) return true;
+  if (/\b(overdue|pending)\b/i.test(q) && /\b(tasks?|tickets?|issues?|jira|work)\b/i.test(q)) return true;
+  if (/\b(finish|complete)\b/i.test(q) && /\b(today|tonight|this week)\b/i.test(q)) return true;
+  if (/\b(manager|boss)\b/i.test(q) && /\b(urgent|important|anything|from)\b/i.test(q)) return true;
   return false;
 }
 

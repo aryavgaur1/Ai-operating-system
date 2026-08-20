@@ -7,6 +7,7 @@ import {
   hasSlackTokenInContext,
   hasNotionTokenInContext,
   hasJiraTokenInContext,
+  hasGmailTokenInContext,
 } from '@enterprise-ai-os/connectors';
 
 // ============================================================
@@ -362,6 +363,27 @@ export async function preflightToolCall(call: ToolCall): Promise<PreflightResult
     }
   }
 
+  if (call.tool === 'gmail') {
+    const gmailErr = getConnectorContext().gmailAuthError?.trim();
+    if (gmailErr) {
+      return {
+        ok: false,
+        input,
+        healActions,
+        fatal: gmailErr,
+      };
+    }
+    if (!hasGmailTokenInContext()) {
+      return {
+        ok: false,
+        input,
+        healActions,
+        fatal:
+          "Your Gmail isn't connected to this workspace yet. You can connect it from Integrations.",
+      };
+    }
+  }
+
   if (call.tool === 'jira') {
     const ctxErr = getConnectorContext().jiraAuthError?.trim();
     if (ctxErr) {
@@ -661,8 +683,20 @@ export async function verifyToolResult(call: ToolCall, result: ToolCallResult): 
         return false;
       }
     }
-    // Gmail / Salesforce must never pass verification without a live external id
-    if (call.tool === 'gmail' || call.tool === 'salesforce') {
+    // Gmail reads: trust live connector ids; Salesforce writes must never soft-pass
+    if (call.tool === 'gmail') {
+      if (call.action === 'searchEmails') {
+        return Array.isArray(output.emails) || typeof output.count === 'number' || typeof output.query === 'string';
+      }
+      if (call.action === 'getEmail' || call.action === 'getThread') {
+        return Boolean(output.email || output.id || output.messageCount != null || output.thread);
+      }
+      if (call.action === 'sendEmail') {
+        return Boolean(output.id || output.messageId || output.url);
+      }
+      return false;
+    }
+    if (call.tool === 'salesforce') {
       return false;
     }
   } catch {
@@ -762,13 +796,15 @@ export function humanizeError(tool: ToolName, action: string, error?: string): s
   if (/object_not_found|could not find|page_id|database_id|parent/i.test(msg) && tool === 'notion') {
     return 'Notion could not use a parent page yet. Reconnect Notion and select at least one page to share, or in Notion open a page → ··· → Connections → add Nexora, then retry.';
   }
-  if (/rate.?limit/i.test(msg)) return `${tool} is rate-limiting right now — Nexora backed off and can retry shortly.`;
+  if (/rate.?limit/i.test(msg)) return `${tool === 'gmail' ? 'Gmail' : tool} is rate-limiting right now — please try again shortly.`;
   if (/missing_scope|missing.?permissions|requires .+ scope|pins:write/i.test(msg))
-    return `${tool}.${action} needs an extra permission. Re-authorize the app in Integrations (include the new scopes), then ask again.`;
+    return `${tool === 'gmail' ? 'Gmail' : tool === 'slack' ? 'Slack' : tool} needs an extra permission. Re-authorize under Integrations, then ask again.`;
   if (/invalid.?token|not.?authed|token_revoked|token_expired|authentication/i.test(msg) && !/pins:write|missing_scope|permission/i.test(msg))
-    return `${tool} authentication expired. Reconnect ${tool} under Integrations, then retry.`;
+    return `${tool === 'gmail' ? 'Gmail' : tool === 'slack' ? 'Slack' : tool === 'jira' ? 'Jira' : tool === 'notion' ? 'Notion' : tool} authentication expired. Reconnect under Integrations, then retry.`;
   if (/not_in_channel|channel_not_found/i.test(msg))
     return `I couldn't access that Slack channel yet. Invite @nexora-agent or ask me to create it.`;
   if (/name_taken/i.test(msg)) return `That channel name was taken — I should have auto-created a unique name. Please retry.`;
-  return `I hit a recoverable issue on ${tool}.${action}. Diagnosing and retrying when possible.`;
+  const product =
+    tool === 'gmail' ? 'Gmail' : tool === 'slack' ? 'Slack' : tool === 'jira' ? 'Jira' : tool === 'notion' ? 'Notion' : tool;
+  return `I couldn't complete that because ${product} didn't respond. Nothing was changed.`;
 }

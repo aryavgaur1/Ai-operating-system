@@ -123,6 +123,35 @@ export async function rememberFromExecution(
       });
       keys.push('notion:page:latest');
     }
+    if (call.tool === 'gmail' && call.action === 'searchEmails') {
+      const emailsRaw = Array.isArray(out.emails) ? out.emails : [];
+      const emails = emailsRaw.slice(0, 12).map((raw: unknown) => {
+        const e = raw as {
+          id?: string;
+          threadId?: string;
+          title?: string;
+          metadata?: { subject?: string; from?: string };
+        };
+        return {
+          id: e.id,
+          threadId: e.threadId,
+          subject: e.metadata?.subject || e.title,
+          from: e.metadata?.from,
+        };
+      });
+      await remember({
+        organizationId,
+        userId,
+        key: 'gmail:search:latest',
+        value: {
+          query: queryText,
+          gmailQuery: out.query,
+          emails,
+          account: out.account,
+        },
+      });
+      keys.push('gmail:search:latest');
+    }
     if (out.summary) {
       const key = `intel:${call.action}:latest`;
       await remember({

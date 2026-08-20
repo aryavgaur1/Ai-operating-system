@@ -53,6 +53,14 @@ export {
   isGmailSendQuery,
 } from './gmailQuery';
 export {
+  isGmailSoftReadQuery,
+  isJiraReadQuery,
+  isSlackSoftReadQuery,
+  expandGmailFollowUp,
+  jiraSearchFlags,
+} from './workAssistantIntent';
+export type { GmailSearchMemory } from './workAssistantIntent';
+export {
   ApprovalIntegrityError,
   assertApprovalAuthorized,
   assertApprovalExecutable,

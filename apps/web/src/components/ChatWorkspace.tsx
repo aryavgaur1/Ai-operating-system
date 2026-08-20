@@ -35,6 +35,7 @@ import {
 } from '@/components/NexoraPresence';
 import { useJarvis } from '@/components/JarvisProvider';
 import { consumePendingJarvisPrompt } from '@/lib/jarvisGreeting';
+import { humanToolStart, humanToolResult } from '@/lib/humanizeTools';
 
 const riskScore: Record<string, number> = { low: 24, medium: 58, high: 88 };
 const riskColor: Record<string, string> = { low: '#8be9d0', medium: '#f5b95d', high: '#fb7185' };
@@ -449,13 +450,11 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
             });
           }
           if (event.type === 'tool_start') {
-            setStatusLine(`Running ${event.tool}.${event.action}…`);
+            setStatusLine(humanToolStart(event.tool, event.action));
             setAgentState('tool');
           }
           if (event.type === 'tool_result') {
-            setStatusLine(
-              event.ok ? `✓ ${event.tool}.${event.action}` : `✗ ${event.tool}.${event.action}: ${event.error || 'failed'}`
-            );
+            setStatusLine(humanToolResult(event.tool, event.action, event.ok, event.error));
             setAgentState(event.ok ? 'success' : 'error');
           }
           if (event.type === 'error') {
@@ -533,6 +532,28 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
     window.addEventListener('nexora:jarvis-prompt', onJarvisPrompt as EventListener);
     return () => window.removeEventListener('nexora:jarvis-prompt', onJarvisPrompt as EventListener);
   }, [loading, hydrating]);
+
+  // Floating Jarvis turns share the same conversation — reload when voice/layer runs a turn
+  useEffect(() => {
+    function onJarvisTurn(e: Event) {
+      const detail = (e as CustomEvent<{ conversationId?: string }>).detail;
+      const id = detail?.conversationId?.trim();
+      if (!id || loading) return;
+      void (async () => {
+        try {
+          const data = await api.getConversation(id);
+          loadedIdRef.current = id;
+          setConversationId(id);
+          writeActiveConversationHint(id);
+          setTurns(mapMessagesToTurns(data.messages || []));
+        } catch {
+          // ignore — chat may be on a different conversation
+        }
+      })();
+    }
+    window.addEventListener('nexora:jarvis-turn', onJarvisTurn as EventListener);
+    return () => window.removeEventListener('nexora:jarvis-turn', onJarvisTurn as EventListener);
+  }, [loading]);
 
   useEffect(() => {
     if (hydrating || loading) return;

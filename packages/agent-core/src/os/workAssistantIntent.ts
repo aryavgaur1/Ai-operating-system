@@ -1,0 +1,148 @@
+/**
+ * Natural business-language intent helpers for Jarvis / Nexora work assistant.
+ * Routes soft NL into real connector families — never invents tool results.
+ */
+
+import { routingQuery } from './intentDetector';
+import { isGmailDestinationQuery, isGmailSendQuery } from './gmailQuery';
+
+/** Soft Gmail reads that omit the word "email" (manager / inbox urgency). */
+export function isGmailSoftReadQuery(query: string): boolean {
+  const t = routingQuery(query).toLowerCase();
+  if (isGmailSendQuery(query)) return false;
+  if (isGmailDestinationQuery(query)) return true;
+  // "urgent from my manager", "anything from my boss"
+  if (
+    /\b(manager|boss|lead|director|ceo|cto|vp)\b/.test(t) &&
+    /\b(urgent|important|priority|anything|from|mail|inbox|message)\b/.test(t)
+  ) {
+    return true;
+  }
+  if (/\b(inbox|unread)\b/.test(t) && /\b(check|show|what|any|look)\b/.test(t)) return true;
+  return false;
+}
+
+/** Jira read / search — pending, overdue, my work — not create/delete. */
+export function isJiraReadQuery(query: string): boolean {
+  const t = routingQuery(query).toLowerCase();
+  if (/\b(create|open|file|log|delete|remove|transition|assign|comment)\b/.test(t) && /\b(ticket|issue|bug)\b/.test(t)) {
+    return false;
+  }
+  if (/\bjira\b/.test(t) && /\b(pending|overdue|open|assigned|search|find|show|list|what|which|my|tasks?|tickets?|issues?|work|finish|due)\b/.test(t)) {
+    return true;
+  }
+  if (/\b(overdue|past\s+due)\b/.test(t) && /\b(tasks?|tickets?|issues?|work|jira)\b/.test(t)) return true;
+  if (/\b(pending|open)\b/.test(t) && /\b(jira|tickets?|issues?|tasks?)\b/.test(t)) return true;
+  if (/\b(what|which)\b/.test(t) && /\b(tasks?|tickets?|issues?)\b/.test(t) && /\b(overdue|pending|due|finish|assigned)\b/.test(t)) {
+    return true;
+  }
+  // "what do I need to finish today / this week"
+  if (
+    /\b(finish|complete|get\s+done|wrap\s+up)\b/.test(t) &&
+    /\b(today|tonight|this\s+week|tomorrow)\b/.test(t) &&
+    !/\b(slack|gmail|email|notion)\b/.test(t)
+  ) {
+    return true;
+  }
+  if (/\b(my|show|list)\b/.test(t) && /\b(open|pending)\b/.test(t) && /\b(tasks?|work|tickets?)\b/.test(t)) {
+    return true;
+  }
+  return false;
+}
+
+/** Slack team / conversation intelligence without requiring the word "slack". */
+export function isSlackSoftReadQuery(query: string): boolean {
+  const t = routingQuery(query).toLowerCase();
+  if (/\b(post|send|create|invite|bookmark)\b/.test(t) && /#([a-z0-9_-]+)/i.test(query)) return false;
+  if (
+    /\b(engineering|eng|product|design|sales|finance|ops|team)\b/.test(t) &&
+    /\b(happening|discuss|discussed|conversation|talked|update|status|what'?s\s+going)\b/.test(t)
+  ) {
+    return true;
+  }
+  if (
+    /\b(find|search|where)\b/.test(t) &&
+    /\b(conversation|thread|discussion|chat)\b/.test(t) &&
+    !/\b(gmail|email|jira|notion)\b/.test(t)
+  ) {
+    return true;
+  }
+  if (/\b(summarize|summarise|recap)\b/.test(t) && /\b(project|acme|alpha|deployment|launch)\b/.test(t) && !/\b(email|gmail|jira|notion)\b/.test(t)) {
+    return true;
+  }
+  return false;
+}
+
+export type GmailSearchMemory = {
+  query?: string;
+  gmailQuery?: string;
+  emails?: Array<{ id?: string; threadId?: string; subject?: string; from?: string }>;
+};
+
+/**
+ * Expand short follow-ups using last Gmail search memory.
+ * e.g. "only this week" → prior NL + "this week"; "summarize the second" → getEmail id.
+ */
+export function expandGmailFollowUp(
+  query: string,
+  memory: GmailSearchMemory | null | undefined
+): { query: string; getEmailId?: string; summarizeIndex?: number } {
+  const live = routingQuery(query).trim();
+  const lower = live.toLowerCase();
+  if (!memory?.emails?.length && !memory?.query && !memory?.gmailQuery) {
+    return { query: live };
+  }
+
+  const nth =
+    lower.match(/\b(?:the\s+)?(first|second|third|fourth|fifth|\d+(?:st|nd|rd|th))\b/) ||
+    lower.match(/\b#(\d+)\b/);
+  const wantsSummarize = /\b(summarize|summarise|read|open|show|get)\b/.test(lower);
+  if (nth && (wantsSummarize || /\b(one|email|message|that)\b/.test(lower) || /^(the\s+)?(first|second|third|\d)/.test(lower))) {
+    let index = 0;
+    const word = String(nth[1] || nth[0] || '')
+      .toLowerCase()
+      .replace(/^(the\s+)/, '');
+    if (word === 'first' || word === '1' || word === '1st') index = 0;
+    else if (word === 'second' || word === '2' || word === '2nd') index = 1;
+    else if (word === 'third' || word === '3' || word === '3rd') index = 2;
+    else if (word === 'fourth' || word === '4' || word === '4th') index = 3;
+    else if (word === 'fifth' || word === '5' || word === '5th') index = 4;
+    else {
+      const n = parseInt(word.replace(/\D/g, ''), 10);
+      if (Number.isFinite(n) && n >= 1) index = n - 1;
+    }
+    const email = memory.emails?.[index];
+    if (email?.id) {
+      return { query: live, getEmailId: String(email.id), summarizeIndex: index };
+    }
+  }
+
+  // Refinement without restating the whole search
+  const isRefinement =
+    /^(only|just|from|this|last|past|unread|important|starred|with)\b/.test(lower) ||
+    /\bonly\s+(the\s+)?ones?\b/.test(lower) ||
+    (/^(filter|narrow|limit)\b/.test(lower) && memory.query);
+
+  if (isRefinement && (memory.query || memory.gmailQuery)) {
+    const base = String(memory.query || '').trim() || 'emails';
+    return { query: `${base}. ${live}`.trim() };
+  }
+
+  return { query: live };
+}
+
+/** Build JQL hints from NL for searchIssues. */
+export function jiraSearchFlags(query: string): {
+  overdueOnly?: boolean;
+  pendingOnly?: boolean;
+  dueToday?: boolean;
+  assigneeMe?: boolean;
+} {
+  const t = routingQuery(query).toLowerCase();
+  return {
+    overdueOnly: /\b(overdue|past\s+due)\b/.test(t),
+    pendingOnly: /\b(pending|open|unresolved|to\s*do|todo|in\s+progress)\b/.test(t) && !/\boverdue\b/.test(t),
+    dueToday: /\b(today|tonight)\b/.test(t) && /\b(finish|due|complete|need)\b/.test(t),
+    assigneeMe: /\b(my|assigned\s+to\s+me|i\s+need)\b/.test(t),
+  };
+}
