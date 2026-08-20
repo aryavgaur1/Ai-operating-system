@@ -1,20 +1,25 @@
 /**
- * Central Jarvis voice controller — ONE authoritative speechSynthesis owner.
+ * Central Jarvis TTS controller — ONE speechSynthesis owner.
  *
- * Root-cause fix for "speaks one word / Hey then stops":
- * Chrome garbage-collects SpeechSynthesisUtterance when nothing retains a reference.
- * We keep `activeUtterance` at module scope until onend/onerror/interrupt.
+ * ROOT CAUSES of "Hi" then silence (audit findings):
+ * 1) speakableLead() truncated long replies to the FIRST sentence only.
+ * 2) Mute incorrectly called interruptJarvisVoice() and cancelled mid-greeting.
+ * 3) Chrome often fails mid-utterance on long text without sentence chunking.
+ * 4) Competing speak() / cancel() from tool narration & overlapping speakReply.
  *
- * Also: single queue, mute = output only (not mic), Chrome pause-keepalive.
+ * Fix: sentence-level queue, retain utterance refs, mute ≠ cancel TTS,
+ * cancel only with explicit reason (USER_STOP | NEW_REQUEST | SYSTEM_RESET).
  */
 
-import { speakableText, canUseSpeechSynthesis } from '@/components/NexoraPresence';
+import { canUseSpeechSynthesis } from '@/components/NexoraPresence';
+import { jarvisLog } from '@/lib/jarvisLog';
+
+export type CancelReason = 'USER_STOP' | 'NEW_REQUEST' | 'SYSTEM_RESET' | 'ERROR' | 'MUTE_REMOVED';
 
 export type VoiceSpeakStatus =
   | 'started'
   | 'completed'
   | 'blocked'
-  | 'muted'
   | 'unsupported'
   | 'error'
   | 'empty'
@@ -26,50 +31,37 @@ export type VoiceSpeakResult = {
 };
 
 export type VoiceSpeakOptions = {
-  /** Prefer natural male English / Indian English when available */
   preferMale?: boolean;
   lang?: string;
   rate?: number;
   pitch?: number;
   volume?: number;
-  /** If true, cancel current speech and speak this immediately */
+  /** Cancel current speech and start this response (user barge-in / new reply). */
   interrupt?: boolean;
-  /** How long to wait for onstart before treating as autoplay block */
   startTimeoutMs?: number;
   onStart?: () => void;
   onEnd?: () => void;
   onError?: (reason: string) => void;
+  onChunkStart?: (chunk: string, index: number, total: number) => void;
 };
 
-type QueueItem = {
-  text: string;
+/** Retained so Chrome cannot GC utterances mid-speech. */
+let activeUtterance: SpeechSynthesisUtterance | null = null;
+let speakGeneration = 0;
+let queueDraining = false;
+let chromeKeepAliveTimer: ReturnType<typeof setInterval> | null = null;
+let cachedVoices: SpeechSynthesisVoice[] | null = null;
+
+type ChunkJob = {
+  chunks: string[];
   opts: VoiceSpeakOptions;
   resolve: (r: VoiceSpeakResult) => void;
 };
 
-/** Retained so Chrome cannot GC the utterance mid-speech. */
-let activeUtterance: SpeechSynthesisUtterance | null = null;
-let speakGeneration = 0;
-let muted = false;
-let queue: QueueItem[] = [];
-let draining = false;
-let chromeKeepAliveTimer: ReturnType<typeof setInterval> | null = null;
-let cachedVoices: SpeechSynthesisVoice[] | null = null;
+let jobQueue: ChunkJob[] = [];
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-export function isJarvisVoiceMuted(): boolean {
-  return muted;
-}
-
-/** Mute = no voice OUTPUT. Does not affect microphone / listening. */
-export function setJarvisVoiceMuted(next: boolean): void {
-  muted = next;
-  if (next) {
-    interruptJarvisVoice();
-  }
 }
 
 export function getSpeakGeneration(): number {
@@ -78,7 +70,7 @@ export function getSpeakGeneration(): number {
 
 export function isJarvisSpeaking(): boolean {
   if (typeof window === 'undefined' || !window.speechSynthesis) return false;
-  return window.speechSynthesis.speaking || Boolean(activeUtterance);
+  return window.speechSynthesis.speaking || Boolean(activeUtterance) || queueDraining;
 }
 
 function stopChromeKeepAlive() {
@@ -88,7 +80,6 @@ function stopChromeKeepAlive() {
   }
 }
 
-/** Chrome silently pauses long utterances — nudge resume while we own speech. */
 function startChromeKeepAlive(gen: number) {
   stopChromeKeepAlive();
   if (typeof window === 'undefined' || !window.speechSynthesis) return;
@@ -98,49 +89,62 @@ function startChromeKeepAlive(gen: number) {
       return;
     }
     try {
-      if (window.speechSynthesis.speaking && window.speechSynthesis.paused) {
-        window.speechSynthesis.resume();
-      } else if (window.speechSynthesis.speaking) {
-        // Known Chrome workaround: resume() even when not paused keeps audio alive
+      if (window.speechSynthesis.speaking) {
         window.speechSynthesis.resume();
       }
     } catch {
       // ignore
     }
-  }, 5000);
+  }, 4000);
 }
 
-/** Hard stop — clears queue and cancels current utterance. */
-export function interruptJarvisVoice(): void {
-  speakGeneration += 1;
-  const pending = queue.splice(0);
-  pending.forEach((item) => item.resolve({ status: 'interrupted', reason: 'interrupted' }));
-  draining = false;
-  stopChromeKeepAlive();
-  activeUtterance = null;
-  if (typeof window === 'undefined' || !window.speechSynthesis) return;
-  try {
-    window.speechSynthesis.cancel();
-  } catch {
-    // ignore
+/** Strip markdown for speech — do NOT truncate to a lead sentence. */
+export function prepareSpeakableText(markdown: string, maxChars = 2500): string {
+  return String(markdown || '')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`[^`]+`/g, ' ')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/[*_#>]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, maxChars);
+}
+
+/** Prefer one sentence per chunk so Chrome cannot drop mid-paragraph speech. */
+export function splitIntoSpeechChunks(text: string, maxChunkLen = 280): string[] {
+  const clean = prepareSpeakableText(text);
+  if (!clean) return [];
+
+  const raw = clean.match(/[^.!?]+[.!?]+(?:["')\]]+)?|[^.!?]+$/g) || [clean];
+  const sentences = raw.map((s) => s.trim()).filter(Boolean);
+  const chunks: string[] = [];
+
+  for (const sentence of sentences) {
+    if (sentence.length <= maxChunkLen) {
+      chunks.push(sentence);
+      continue;
+    }
+    let rest = sentence;
+    while (rest.length > maxChunkLen) {
+      let cut = rest.lastIndexOf(',', maxChunkLen);
+      if (cut < maxChunkLen * 0.4) cut = rest.lastIndexOf(' ', maxChunkLen);
+      if (cut < maxChunkLen * 0.4) cut = maxChunkLen;
+      chunks.push(rest.slice(0, cut).trim());
+      rest = rest.slice(cut).replace(/^[,.\s]+/, '').trim();
+    }
+    if (rest) chunks.push(rest);
   }
-}
-
-/** @deprecated use interruptJarvisVoice */
-export function interruptNexoraSpeech(): void {
-  interruptJarvisVoice();
+  return chunks.filter(Boolean);
 }
 
 export async function ensureSpeechVoices(timeoutMs = 1500): Promise<SpeechSynthesisVoice[]> {
   if (!canUseSpeechSynthesis()) return [];
-  if (cachedVoices && cachedVoices.length > 0) return cachedVoices;
-
+  if (cachedVoices?.length) return cachedVoices;
   const existing = window.speechSynthesis.getVoices();
-  if (existing.length > 0) {
+  if (existing.length) {
     cachedVoices = existing;
     return existing;
   }
-
   return new Promise((resolve) => {
     let done = false;
     const finish = () => {
@@ -156,13 +160,8 @@ export async function ensureSpeechVoices(timeoutMs = 1500): Promise<SpeechSynthe
   });
 }
 
-/**
- * Dynamic male English voice selection — never hardcodes a single browser voice.
- * Priority: en-IN male → natural male names → en-US/UK male → any English → default.
- */
 export function pickJarvisVoice(voices: SpeechSynthesisVoice[], preferLang?: string): SpeechSynthesisVoice | null {
   if (!voices.length) return null;
-
   const english = voices.filter((v) => /^en/i.test(v.lang) || /english/i.test(v.name));
   const pool = english.length ? english : voices;
 
@@ -170,233 +169,241 @@ export function pickJarvisVoice(voices: SpeechSynthesisVoice[], preferLang?: str
     let s = 0;
     const name = v.name || '';
     const lang = v.lang || '';
-    const maleHint = /male|david|daniel|alex|fred|ravi|thomas|mark|guy|james|george|sean|arthur|aaron/i.test(name);
-    const femaleHint = /female|samantha|karen|moira|tessa|veena|zira|susan|fiona|victoria/i.test(name);
-    if (femaleHint && !maleHint) s -= 50;
-    if (maleHint) s += 40;
-    if (/en-IN/i.test(lang) || /india/i.test(name)) s += 35;
-    if (/en-GB/i.test(lang) || /uk english/i.test(name)) s += 20;
-    if (/en-US/i.test(lang)) s += 15;
+    const male = /male|david|daniel|alex|fred|ravi|thomas|mark|guy|james|george|sean|arthur|aaron/i.test(name);
+    const female = /female|samantha|karen|moira|tessa|veena|zira|susan|fiona|victoria|heera/i.test(name);
+    if (female && !male) s -= 50;
+    if (male) s += 40;
+    if (/en-IN/i.test(lang) || /india/i.test(name)) s += 40;
+    if (/en-GB/i.test(lang)) s += 18;
+    if (/en-US/i.test(lang)) s += 14;
     if (preferLang && new RegExp(`^${preferLang}`, 'i').test(lang)) s += 10;
     if (/natural|neural|premium|enhanced/i.test(name)) s += 12;
-    if (/google/i.test(name)) s += 5;
-    if (/microsoft/i.test(name)) s += 4;
     return s;
   };
 
-  const ranked = [...pool].sort((a, b) => score(b) - score(a));
-  return ranked[0] || null;
+  return [...pool].sort((a, b) => score(b) - score(a))[0] || null;
 }
 
-/** @deprecated alias */
 export function pickMaleVoice(voices: SpeechSynthesisVoice[], lang = 'en'): SpeechSynthesisVoice | null {
   return pickJarvisVoice(voices, lang);
 }
 
-async function speakNow(text: string, opts: VoiceSpeakOptions): Promise<VoiceSpeakResult> {
-  if (muted) return { status: 'muted' };
-  if (!canUseSpeechSynthesis()) {
-    return { status: 'unsupported', reason: 'Speech synthesis is not available in this browser.' };
-  }
-
-  const clean = speakableText(text, 1200);
-  if (!clean) return { status: 'empty' };
-
-  const voices = await ensureSpeechVoices();
-  const voice = opts.preferMale === false ? null : pickJarvisVoice(voices, opts.lang);
-  const startTimeoutMs = opts.startTimeoutMs ?? 2000;
-  const myGen = ++speakGeneration;
-
+/**
+ * Cancel only with an explicit reason. Never call from mute/mic/route alone.
+ */
+export function interruptJarvisVoice(reason: CancelReason = 'USER_STOP'): void {
+  jarvisLog('TTS_CANCEL', { reason });
+  speakGeneration += 1;
+  const pending = jobQueue.splice(0);
+  pending.forEach((j) => j.resolve({ status: 'interrupted', reason }));
+  queueDraining = false;
+  stopChromeKeepAlive();
+  activeUtterance = null;
+  if (typeof window === 'undefined' || !window.speechSynthesis) return;
   try {
     window.speechSynthesis.cancel();
-    // Chrome needs a beat after cancel before the next speak is reliable
-    await wait(60);
-    if (myGen !== speakGeneration) return { status: 'interrupted', reason: 'superseded' };
-
-    const utterance = new SpeechSynthesisUtterance(clean);
-    // Hold reference — prevents Chrome GC mid-speech ("Hey" then silence)
-    activeUtterance = utterance;
-
-    utterance.rate = typeof opts.rate === 'number' ? opts.rate : 0.9;
-    utterance.pitch = typeof opts.pitch === 'number' ? opts.pitch : 0.95;
-    utterance.volume = typeof opts.volume === 'number' ? opts.volume : 1;
-    utterance.lang = opts.lang || voice?.lang || (typeof navigator !== 'undefined' ? navigator.language : 'en-US') || 'en-US';
-    if (voice) utterance.voice = voice;
-
-    return await new Promise<VoiceSpeakResult>((resolve) => {
-      let settled = false;
-      let timer = 0;
-      const settle = (result: VoiceSpeakResult) => {
-        if (settled) return;
-        settled = true;
-        window.clearTimeout(timer);
-        stopChromeKeepAlive();
-        if (activeUtterance === utterance) activeUtterance = null;
-        resolve(result);
-      };
-
-      utterance.onstart = () => {
-        if (myGen !== speakGeneration) {
-          settle({ status: 'interrupted', reason: 'superseded' });
-          return;
-        }
-        startChromeKeepAlive(myGen);
-        opts.onStart?.();
-        window.clearTimeout(timer);
-      };
-
-      utterance.onend = () => {
-        if (myGen !== speakGeneration) {
-          settle({ status: 'interrupted', reason: 'superseded' });
-          return;
-        }
-        opts.onEnd?.();
-        settle({ status: 'completed' });
-      };
-
-      utterance.onerror = (event) => {
-        const reason = String((event as SpeechSynthesisErrorEvent).error || 'speech_error');
-        if (reason === 'canceled' || reason === 'interrupted') {
-          settle({ status: 'interrupted', reason });
-          return;
-        }
-        if (reason === 'not-allowed' || reason === 'synthesis-failed') {
-          opts.onError?.(reason);
-          settle({ status: 'blocked', reason });
-          return;
-        }
-        opts.onError?.(reason);
-        settle({ status: 'error', reason });
-      };
-
-      timer = window.setTimeout(() => {
-        if (myGen !== speakGeneration) {
-          settle({ status: 'interrupted', reason: 'superseded' });
-          return;
-        }
-        const speaking = window.speechSynthesis.speaking || window.speechSynthesis.pending;
-        if (!speaking) {
-          try {
-            window.speechSynthesis.cancel();
-          } catch {
-            // ignore
-          }
-          settle({
-            status: 'blocked',
-            reason: 'Browser blocked automatic speech. Click Enable voice to hear Jarvis.',
-          });
-        }
-      }, startTimeoutMs);
-
-      try {
-        window.speechSynthesis.speak(utterance);
-        if (window.speechSynthesis.paused) {
-          window.speechSynthesis.resume();
-        }
-      } catch (err) {
-        settle({
-          status: 'error',
-          reason: err instanceof Error ? err.message : 'speak_failed',
-        });
-      }
-    });
-  } catch (err) {
-    activeUtterance = null;
-    return {
-      status: 'error',
-      reason: err instanceof Error ? err.message : 'speak_failed',
-    };
+  } catch {
+    // ignore
   }
 }
 
-async function drainQueue(): Promise<void> {
-  if (draining) return;
-  draining = true;
-  try {
-    while (queue.length > 0) {
-      if (muted) {
-        const item = queue.shift();
-        item?.resolve({ status: 'muted' });
+export function interruptNexoraSpeech(): void {
+  interruptJarvisVoice('USER_STOP');
+}
+
+async function speakChunk(text: string, opts: VoiceSpeakOptions, gen: number): Promise<VoiceSpeakResult> {
+  if (!canUseSpeechSynthesis()) return { status: 'unsupported' };
+  if (!text.trim()) return { status: 'empty' };
+  if (gen !== speakGeneration) return { status: 'interrupted', reason: 'superseded' };
+
+  const voices = await ensureSpeechVoices();
+  if (gen !== speakGeneration) return { status: 'interrupted', reason: 'superseded' };
+  const voice = opts.preferMale === false ? null : pickJarvisVoice(voices, opts.lang);
+  const startTimeoutMs = opts.startTimeoutMs ?? 2500;
+
+  // Only cancel if something else is somehow still speaking from outside our queue
+  if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {
+    try {
+      window.speechSynthesis.cancel();
+    } catch {
+      // ignore
+    }
+    await wait(50);
+  }
+  if (gen !== speakGeneration) return { status: 'interrupted', reason: 'superseded' };
+
+  const utterance = new SpeechSynthesisUtterance(text);
+  activeUtterance = utterance;
+  utterance.rate = typeof opts.rate === 'number' ? opts.rate : 0.9;
+  utterance.pitch = typeof opts.pitch === 'number' ? opts.pitch : 0.95;
+  utterance.volume = typeof opts.volume === 'number' ? opts.volume : 1;
+  utterance.lang =
+    opts.lang || voice?.lang || (typeof navigator !== 'undefined' ? navigator.language : 'en-IN') || 'en-IN';
+  if (voice) utterance.voice = voice;
+
+  return await new Promise<VoiceSpeakResult>((resolve) => {
+    let settled = false;
+    let timer = 0;
+    const settle = (result: VoiceSpeakResult) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      stopChromeKeepAlive();
+      if (activeUtterance === utterance) activeUtterance = null;
+      resolve(result);
+    };
+
+    utterance.onstart = () => {
+      if (gen !== speakGeneration) {
+        settle({ status: 'interrupted', reason: 'superseded' });
+        return;
+      }
+      startChromeKeepAlive(gen);
+      window.clearTimeout(timer);
+    };
+
+    utterance.onend = () => {
+      if (gen !== speakGeneration) {
+        settle({ status: 'interrupted', reason: 'superseded' });
+        return;
+      }
+      settle({ status: 'completed' });
+    };
+
+    utterance.onerror = (event) => {
+      const reason = String((event as SpeechSynthesisErrorEvent).error || 'speech_error');
+      jarvisLog('TTS_ERROR', reason);
+      if (reason === 'canceled' || reason === 'interrupted') {
+        settle({ status: 'interrupted', reason });
+        return;
+      }
+      if (reason === 'not-allowed' || reason === 'synthesis-failed') {
+        opts.onError?.(reason);
+        settle({ status: 'blocked', reason });
+        return;
+      }
+      opts.onError?.(reason);
+      settle({ status: 'error', reason });
+    };
+
+    timer = window.setTimeout(() => {
+      if (gen !== speakGeneration) {
+        settle({ status: 'interrupted', reason: 'superseded' });
+        return;
+      }
+      if (!window.speechSynthesis.speaking && !window.speechSynthesis.pending) {
+        settle({
+          status: 'blocked',
+          reason: 'Browser blocked automatic speech. Click Enable voice.',
+        });
+      }
+    }, startTimeoutMs);
+
+    try {
+      window.speechSynthesis.speak(utterance);
+      if (window.speechSynthesis.paused) window.speechSynthesis.resume();
+    } catch (err) {
+      settle({
+        status: 'error',
+        reason: err instanceof Error ? err.message : 'speak_failed',
+      });
+    }
+  });
+}
+
+async function runJob(job: ChunkJob): Promise<void> {
+  const gen = speakGeneration;
+  const { chunks, opts, resolve } = job;
+  if (!chunks.length) {
+    resolve({ status: 'empty' });
+    return;
+  }
+
+  jarvisLog('TTS_START', { chunks: chunks.length, preview: chunks[0]?.slice(0, 80) });
+  opts.onStart?.();
+
+  let anyStarted = false;
+  for (let i = 0; i < chunks.length; i++) {
+    if (gen !== speakGeneration) {
+      resolve({ status: 'interrupted', reason: 'superseded' });
+      return;
+    }
+    const chunk = chunks[i];
+    jarvisLog('TTS_CHUNK', { index: i + 1, total: chunks.length, preview: chunk.slice(0, 80) });
+    opts.onChunkStart?.(chunk, i, chunks.length);
+    const result = await speakChunk(chunk, opts, gen);
+    if (result.status === 'completed') {
+      anyStarted = true;
+      continue;
+    }
+    if (result.status === 'interrupted') {
+      resolve(result);
+      return;
+    }
+    if (result.status === 'blocked' || result.status === 'unsupported' || result.status === 'error') {
+      // If we already spoke some chunks, treat as completed-with-error rather than total fail
+      if (anyStarted && result.status === 'error') {
+        jarvisLog('TTS_ERROR', { recovered: true, reason: result.reason });
         continue;
       }
-      const item = queue.shift();
-      if (!item) break;
-      const result = await speakNow(item.text, item.opts);
-      item.resolve(result);
-      // If interrupted intentionally, remaining queue already cleared by interruptJarvisVoice
-      if (result.status === 'interrupted' && queue.length === 0) break;
+      resolve(result);
+      return;
+    }
+  }
+
+  jarvisLog('TTS_END', { chunks: chunks.length });
+  opts.onEnd?.();
+  resolve({ status: anyStarted || chunks.length ? 'completed' : 'empty' });
+}
+
+async function drainJobs(): Promise<void> {
+  if (queueDraining) return;
+  queueDraining = true;
+  try {
+    while (jobQueue.length > 0) {
+      const job = jobQueue.shift();
+      if (!job) break;
+      await runJob(job);
     }
   } finally {
-    draining = false;
-    if (queue.length > 0) void drainQueue();
+    queueDraining = false;
+    if (jobQueue.length > 0) void drainJobs();
   }
 }
 
 /**
- * Enqueue speech. Completes only after the utterance ends (or is interrupted/blocked).
- * Use `interrupt: true` to stop current speech and speak immediately (user barge-in / new reply).
+ * Speak a full response (multi-sentence). Chunks sequentially until complete.
  */
 export function speakJarvis(text: string, opts: VoiceSpeakOptions = {}): Promise<VoiceSpeakResult> {
-  if (muted) return Promise.resolve({ status: 'muted' });
+  const chunks = splitIntoSpeechChunks(text);
+  if (!chunks.length) return Promise.resolve({ status: 'empty' });
+
   if (opts.interrupt) {
-    // Clear pending queue but keep generation bump via interrupt, then re-queue this item
-    speakGeneration += 1;
-    const waiting = queue.splice(0);
-    waiting.forEach((w) => w.resolve({ status: 'interrupted', reason: 'superseded' }));
-    stopChromeKeepAlive();
-    activeUtterance = null;
-    try {
-      window.speechSynthesis?.cancel();
-    } catch {
-      // ignore
-    }
+    interruptJarvisVoice('NEW_REQUEST');
   }
 
   return new Promise<VoiceSpeakResult>((resolve) => {
-    queue.push({ text, opts, resolve });
-    void drainQueue();
+    jobQueue.push({ chunks, opts, resolve });
+    void drainJobs();
   });
 }
 
-/** Compatibility wrapper — resolves `started` when speech begins; still holds utterance until end. */
+/** Compatibility: maps completed → started for older greeting callers. */
 export async function speakNexoraReliable(
   text: string,
-  opts: VoiceSpeakOptions & { muted?: boolean; onStart?: () => void; onEnd?: () => void; onError?: (r: string) => void } = {}
-): Promise<{ status: VoiceSpeakStatus; reason?: string }> {
-  if (opts.muted) return { status: 'muted' };
-
-  let started = false;
-  const result = await speakJarvis(text, {
-    ...opts,
-    interrupt: true,
-    onStart: () => {
-      started = true;
-      opts.onStart?.();
-    },
-    onEnd: opts.onEnd,
-    onError: opts.onError,
-  });
-
-  // Legacy callers treated "started" as success for greeting marks.
+  opts: VoiceSpeakOptions & { muted?: boolean } = {}
+): Promise<VoiceSpeakResult> {
+  if (opts.muted) return { status: 'interrupted', reason: 'muted_compat' };
+  const result = await speakJarvis(text, { ...opts, interrupt: true });
   if (result.status === 'completed') return { status: 'started', reason: result.reason };
-  if (result.status === 'blocked' || result.status === 'unsupported' || result.status === 'error' || result.status === 'empty' || result.status === 'muted' || result.status === 'interrupted') {
-    return result;
-  }
-  return started ? { status: 'started' } : result;
+  return result;
 }
 
-export async function enableAndSpeak(
-  text: string,
-  opts: VoiceSpeakOptions = {}
-): Promise<VoiceSpeakResult> {
+export async function enableAndSpeak(text: string, opts: VoiceSpeakOptions = {}): Promise<VoiceSpeakResult> {
   if (!canUseSpeechSynthesis()) return { status: 'unsupported' };
   try {
-    // User-gesture unlock — do not leave a warm utterance playing
     window.speechSynthesis.cancel();
-    const warm = new SpeechSynthesisUtterance('');
-    warm.volume = 0;
-    // Some browsers reject empty string — use a zero-volume period
-    warm.text = '.';
+    const warm = new SpeechSynthesisUtterance('.');
     warm.volume = 0;
     warm.rate = 2;
     activeUtterance = warm;
@@ -410,11 +417,23 @@ export async function enableAndSpeak(
   return speakJarvis(text, { ...opts, preferMale: opts.preferMale !== false, interrupt: true });
 }
 
-/** Test helper — reset module state */
+/** @deprecated Mute no longer cancels TTS — kept for import compatibility. */
+export function setJarvisVoiceMuted(_next: boolean): void {
+  // Mic mute is owned by JarvisProvider. Do not cancel speech here.
+}
+
+export function isJarvisVoiceMuted(): boolean {
+  return false;
+}
+
 export function __resetJarvisVoiceForTests(): void {
-  interruptJarvisVoice();
-  muted = false;
+  interruptJarvisVoice('SYSTEM_RESET');
   cachedVoices = null;
-  queue = [];
-  draining = false;
+  jobQueue = [];
+  queueDraining = false;
+}
+
+/** Legacy alias used by NexoraPresence consumers */
+export function speakableText(markdown: string, maxChars = 2500): string {
+  return prepareSpeakableText(markdown, maxChars);
 }

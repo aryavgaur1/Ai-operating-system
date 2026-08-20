@@ -31,8 +31,6 @@ import {
 import {
   enableAndSpeak,
   interruptJarvisVoice,
-  setJarvisVoiceMuted,
-  isJarvisVoiceMuted,
   speakJarvis,
 } from '@/lib/jarvisSpeech';
 import { isEditableTarget, isJarvisToggleHotkey } from '@/lib/jarvisHotkeys';
@@ -44,8 +42,10 @@ import {
   type ConnectedTools,
 } from '@/lib/jarvisStatus';
 import { runJarvisTurn } from '@/lib/jarvisTurn';
-import { isStopCommand, matchesWakePhrase, stripWakePhrase } from '@/lib/jarvisWake';
-import { shouldAutoSpeakReply, humanToolResult } from '@/lib/humanizeTools';
+import { isStopCommand, isWakeOnly, matchesWakePhrase, stripWakePhrase } from '@/lib/jarvisWake';
+import { humanToolResult } from '@/lib/humanizeTools';
+import { jarvisLog } from '@/lib/jarvisLog';
+import { phaseStatusLabel, phaseToAgentState, type JarvisPhase } from '@/lib/jarvisPhase';
 
 const WELCOME_DISMISSED_KEY = 'nexora.jarvis.welcomeDismissed';
 const WAKE_ENABLED_KEY = 'nexora.jarvis.wakeEnabled';
@@ -63,12 +63,14 @@ type JarvisContextValue = {
   pendingSpeechText: string | null;
   agentState: NexoraAgentState;
   setAgentState: (s: NexoraAgentState) => void;
+  phase: JarvisPhase;
   mode: JarvisUiMode;
   setMode: (m: JarvisUiMode) => void;
   statusLine: string;
   busy: boolean;
-  voiceMuted: boolean;
-  setVoiceMuted: (muted: boolean) => void;
+  /** Microphone muted — does NOT cancel TTS. */
+  micMuted: boolean;
+  setMicMuted: (muted: boolean) => void;
   enableVoice: () => Promise<void>;
   dismissWelcome: () => void;
   runSuggestion: (prompt: string) => void;
@@ -105,6 +107,7 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
   const [speechBlocked, setSpeechBlocked] = useState(false);
   const [pendingSpeechText, setPendingSpeechText] = useState<string | null>(null);
   const [agentState, setAgentState] = useState<NexoraAgentState>('idle');
+  const [phase, setPhase] = useState<JarvisPhase>('sleeping');
   const [statusCustom, setStatusCustom] = useState<string | null>(null);
   const [activeTool, setActiveTool] = useState<{ tool: string; action: string } | null>(null);
   const [mode, setMode] = useState<JarvisUiMode>('orb');
@@ -112,15 +115,23 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
   const [turns, setTurns] = useState<MiniTurn[]>([]);
   const [micActive, setMicActive] = useState(false);
   const [wakeEnabled, setWakeEnabled] = useState(false);
-  const [voiceMuted, setVoiceMutedState] = useState(false);
+  const [micMuted, setMicMutedState] = useState(false);
   const [connected, setConnected] = useState<ConnectedTools | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
   const recognitionRef = useRef<any>(null);
   const wakeRef = useRef<any>(null);
   const sendPromptRef = useRef<(message: string) => Promise<void>>(async () => undefined);
-  const voiceMutedRef = useRef(false);
-  voiceMutedRef.current = voiceMuted;
+  const toggleMicRef = useRef<() => void>(() => undefined);
+  const micMutedRef = useRef(false);
+  micMutedRef.current = micMuted;
+
+  const setPhaseSafe = useCallback((next: JarvisPhase, custom?: string | null) => {
+    jarvisLog('STATE', `${phase} → ${next}`);
+    setPhase(next);
+    setAgentState(phaseToAgentState(next));
+    if (custom !== undefined) setStatusCustom(custom);
+  }, [phase]);
 
   const suggestions = useMemo(() => {
     const contextual = buildContextualSuggestions({ pathname, connected });
@@ -132,24 +143,34 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
     return merged.slice(0, 4);
   }, [pathname, connected]);
 
-  const statusLine = useMemo(
-    () =>
-      jarvisStatusLabel(agentState, {
-        tool: activeTool?.tool,
-        action: activeTool?.action,
-        custom: statusCustom,
-        muted: voiceMuted,
-      }),
-    [agentState, activeTool, statusCustom, voiceMuted]
-  );
+  const statusLine = useMemo(() => {
+    if (statusCustom) return statusCustom;
+    if (activeTool && phase === 'processing') {
+      return jarvisStatusLabel('tool', { tool: activeTool.tool, action: activeTool.action });
+    }
+    return phaseStatusLabel(phase);
+  }, [phase, statusCustom, activeTool]);
 
-  const setVoiceMuted = useCallback((next: boolean) => {
-    setVoiceMutedState(next);
-    setJarvisVoiceMuted(next);
+  /** Mic mute only — never cancels TTS. */
+  const setMicMuted = useCallback((next: boolean) => {
+    setMicMutedState(next);
+    jarvisLog('MIC', next ? 'MUTED' : 'UNMUTED');
     try {
-      window.sessionStorage.setItem('nexora.jarvis.voiceMuted', next ? '1' : '0');
+      window.sessionStorage.setItem('nexora.jarvis.micMuted', next ? '1' : '0');
     } catch {
       // ignore
+    }
+    if (next) {
+      try {
+        recognitionRef.current?.stop?.();
+        wakeRef.current?.stop?.();
+      } catch {
+        // ignore
+      }
+      recognitionRef.current = null;
+      setMicActive(false);
+      setPhase((p) => (p === 'listening' || p === 'waking' ? 'sleeping' : p));
+      setAgentState((s) => (s === 'listening' ? 'idle' : s));
     }
   }, []);
 
@@ -168,9 +189,8 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
     })();
     try {
       setWakeEnabled(window.sessionStorage.getItem(WAKE_ENABLED_KEY) === '1');
-      const mutedPref = window.sessionStorage.getItem('nexora.jarvis.voiceMuted') === '1';
-      setVoiceMutedState(mutedPref);
-      setJarvisVoiceMuted(mutedPref);
+      const micOff = window.sessionStorage.getItem('nexora.jarvis.micMuted') === '1';
+      setMicMutedState(micOff);
     } catch {
       // ignore
     }
@@ -207,49 +227,48 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
   }, [pathname]);
 
   const interruptSpeech = useCallback(() => {
-    interruptJarvisVoice();
-    setAgentState((s) => (s === 'speaking' ? 'idle' : s));
-  }, []);
+    interruptJarvisVoice('USER_STOP');
+    setPhaseSafe('sleeping');
+  }, [setPhaseSafe]);
 
-  const speakReply = useCallback(async (text: string) => {
-    if (voiceMutedRef.current || isJarvisVoiceMuted() || !text.trim()) return;
-    let toSpeak = text;
-    if (!shouldAutoSpeakReply(text) && text.length > 420) {
-      const lead = speakableLead(text);
-      if (!lead) return;
-      toSpeak = lead;
-    }
-    setAgentState('speaking');
-    const outcome = await speakJarvis(toSpeak, {
-      preferMale: true,
-      rate: 0.9,
-      interrupt: true,
-      onStart: () => setAgentState('speaking'),
-      onEnd: () => setAgentState('idle'),
-      onError: () => setAgentState('idle'),
-    });
-    if (outcome.status === 'blocked') {
-      setSpeechBlocked(true);
-      setPendingSpeechText(toSpeak);
-      setAgentState('idle');
-    } else if (outcome.status !== 'completed' && outcome.status !== 'interrupted') {
-      setAgentState('idle');
-    }
-  }, []);
+  /** Speak the FULL response via sentence queue — never truncate to "Hi". */
+  const speakReply = useCallback(
+    async (text: string, opts?: { interrupt?: boolean }) => {
+      if (!text.trim()) return;
+      setPhaseSafe('speaking');
+      const outcome = await speakJarvis(text, {
+        preferMale: true,
+        rate: 0.9,
+        // Default: append after any in-flight progress ("I'm checking Gmail…")
+        interrupt: opts?.interrupt === true,
+        onStart: () => setPhaseSafe('speaking'),
+        onEnd: () => setPhaseSafe('sleeping'),
+        onError: () => setPhaseSafe('sleeping'),
+      });
+      if (outcome.status === 'blocked') {
+        setSpeechBlocked(true);
+        setPendingSpeechText(text);
+        setPhaseSafe('sleeping');
+      } else if (outcome.status !== 'completed' && outcome.status !== 'interrupted') {
+        setPhaseSafe(outcome.status === 'error' ? 'error' : 'sleeping');
+      }
+    },
+    [setPhaseSafe]
+  );
 
   const sendPrompt = useCallback(
     async (message: string) => {
       const trimmed = message.trim();
       if (!trimmed || busy) return;
 
-      // Interrupt any current speech before a new turn
-      interruptSpeech();
+      // New user request may interrupt speech — explicit NEW_REQUEST cancel
+      interruptJarvisVoice('NEW_REQUEST');
 
       if (isStopCommand(trimmed)) {
         abortRef.current?.abort();
         setBusy(false);
         setStatusCustom(null);
-        setAgentState('idle');
+        setPhaseSafe('sleeping');
         return;
       }
 
@@ -257,9 +276,9 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
 
       setTurns((t) => [...t, { role: 'user', content: trimmed }]);
       setBusy(true);
-      setAgentState('thinking');
-      setStatusCustom('Understanding…');
+      setPhaseSafe('processing', 'Understanding…');
       setActiveTool(null);
+      jarvisLog('AGENT_START', trimmed.slice(0, 100));
 
       const controller = new AbortController();
       abortRef.current = controller;
@@ -271,7 +290,7 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
           onEvent: (event) => {
             if (event.type === 'status') {
               setStatusCustom(event.message);
-              setAgentState('thinking');
+              setPhaseSafe('processing', event.message);
             }
             if (event.type === 'token') {
               assistantBuffer += event.text;
@@ -288,9 +307,13 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
             }
             if (event.type === 'tool_start') {
               setActiveTool({ tool: event.tool, action: event.action });
-              setStatusCustom(jarvisToolNarration(event.tool, event.action));
-              setAgentState('tool');
-              // UI-only status — do NOT speak tool narration (it was canceling full replies mid-sentence).
+              const narrate = jarvisToolNarration(event.tool, event.action);
+              setStatusCustom(narrate);
+              setPhaseSafe('processing', narrate);
+              jarvisLog('TOOL', `${event.tool}.${event.action}`);
+              // Speak short progress without killing the eventual full reply:
+              // queue a brief status only if nothing is mid-reply yet (interrupt:false appends after).
+              void speakJarvis(narrate, { preferMale: true, rate: 0.92, interrupt: false });
             }
             if (event.type === 'tool_result') {
               setStatusCustom(humanToolResult(event.tool, event.action, event.ok, event.error));
@@ -298,7 +321,7 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
             }
             if (event.type === 'error') {
               setStatusCustom(event.message);
-              setAgentState('error');
+              setPhaseSafe('error', event.message);
             }
             if (event.type === 'done') {
               const reply = event.result.reply || assistantBuffer;
@@ -312,8 +335,9 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
                 }
                 return next;
               });
+              jarvisLog('AGENT_END', { len: reply?.length || 0 });
               if (reply) void speakReply(reply);
-              else setAgentState('idle');
+              else setPhaseSafe('sleeping');
             }
             if (event.type === 'conversation' || (event.type === 'done' && event.result.conversationId)) {
               const id =
@@ -346,16 +370,17 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
       } catch (err) {
         if ((err as Error).name !== 'AbortError') {
           setStatusCustom((err as Error).message || 'Request failed');
-          setAgentState('error');
+          setPhaseSafe('error', (err as Error).message || 'Request failed');
         }
       } finally {
         setBusy(false);
         setStatusCustom(null);
         abortRef.current = null;
-        setAgentState((s) => (s === 'speaking' ? s : s === 'error' ? s : 'idle'));
+        // Keep speaking phase if TTS is still draining
+        setPhase((p) => (p === 'speaking' || p === 'error' ? p : 'sleeping'));
       }
     },
-    [busy, interruptSpeech, mode, speakReply]
+    [busy, mode, speakReply, setPhaseSafe]
   );
   sendPromptRef.current = sendPrompt;
 
@@ -405,29 +430,28 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
     markAutoSpeakAttempted(userId);
 
     (async () => {
-      setAgentState('speaking');
+      setPhaseSafe('speaking');
       const outcome = await speakJarvis(built.spokenText, {
         preferMale: true,
         rate: 0.9,
         interrupt: true,
         onStart: () => {
-          setAgentState('speaking');
-          // Mark spoken once audio actually begins (session guard) — not merely on text create
+          setPhaseSafe('speaking');
           markGreetingSpoken(userId, storage);
           setSpeechBlocked(false);
           setPendingSpeechText(null);
         },
-        onEnd: () => setAgentState('idle'),
-        onError: () => setAgentState('idle'),
+        onEnd: () => setPhaseSafe('sleeping'),
+        onError: () => setPhaseSafe('sleeping'),
       });
 
       if (outcome.status === 'completed') {
-        // already marked on start
+        // marked on start
       } else if (outcome.status === 'interrupted') {
-        setAgentState('idle');
+        setPhaseSafe('sleeping');
       } else {
-        setSpeechBlocked(outcome.status !== 'empty' && outcome.status !== 'muted');
-        setAgentState('idle');
+        setSpeechBlocked(outcome.status !== 'empty');
+        setPhaseSafe('sleeping');
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -437,13 +461,13 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
     const text = pendingSpeechText || greeting?.spokenText;
     if (!text || !userId) return;
     setSpeechBlocked(false);
-    setAgentState('speaking');
+    setPhaseSafe('speaking');
     const outcome = await enableAndSpeak(text, {
       preferMale: true,
       rate: 0.9,
-      onStart: () => setAgentState('speaking'),
-      onEnd: () => setAgentState('idle'),
-      onError: () => setAgentState('idle'),
+      onStart: () => setPhaseSafe('speaking'),
+      onEnd: () => setPhaseSafe('sleeping'),
+      onError: () => setPhaseSafe('sleeping'),
     });
     if (outcome.status === 'completed' || outcome.status === 'started') {
       markGreetingSpoken(userId, sessionStorageOrNull());
@@ -451,9 +475,9 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
       setSpeechBlocked(false);
     } else if (outcome.status !== 'interrupted') {
       setSpeechBlocked(true);
-      setAgentState('idle');
+      setPhaseSafe('sleeping');
     }
-  }, [pendingSpeechText, greeting, userId]);
+  }, [pendingSpeechText, greeting, userId, setPhaseSafe]);
 
   const dismissWelcome = useCallback(() => {
     setShowWelcome(false);
@@ -481,39 +505,55 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
     }
     recognitionRef.current = null;
     setMicActive(false);
+    jarvisLog('LISTEN_END');
+    jarvisLog('MIC', 'OFF');
+    setPhase((p) => (p === 'listening' || p === 'waking' ? 'sleeping' : p));
     setAgentState((s) => (s === 'listening' ? 'idle' : s));
   }, []);
 
   const toggleMic = useCallback(() => {
+    if (micMutedRef.current) {
+      setStatusCustom('Microphone is muted. Unmute to speak.');
+      return;
+    }
     const Ctor = getSpeechRecognitionCtor();
     if (!Ctor) {
-      setStatusCustom('Voice input is not supported in this browser.');
+      setStatusCustom("Voice input isn't supported in this browser. Try Chrome or Edge, or type your request.");
       return;
     }
     if (micActive) {
       stopMic();
       return;
     }
-    interruptSpeech();
+    // Mic barge-in: stop speaking, then listen
+    interruptJarvisVoice('USER_STOP');
     const recognition = new Ctor();
     recognition.continuous = false;
     recognition.interimResults = true;
     recognition.lang = typeof navigator !== 'undefined' ? navigator.language || 'en-IN' : 'en-IN';
     recognition.onstart = () => {
       setMicActive(true);
-      setAgentState('listening');
+      setPhaseSafe('listening', 'Listening…');
       setMode((m) => (m === 'orb' ? 'voice' : m));
-      setStatusCustom('Listening…');
+      jarvisLog('LISTEN_START');
+      jarvisLog('MIC', 'ON');
     };
-    recognition.onerror = () => {
+    recognition.onerror = (event: any) => {
       setMicActive(false);
-      setAgentState('idle');
       recognitionRef.current = null;
+      jarvisLog('MIC', 'OFF');
+      const code = String(event?.error || '');
+      if (code === 'not-allowed' || code === 'service-not-allowed') {
+        setPhaseSafe('error', "I can't access your microphone. You can type your request instead.");
+      } else {
+        setPhaseSafe('sleeping');
+      }
     };
     recognition.onend = () => {
       setMicActive(false);
       recognitionRef.current = null;
-      setAgentState((s) => (s === 'listening' ? 'idle' : s));
+      jarvisLog('MIC', 'OFF');
+      setPhase((p) => (p === 'listening' ? 'sleeping' : p));
     };
     recognition.onresult = (event: any) => {
       let transcript = '';
@@ -523,25 +563,42 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
       transcript = transcript.trim();
       if (!transcript) return;
       const final = event.results[event.results.length - 1]?.isFinal;
-      if (final) {
-        if (isStopCommand(transcript)) {
-          interruptSpeech();
-          abortRef.current?.abort();
-          setAgentState('idle');
-          return;
-        }
-        const command = stripWakePhrase(transcript) || transcript;
-        void sendPromptRef.current(command);
+      if (!final) return;
+      jarvisLog('TRANSCRIPT_FINAL', transcript.slice(0, 120));
+      if (isStopCommand(transcript)) {
+        interruptJarvisVoice('USER_STOP');
+        abortRef.current?.abort();
+        setPhaseSafe('sleeping');
+        return;
       }
+      if (isWakeOnly(transcript) || (matchesWakePhrase(transcript) && !stripWakePhrase(transcript))) {
+        setPhaseSafe('waking');
+        void speakJarvis('Yes?', {
+          preferMale: true,
+          rate: 0.92,
+          interrupt: true,
+          onEnd: () => {
+            // Continue listening for the actual request
+            window.setTimeout(() => {
+              if (!micMutedRef.current) toggleMicRef.current?.();
+            }, 200);
+          },
+        });
+        return;
+      }
+      const command = stripWakePhrase(transcript) || transcript;
+      void sendPromptRef.current(command);
     };
     recognitionRef.current = recognition;
     try {
       recognition.start();
     } catch {
       setMicActive(false);
-      setStatusCustom('Could not start microphone. Check browser permission.');
+      setPhaseSafe('error', 'Could not start microphone. Check browser permission.');
     }
-  }, [interruptSpeech, micActive, stopMic]);
+  }, [micActive, stopMic, setPhaseSafe]);
+
+  toggleMicRef.current = toggleMic;
 
   const toggleWake = useCallback(() => {
     setWakeEnabled((prev) => {
@@ -563,9 +620,9 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  // Wake phrase — only when explicitly enabled; continuous listen with user consent
+  // Wake phrase — opt-in only. Browsers cannot do true OS-level wake with mic fully off.
   useEffect(() => {
-    if (!wakeEnabled) return;
+    if (!wakeEnabled || micMuted) return;
     const Ctor = getSpeechRecognitionCtor();
     if (!Ctor) return;
 
@@ -588,14 +645,23 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
         }
         const final = event.results[event.results.length - 1]?.isFinal;
         if (!final) return;
+        if (micMutedRef.current) return;
         if (!matchesWakePhrase(transcript)) return;
+        jarvisLog('WAKE_DETECTED', transcript.slice(0, 80));
         const command = stripWakePhrase(transcript);
         setMode('voice');
-        setAgentState('listening');
+        setPhaseSafe('waking');
         if (command) {
           void sendPromptRef.current(command);
         } else {
-          toggleMic();
+          void speakJarvis('Yes?', {
+            preferMale: true,
+            rate: 0.92,
+            interrupt: true,
+            onEnd: () => {
+              if (!micMutedRef.current) toggleMicRef.current?.();
+            },
+          });
         }
       };
       rec.onend = () => {
@@ -622,7 +688,7 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
       }
       wakeRef.current = null;
     };
-  }, [wakeEnabled, micActive, busy, toggleMic]);
+  }, [wakeEnabled, micActive, busy, micMuted, setPhaseSafe]);
 
   // Global hotkey ⌘/Ctrl+J
   useEffect(() => {
@@ -666,12 +732,13 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
       pendingSpeechText,
       agentState,
       setAgentState,
+      phase,
       mode,
       setMode,
       statusLine,
       busy,
-      voiceMuted,
-      setVoiceMuted,
+      micMuted,
+      setMicMuted,
       enableVoice,
       dismissWelcome,
       runSuggestion,
@@ -688,11 +755,12 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
       speechBlocked,
       pendingSpeechText,
       agentState,
+      phase,
       mode,
       statusLine,
       busy,
-      voiceMuted,
-      setVoiceMuted,
+      micMuted,
+      setMicMuted,
       enableVoice,
       dismissWelcome,
       runSuggestion,
@@ -714,6 +782,7 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
         speechBlocked={speechBlocked}
         wakeEnabled={wakeEnabled}
         micActive={micActive}
+        micMuted={micMuted}
         busy={busy}
         turns={turns}
         onSetMode={(m) => {
@@ -729,8 +798,7 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
         }}
         onEnableVoice={() => void enableVoice()}
         onToggleMic={toggleMic}
-        voiceMuted={voiceMuted}
-        onToggleMute={() => setVoiceMuted(!voiceMuted)}
+        onToggleMicMute={() => setMicMuted(!micMuted)}
         onInterrupt={interruptSpeech}
         onSend={(t) => void sendPrompt(t)}
         onSuggestion={runSuggestion}
@@ -740,25 +808,20 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
   );
 }
 
-function speakableLead(text: string): string {
-  const plain = text.replace(/\s+/g, ' ').trim();
-  const sentence = plain.split(/(?<=[.!?])\s+/)[0];
-  return (sentence || plain).slice(0, 180);
-}
-
 export function useJarvis(): JarvisContextValue | null {
   return useContext(JarvisCtx);
 }
 
 /** Call on logout so the next login can greet again. */
 export function resetJarvisSessionGuards() {
-  interruptJarvisVoice();
+  interruptJarvisVoice('SYSTEM_RESET');
   clearAutoSpeakAttempts();
   try {
     window.sessionStorage.removeItem(GREETING_SESSION_KEY);
     window.sessionStorage.removeItem(PENDING_PROMPT_KEY);
     window.sessionStorage.removeItem(WELCOME_DISMISSED_KEY);
     window.sessionStorage.removeItem(WAKE_ENABLED_KEY);
+    window.sessionStorage.removeItem('nexora.jarvis.micMuted');
     window.sessionStorage.removeItem('nexora.jarvis.voiceMuted');
   } catch {
     // ignore

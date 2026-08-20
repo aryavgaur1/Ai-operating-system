@@ -1,6 +1,5 @@
 /**
  * Jarvis TTS facade — delegates to the centralized voice controller.
- * Keep imports stable for existing callers/tests.
  */
 
 export {
@@ -16,8 +15,11 @@ export {
   isJarvisVoiceMuted,
   isJarvisSpeaking,
   getSpeakGeneration,
+  splitIntoSpeechChunks,
+  prepareSpeakableText,
   __resetJarvisVoiceForTests,
   type VoiceSpeakOptions as SpeakOptions,
   type VoiceSpeakResult as SpeakOutcome,
   type VoiceSpeakStatus as SpeakStatus,
+  type CancelReason,
 } from '@/lib/jarvisVoiceController';

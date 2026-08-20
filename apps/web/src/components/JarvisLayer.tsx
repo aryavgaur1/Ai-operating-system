@@ -4,7 +4,6 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   BarChart3,
   ClipboardList,
-  ChevronDown,
   Mail,
   Mic,
   MicOff,
@@ -13,6 +12,7 @@ import {
   Square,
   Volume2,
   VolumeX,
+  X,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { NexoraAgentState } from '@/components/NexoraPresence';
@@ -118,13 +118,13 @@ export function JarvisLayer({
   speechBlocked,
   wakeEnabled,
   micActive,
+  micMuted,
   busy,
   turns,
-  voiceMuted,
   onSetMode,
   onEnableVoice,
   onToggleMic,
-  onToggleMute,
+  onToggleMicMute,
   onInterrupt,
   onSend,
   onSuggestion,
@@ -138,13 +138,13 @@ export function JarvisLayer({
   speechBlocked: boolean;
   wakeEnabled: boolean;
   micActive: boolean;
+  micMuted: boolean;
   busy: boolean;
   turns: MiniTurn[];
-  voiceMuted: boolean;
   onSetMode: (m: JarvisUiMode) => void;
   onEnableVoice: () => void;
   onToggleMic: () => void;
-  onToggleMute: () => void;
+  onToggleMicMute: () => void;
   onInterrupt: () => void;
   onSend: (text: string) => void;
   onSuggestion: (prompt: string) => void;
@@ -177,7 +177,7 @@ export function JarvisLayer({
           onClick={() => onSetMode('expanded')}
           className="pointer-events-auto rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
         >
-          <JarvisOrbCore state={agentState} size="sm" muted={voiceMuted} />
+          <JarvisOrbCore state={agentState} size="sm" muted={micMuted} />
         </button>
       </div>
     );
@@ -276,16 +276,16 @@ export function JarvisLayer({
           </div>
 
           <div className="flex flex-col items-center justify-center py-2">
-            <JarvisOrbCore state={agentState} size={panelWide ? 'lg' : 'md'} muted={voiceMuted} />
+            <JarvisOrbCore state={agentState} size={panelWide ? 'lg' : 'md'} muted={micMuted} />
             <div className="mt-3 text-sm text-[#9ec0ff]">{statusLine}</div>
             {agentState === 'speaking' ? (
               <button
                 type="button"
                 aria-label="Stop speaking"
                 onClick={onInterrupt}
-                className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-white/15 px-3 py-1 text-xs text-neutral-300 hover:bg-white/5"
+                className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-white/15 px-3.5 py-1.5 text-xs text-neutral-200 hover:bg-white/5"
               >
-                <Square size={10} /> Stop
+                <Square size={10} /> Stop speaking
               </button>
             ) : null}
           </div>
@@ -307,7 +307,7 @@ export function JarvisLayer({
               onClick={onToggleMic}
               aria-label={micActive ? 'Stop listening' : 'Start listening'}
               className={cn(
-                'flex h-9 w-9 shrink-0 items-center justify-center rounded-full',
+                'flex h-10 min-w-[2.5rem] shrink-0 items-center justify-center gap-1 rounded-full px-2',
                 micActive ? 'bg-rose-500/20 text-rose-300' : 'text-neutral-400 hover:bg-white/5 hover:text-white'
               )}
             >
@@ -315,15 +315,15 @@ export function JarvisLayer({
             </button>
             <button
               type="button"
-              onClick={onToggleMute}
-              aria-label={voiceMuted ? 'Unmute Jarvis' : 'Mute Jarvis'}
-              title={voiceMuted ? 'Unmute voice output' : 'Mute voice output (mic still works)'}
+              onClick={onToggleMicMute}
+              aria-label={micMuted ? 'Unmute microphone' : 'Mute microphone'}
+              title={micMuted ? 'Unmute microphone' : 'Mute microphone (does not stop speaking)'}
               className={cn(
-                'flex h-9 w-9 shrink-0 items-center justify-center rounded-full',
-                voiceMuted ? 'bg-white/10 text-neutral-400' : 'text-[#8eb6ff] hover:bg-white/5'
+                'flex h-10 min-w-[2.5rem] shrink-0 items-center justify-center rounded-full',
+                micMuted ? 'bg-white/10 text-neutral-400' : 'text-[#8eb6ff] hover:bg-white/5'
               )}
             >
-              {voiceMuted ? <VolumeX size={16} /> : <Volume2 size={16} />}
+              {micMuted ? <MicOff size={16} /> : <Volume2 size={16} />}
             </button>
             <input
               ref={inputRef}
@@ -349,20 +349,20 @@ export function JarvisLayer({
                 onChange={onToggleWake}
                 className="rounded border-white/20 bg-transparent"
               />
-              Wake phrase “Hey Nexora” (opt-in)
+              Wake “Hey Jarvis” (keeps mic listening — opt-in)
             </label>
             <span className="hidden text-[10px] text-neutral-600 sm:inline">⌘/Ctrl + J</span>
           </div>
         </div>
 
-        <div className="flex justify-center pb-3">
+        <div className="flex justify-center gap-3 pb-4 pt-1">
           <button
             type="button"
             aria-label="Close Jarvis"
             onClick={() => onSetMode('orb')}
-            className="flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-white/5 text-neutral-400 hover:text-white"
+            className="inline-flex h-11 min-w-[7.5rem] items-center justify-center gap-2 rounded-full border border-white/15 bg-white/8 px-5 text-sm font-medium text-white hover:bg-white/12"
           >
-            <ChevronDown size={16} />
+            <X size={18} /> Close
           </button>
         </div>
       </div>
