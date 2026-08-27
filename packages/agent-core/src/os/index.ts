@@ -58,6 +58,11 @@ export {
   isSlackSoftReadQuery,
   expandGmailFollowUp,
   jiraSearchFlags,
+  isWorkPulseQuery,
+  workPulseRouteHint,
+  isNotionDocQuery,
+  isCrossToolSlackJiraQuery,
+  impliesLiveWorkspaceData,
 } from './workAssistantIntent';
 export type { GmailSearchMemory } from './workAssistantIntent';
 export {

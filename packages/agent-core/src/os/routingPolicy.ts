@@ -33,6 +33,11 @@ import {
   isJiraReadQuery,
   isSlackSoftReadQuery,
   jiraSearchFlags,
+  isWorkPulseQuery,
+  workPulseRouteHint,
+  isNotionDocQuery,
+  isCrossToolSlackJiraQuery,
+  impliesLiveWorkspaceData,
 } from './workAssistantIntent';
 
 /**
@@ -147,6 +152,15 @@ export function detectRequestMode(query: string): RequestMode {
   if (isSlackSoftReadQuery(query)) {
     return 'execute';
   }
+  if (isWorkPulseQuery(query)) {
+    return 'execute';
+  }
+  if (isNotionDocQuery(query)) {
+    return 'execute';
+  }
+  if (isCrossToolSlackJiraQuery(query)) {
+    return 'execute';
+  }
   if (/\?/.test(query) && !/\b(create|open|post|send|delete|update|launch)\b/i.test(query)) {
     return 'question';
   }
@@ -210,8 +224,8 @@ function destinations(query: string): { jira: boolean; slack: boolean; notion: b
     isSlackSoftReadQuery(query) ||
     /\b(war\s*room|launch\s+war)\b/.test(t);
 
-  // Notion destination only via explicit Notion command (already yields to Slack/Jira dest)
-  const notion = !slack && isExplicitNotionCommand(query);
+  // Notion destination — explicit command or documentation search
+  const notion = !slack && (isExplicitNotionCommand(query) || isNotionDocQuery(query));
 
   const jira =
     !slack &&
@@ -219,6 +233,7 @@ function destinations(query: string): { jira: boolean; slack: boolean; notion: b
     (isExplicitJiraCreate(query) ||
       isExplicitJiraDelete(query) ||
       isJiraReadQuery(query) ||
+      (isWorkPulseQuery(query) && workPulseRouteHint(query) === 'jira') ||
       (/\bjira\b/.test(t) &&
         /\b(create|open|file|log|track|update|delete|transition|assign|comment|ticket|issue|search|find|show|list|pending|overdue)\b/.test(
           t
@@ -226,7 +241,13 @@ function destinations(query: string): { jira: boolean; slack: boolean; notion: b
       (/\b(ticket|issue)\b/.test(t) && !/\b(slack|notion|channel|war\s*room|page|doc|message)\b/.test(t)));
 
   // Gmail destination — explicit email/gmail language not claimed by other systems
-  const gmail = !slack && !notion && !jira && (isGmailDestinationQuery(query) || isGmailSoftReadQuery(query));
+  const gmail =
+    !slack &&
+    !notion &&
+    !jira &&
+    (isGmailDestinationQuery(query) ||
+      isGmailSoftReadQuery(query) ||
+      (isWorkPulseQuery(query) && workPulseRouteHint(query) === 'gmail_read'));
 
   return { jira, slack, notion, gmail };
 }
@@ -353,6 +374,67 @@ export function resolveAuthoritativeRoute(query: string): AuthoritativeRoute {
         rationale: 'Slack soft-read question',
       };
     }
+    if (isWorkPulseQuery(query)) {
+      const hint = workPulseRouteHint(query);
+      if (hint === 'gmail_read') {
+        return {
+          mode: 'execute',
+          family: 'gmail_read',
+          osIntent: { ...osIntent, kind: 'simple_action', confidence: 0.92, rationale: 'Work pulse → Gmail important', legacyIntent: 'action' },
+          lockedTool: 'gmail',
+          lockedAction: 'searchEmails',
+          routeAction: 'search',
+          entities,
+          confidence: 0.92,
+          ambiguous: false,
+          allowWorkflow: false,
+          rationale: 'Work pulse locked to gmail.searchEmails',
+        };
+      }
+      if (hint === 'jira') {
+        return {
+          mode: 'execute',
+          family: 'jira',
+          osIntent: { ...osIntent, kind: 'simple_action', confidence: 0.92, rationale: 'Work pulse → Jira tasks', legacyIntent: 'action' },
+          lockedTool: 'jira',
+          lockedAction: 'searchIssues',
+          routeAction: 'search',
+          entities,
+          confidence: 0.92,
+          ambiguous: false,
+          allowWorkflow: false,
+          rationale: 'Work pulse locked to jira.searchIssues',
+        };
+      }
+      return {
+        mode: 'execute',
+        family: 'slack_read',
+        osIntent: { ...osIntent, kind: 'workspace_intelligence', confidence: 0.91, rationale: 'Work pulse → Slack', legacyIntent: 'read' },
+        lockedTool: 'slack',
+        lockedAction: null,
+        routeAction: 'read',
+        entities,
+        confidence: 0.91,
+        ambiguous: false,
+        allowWorkflow: true,
+        rationale: 'Work pulse locked to Slack intelligence',
+      };
+    }
+    if (isNotionDocQuery(query)) {
+      return {
+        mode: 'execute',
+        family: 'notion',
+        osIntent: { ...osIntent, kind: 'simple_action', confidence: 0.93, rationale: 'Documentation search → Notion', legacyIntent: 'action' },
+        lockedTool: 'notion',
+        lockedAction: 'searchPages',
+        routeAction: 'search',
+        entities,
+        confidence: 0.93,
+        ambiguous: false,
+        allowWorkflow: false,
+        rationale: 'Locked notion.searchPages',
+      };
+    }
     return {
       mode: mode === 'question' ? 'clarify' : mode,
       family: 'meta',
@@ -394,6 +476,29 @@ export function resolveAuthoritativeRoute(query: string): AuthoritativeRoute {
   }
 
   // --- Hard locks (highest priority) — beat all workflows ---
+  // Cross-tool: search Slack for context, then prepare Jira ticket (approval-gated create)
+  if (isCrossToolSlackJiraQuery(query)) {
+    return {
+      mode: 'execute',
+      family: 'incident',
+      osIntent: {
+        ...osIntent,
+        kind: 'workspace_intelligence',
+        confidence: 0.94,
+        rationale: 'Cross-tool Slack search → Jira create',
+        legacyIntent: 'action',
+      },
+      lockedTool: null,
+      lockedAction: null,
+      routeAction: 'create',
+      entities,
+      confidence: 0.94,
+      ambiguous: false,
+      allowWorkflow: true,
+      rationale: 'Cross-tool Slack→Jira workflow',
+    };
+  }
+
   if (isExplicitJiraDelete(query)) {
     return {
       mode: 'execute',
@@ -556,6 +661,70 @@ export function resolveAuthoritativeRoute(query: string): AuthoritativeRoute {
       ambiguous: false,
       allowWorkflow: false,
       rationale: 'Locked jira.searchIssues',
+    };
+  }
+
+  // Work-priority questions → real connector (not generic LLM)
+  if (isWorkPulseQuery(query)) {
+    const hint = workPulseRouteHint(query);
+    if (hint === 'gmail_read') {
+      return {
+        mode: 'execute',
+        family: 'gmail_read',
+        osIntent: { ...osIntent, kind: 'simple_action', confidence: 0.92, rationale: 'Work pulse → Gmail', legacyIntent: 'action' },
+        lockedTool: 'gmail',
+        lockedAction: 'searchEmails',
+        routeAction: 'search',
+        entities,
+        confidence: 0.92,
+        ambiguous: false,
+        allowWorkflow: false,
+        rationale: 'Work pulse → gmail.searchEmails',
+      };
+    }
+    if (hint === 'jira') {
+      return {
+        mode: 'execute',
+        family: 'jira',
+        osIntent: { ...osIntent, kind: 'simple_action', confidence: 0.92, rationale: 'Work pulse → Jira', legacyIntent: 'action' },
+        lockedTool: 'jira',
+        lockedAction: 'searchIssues',
+        routeAction: 'search',
+        entities,
+        confidence: 0.92,
+        ambiguous: false,
+        allowWorkflow: false,
+        rationale: 'Work pulse → jira.searchIssues',
+      };
+    }
+    return {
+      mode: 'execute',
+      family: 'slack_read',
+      osIntent: { ...osIntent, kind: 'workspace_intelligence', confidence: 0.91, rationale: 'Work pulse → Slack', legacyIntent: 'read' },
+      lockedTool: 'slack',
+      lockedAction: null,
+      routeAction: 'read',
+      entities,
+      confidence: 0.91,
+      ambiguous: false,
+      allowWorkflow: true,
+      rationale: 'Work pulse → Slack intelligence',
+    };
+  }
+
+  if (isNotionDocQuery(query)) {
+    return {
+      mode: 'execute',
+      family: 'notion',
+      osIntent: { ...osIntent, kind: 'simple_action', confidence: 0.93, rationale: 'Documentation search', legacyIntent: 'action' },
+      lockedTool: 'notion',
+      lockedAction: 'searchPages',
+      routeAction: 'search',
+      entities,
+      confidence: 0.93,
+      ambiguous: false,
+      allowWorkflow: false,
+      rationale: 'Locked notion.searchPages',
     };
   }
 
@@ -898,6 +1067,20 @@ export function toolCallFromRoute(route: AuthoritativeRoute, query: string): Too
         ...flags,
         limit: 10,
       },
+      riskLevel: 'low',
+      requiresApproval: false,
+    };
+  }
+
+  if (route.lockedTool === 'notion' && route.lockedAction === 'searchPages') {
+    const topic =
+      query.match(/\b(?:about|for|on|regarding)\s+(.+?)(?:\.|$|\?)/i)?.[1]?.trim() ||
+      query.replace(/\b(find|search|show|get|latest|the|project|documentation|docs?)\b/gi, ' ').replace(/\s+/g, ' ').trim().slice(0, 80) ||
+      query.slice(0, 80);
+    return {
+      tool: 'notion',
+      action: 'searchPages',
+      input: { query: topic },
       riskLevel: 'low',
       requiresApproval: false,
     };

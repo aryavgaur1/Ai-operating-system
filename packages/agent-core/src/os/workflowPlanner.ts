@@ -5,6 +5,7 @@ import {
   DEFAULT_APPROVAL_POLICY,
 } from '@enterprise-ai-os/shared';
 import { resolveNotionCreateBody } from '../notionContent';
+import { isCrossToolSlackJiraQuery } from './workAssistantIntent';
 
 // ============================================================
 // STEP 2 — Workflow Planner
@@ -47,6 +48,25 @@ export function planWorkflow(query: string, intent: OsIntent): WorkflowPlan {
   ];
   const planSteps: string[] = [];
   const toolCalls: ToolCall[] = [];
+
+  if (isCrossToolSlackJiraQuery(query)) {
+    const summary =
+      query.match(/["“]([^"”]+)["”]/)?.[1]?.trim() ||
+      query.replace(/\b(find|search|latest|slack|jira|create|ticket|issue|bug|for|the|a|an)\b/gi, ' ').replace(/\s+/g, ' ').trim().slice(0, 100) ||
+      'Issue from Slack';
+    planSteps.push('Search Slack for the relevant issue or discussion', 'Prepare Jira ticket from findings (approval if required)');
+    reasoning.push('Cross-tool: Slack semantic search first, then Jira createIssue.');
+    toolCalls.push(
+      call('slack', 'semanticSearch', { query }),
+      call('jira', 'createIssue', {
+        summary: summary.slice(0, 255),
+        description: `Created from Slack context.\n\nUser request:\n${query}`,
+        issueType: 'Bug',
+      })
+    );
+    return { reasoning, planSteps, toolCalls };
+  }
+
   const project = intent.entities.project || 'project';
 
   switch (intent.kind) {

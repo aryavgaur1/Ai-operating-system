@@ -4,6 +4,7 @@ import { createLLMClient, type LLMMessage } from '../llmClient';
 import { runAgentTurn } from '../orchestrator';
 import { recall, listRecentMemory } from '../os/threadMemory';
 import { detectOsIntent, isExplicitSlackCommand, isExplicitNotionCommand } from '../os/intentDetector';
+import { impliesLiveWorkspaceData } from '../os/workAssistantIntent';
 import { getConnectorContext, hasSlackTokenInContext, hasNotionTokenInContext, hasJiraTokenInContext, hasGmailTokenInContext } from '@enterprise-ai-os/connectors';
 
 // ============================================================
@@ -54,14 +55,14 @@ const GENERAL_SYSTEM = `You are Nexora AI — a universal assistant inside Nexor
 You combine:
 1) General intelligence (explain, write, code, debug, plan, analyze, translate, brainstorm)
 2) Nexora product expertise when asked about the product
-3) Real workspace tools (Slack, Notion, Jira) when the user asks to act on connected apps — but THIS turn may be answer-only; do not invent tool results.
+3) Real workspace tools (Gmail, Slack, Notion, Jira) for live work data and actions
 
 Rules:
 - Be clear, accurate, and production-oriented.
 - For coding: prefer correct, complete snippets with language fences.
-- Never claim you created/posted/saved something unless a tool result is provided in context.
+- NEVER claim you checked email, Slack, Jira, Notion, or sent/posted/created anything unless a tool result is in the context pack.
+- If the user asks about live workspace data (email, tasks, Slack, docs) and no tool result is provided, say you need to run the connected tool — do not invent counts, names, or IDs.
 - Never invent current news or live prices; if web search context is missing, say so.
-- Distinguish sources: model knowledge vs retrieved workspace vs product docs vs web.
 - Respect multi-tenant isolation: only reason about the user's provided context.
 - Keep markdown readable (headings, lists, code blocks).`;
 
@@ -74,6 +75,7 @@ Do not invent pricing or features not in the knowledge context.`;
 
 export function wantsWorkspaceTools(message: string): boolean {
   const q = message.trim();
+  if (impliesLiveWorkspaceData(q)) return true;
   if (isExplicitSlackCommand(q) || isExplicitNotionCommand(q)) return true;
   const os = detectOsIntent(q);
   if (os.kind !== 'read_only') return true;
@@ -87,10 +89,14 @@ export function wantsWorkspaceTools(message: string): boolean {
   return false;
 }
 
-export function wantsProductKnowledge(message: string): boolean {
-  return /\b(nexora|ai os|approvals?|integrations?|oauth|what (?:is|does) (?:this|nexora)|pricing|enterprise plan)\b/i.test(
-    message
-  );
+/** Product/marketing knowledge — NOT operational “show my approvals” in authenticated chat. */
+export function wantsProductKnowledge(message: string, mode: NexoraTurnMode = 'authenticated'): boolean {
+  const q = message.trim();
+  if (mode === 'public_marketing') {
+    return /\b(nexora|ai os|integrations?|oauth|what (?:is|does) (?:this|nexora)|pricing|enterprise plan)\b/i.test(q);
+  }
+  // Authenticated: only explicit Nexora product questions — not work requests mentioning approvals
+  return /\b(what (?:is|does) nexora|how does nexora|nexora (?:pricing|plans?|features?|product)|enterprise plan)\b/i.test(q);
 }
 
 export function wantsWebSearch(message: string): boolean {
@@ -308,26 +314,23 @@ export async function runNexoraTurn(input: NexoraTurnInput): Promise<AgentTurnRe
       input.conversationId
     );
 
-    // If planner produced no tools and no approvals, fall through to general AI
-    if (result.executedCalls.length === 0 && result.pendingApprovalIds.length === 0) {
-      const weak =
-        !result.reply ||
-        /did not need a tool yet|I understood this as/i.test(result.reply) ||
-        result.plan.toolCalls.length === 0;
-      if (weak) {
-        const reply = await runGeneralIntelligence(input, pack.text);
-        return {
-          ...result,
-          reply,
-          plan: { ...result.plan, responseDraft: reply, reasoning: `${result.plan.reasoning}\nFell back to general intelligence.` },
-          sources: pack.sources,
-        };
-      }
-    }
     return { ...result, sources: [...pack.sources, 'workspace_tools'] };
   }
 
-  // Product knowledge for marketing or product questions
+  // Authenticated work-like queries must not silently use generic LLM when tools are unavailable
+  if (input.mode === 'authenticated' && impliesLiveWorkspaceData(input.message)) {
+    const reply =
+      `I need your connected workspace tools to answer that, but the tool engine isn't available right now. ` +
+      `Try again from Chat, or check Integrations for Gmail, Slack, Jira, and Notion.`;
+    return {
+      reply,
+      plan: emptyPlan(reply),
+      executedCalls: [],
+      pendingApprovalIds: [],
+      sources: pack.sources,
+    };
+  }
+
   const reply = await runGeneralIntelligence(input, pack.text);
   return {
     reply,
@@ -380,41 +383,29 @@ export async function* streamNexoraTurn(input: NexoraTurnInput): AsyncGenerator<
         yield { type: 'approval', ids: result.pendingApprovalIds };
       }
 
-      const weak =
-        result.executedCalls.length === 0 &&
-        result.pendingApprovalIds.length === 0 &&
-        (result.plan.toolCalls.length === 0 || /did not need a tool yet|I understood this as/i.test(result.reply));
-
-      if (weak) {
-        yield { type: 'status', message: 'Answering…' };
-        let reply = '';
-        for await (const delta of createLLMClient().stream([
-          { role: 'system', content: GENERAL_SYSTEM },
-          {
-            role: 'user',
-            content: `${pack.text ? `Context pack:\n${pack.text}\n\n` : ''}User message:\n${input.message}`,
-          },
-        ])) {
-          reply += delta;
-          yield { type: 'token', text: delta };
-        }
-        yield {
-          type: 'done',
-          result: {
-            ...result,
-            reply,
-            plan: { ...result.plan, responseDraft: reply },
-            sources: pack.sources,
-          },
-        };
-        return;
-      }
-
-      // Stream the composed tool reply as tokens for UX
+      // Stream the composed tool reply — never replace with generic LLM fiction
       for (const chunk of chunkText(result.reply, 48)) {
         yield { type: 'token', text: chunk };
       }
       yield { type: 'done', result: { ...result, sources: [...pack.sources, 'workspace_tools'] } };
+      return;
+    }
+
+    if (input.mode === 'authenticated' && impliesLiveWorkspaceData(input.message)) {
+      const reply =
+        `I need your connected workspace tools to answer that, but the tool engine isn't available right now. ` +
+        `Try again from Chat, or check Integrations for Gmail, Slack, Jira, and Notion.`;
+      yield { type: 'token', text: reply };
+      yield {
+        type: 'done',
+        result: {
+          reply,
+          plan: emptyPlan(reply),
+          executedCalls: [],
+          pendingApprovalIds: [],
+          sources: pack.sources,
+        },
+      };
       return;
     }
 

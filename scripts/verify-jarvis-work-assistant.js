@@ -44,15 +44,26 @@ const cases = [
   ['Do I have anything urgent from my manager?', 'gmail', 'searchEmails'],
   ['Create a Jira ticket for the login bug.', 'jira', 'createIssue'],
   ['Send this update to #engineering on slack', 'slack', null],
+  ["What's important today?", 'gmail', 'searchEmails'],
+  ['What should I work on first?', 'jira', 'searchIssues'],
+  ['Find the project documentation.', 'notion', 'searchPages'],
+  ['Find the latest project issue in Slack and create a Jira ticket.', null, null],
 ];
+
+const { impliesLiveWorkspaceData } = require('../packages/agent-core/dist/os/workAssistantIntent.js');
+assert(impliesLiveWorkspaceData("What's important today?"), 'work pulse implies live data');
+assert(impliesLiveWorkspaceData('Find the project documentation.'), 'notion doc implies live data');
 
 for (const [q, tool, action] of cases) {
   const r = resolveAuthoritativeRoute(q);
   assert(r.mode === 'execute', `${q} → execute (got ${r.mode})`);
-  assert(r.lockedTool === tool, `${q} → tool=${r.lockedTool} want ${tool}`);
+  if (tool) assert(r.lockedTool === tool, `${q} → tool=${r.lockedTool} want ${tool}`);
   if (action) assert(r.lockedAction === action, `${q} → action=${r.lockedAction} want ${action}`);
   const call = toolCallFromRoute(r, q);
   if (action) assert(call?.action === action, `${q} → toolCall ${call?.action}`);
+  if (q.includes('Slack and create a Jira')) {
+    assert(r.allowWorkflow === true, `${q} → cross-tool workflow`);
+  }
 }
 
 const overdue = toolCallFromRoute(resolveAuthoritativeRoute('Which tasks are overdue?'), 'Which tasks are overdue?');

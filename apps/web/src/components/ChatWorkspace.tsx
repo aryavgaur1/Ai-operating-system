@@ -35,7 +35,7 @@ import {
 } from '@/components/NexoraPresence';
 import { useJarvis } from '@/components/JarvisProvider';
 import { consumePendingJarvisPrompt } from '@/lib/jarvisGreeting';
-import { humanToolStart, humanToolResult } from '@/lib/humanizeTools';
+import { humanToolStart, humanToolResult, shouldSpeakAgentReply } from '@/lib/humanizeTools';
 
 const riskScore: Record<string, number> = { low: 24, medium: 58, high: 88 };
 const riskColor: Record<string, string> = { low: '#8be9d0', medium: '#f5b95d', high: '#fb7185' };
@@ -484,7 +484,7 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
               setConversationId(event.result.conversationId);
             }
             if (reply) {
-              if (!voiceMutedRef.current) {
+              if (!voiceMutedRef.current && shouldSpeakAgentReply(reply, event.result)) {
                 if (jarvis?.speakReply) void jarvis.speakReply(reply);
                 else window.dispatchEvent(new CustomEvent('nexora:jarvis-speak', { detail: reply }));
               } else {

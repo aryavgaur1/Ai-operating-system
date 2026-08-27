@@ -103,3 +103,15 @@ export function shouldAutoSpeakReply(reply: string): boolean {
   if (lines.length > 8) return false;
   return true;
 }
+
+/** Voice should narrate verified tool work — not generic LLM prose. */
+export function shouldSpeakAgentReply(
+  reply: string,
+  detail?: { executedCalls?: Array<{ ok?: boolean; mocked?: boolean }>; pendingApprovalIds?: string[] }
+): boolean {
+  if (!reply?.trim()) return false;
+  const executed = detail?.executedCalls?.filter((c) => c.ok && !c.mocked) ?? [];
+  const pending = detail?.pendingApprovalIds?.length ?? 0;
+  if (executed.length === 0 && pending === 0) return false;
+  return shouldAutoSpeakReply(reply);
+}

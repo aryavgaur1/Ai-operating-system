@@ -282,7 +282,7 @@ chatRouter.post(
     );
 
     let productKnowledge: string | undefined;
-    if (wantsProductKnowledge(message)) {
+    if (wantsProductKnowledge(message, 'authenticated')) {
       try {
         const matches = await retrieveMarketingContext(message, 4);
         if (matches.length) {

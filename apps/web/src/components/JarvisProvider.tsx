@@ -43,7 +43,7 @@ import {
 } from '@/lib/jarvisStatus';
 import { runJarvisTurn } from '@/lib/jarvisTurn';
 import { isStopCommand, isWakeOnly, matchesWakePhrase, stripWakePhrase } from '@/lib/jarvisWake';
-import { humanToolResult } from '@/lib/humanizeTools';
+import { humanToolResult, shouldSpeakAgentReply } from '@/lib/humanizeTools';
 import { jarvisLog } from '@/lib/jarvisLog';
 import { phaseStatusLabel, phaseToAgentState, type JarvisPhase } from '@/lib/jarvisPhase';
 
@@ -336,8 +336,8 @@ export function JarvisProvider({ children }: { children: ReactNode }) {
                 return next;
               });
               jarvisLog('AGENT_END', { len: reply?.length || 0 });
-              if (reply) void speakReply(reply);
-              else setPhaseSafe('sleeping');
+              if (reply && shouldSpeakAgentReply(reply, event.result)) void speakReply(reply);
+              else if (!reply) setPhaseSafe('sleeping');
             }
             if (event.type === 'conversation' || (event.type === 'done' && event.result.conversationId)) {
               const id =

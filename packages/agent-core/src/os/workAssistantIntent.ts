@@ -73,6 +73,93 @@ export function isSlackSoftReadQuery(query: string): boolean {
   return false;
 }
 
+/** Contextual work-priority questions — must hit real tools, not generic LLM. */
+export function isWorkPulseQuery(query: string): boolean {
+  const t = routingQuery(query).toLowerCase();
+  return (
+    /\b(what'?s|what is)\s+(important|urgent|priority)\b/.test(t) ||
+    /\banything\s+(urgent|important)\b/.test(t) ||
+    /\bwhat\s+should\s+i\s+(work\s+on|do|focus|prioritize|tackle)\b/.test(t) ||
+    /\b(what|anything)\s+(needs|needs?\s+my?\s+attention)\b/.test(t) ||
+    /\b(prioritize|priority)\s+(today|this\s+week|my\s+day|now)\b/.test(t) ||
+    (/\bimportant\b/.test(t) && /\b(today|this\s+morning|right\s+now)\b/.test(t))
+  );
+}
+
+/** Pick the best single-tool family for a work-priority question. */
+export function workPulseRouteHint(query: string): 'gmail_read' | 'jira' | 'slack_read' {
+  const t = routingQuery(query).toLowerCase();
+  if (/\b(email|mail|inbox|gmail)\b/.test(t)) return 'gmail_read';
+  if (/\b(jira|ticket|task|issue|work on|finish|pending|overdue|assigned)\b/.test(t)) return 'jira';
+  if (/\b(slack|team|engineering|channel|discussion)\b/.test(t)) return 'slack_read';
+  // Default: important email is the most common “what’s important today” ask
+  if (/\b(urgent|important|priority|attention)\b/.test(t)) return 'gmail_read';
+  return 'jira';
+}
+
+/** Documentation / knowledge search without saying “Notion”. */
+export function isNotionDocQuery(query: string): boolean {
+  const t = routingQuery(query).toLowerCase();
+  // Never treat create/update/delete as a doc search
+  if (/\b(create|make|new|update|edit|delete|archive|publish|write)\b/.test(t)) {
+    return false;
+  }
+  if (
+    /\bnotion\b/.test(t) &&
+    /\b(search|find|show|get|latest|look\s+for|where)\b/.test(t) &&
+    /\b(pages?|docs?|documents?|wiki|prd|project)\b/.test(t)
+  ) {
+    return true;
+  }
+  return (
+    /\b(find|search|show|get|latest|where\s+is|look\s+for)\b/.test(t) &&
+    /\b(documentation|docs?|wiki|prd|knowledge\s+base|project\s+(doc|documentation|plan|update|spec))\b/.test(t) &&
+    !/\b(gmail|email|jira|slack|ticket)\b/.test(t)
+  );
+}
+
+/** Slack search → Jira create cross-tool pattern. */
+export function isCrossToolSlackJiraQuery(query: string): boolean {
+  const t = routingQuery(query).toLowerCase();
+  const wantsJiraCreate =
+    /\b(create|open|file|log|track|make)\b/.test(t) && /\b(jira|ticket|issue|bug)\b/.test(t);
+  // Must be find/search Slack first — not "notify Slack" after a Jira create
+  const wantsSlackFind =
+    (/\b(find|search|look\s+for|latest|recent)\b/.test(t) &&
+      (/\bslack\b/.test(t) || isSlackSoftReadQuery(query))) ||
+    (/\b(find|search|look\s+for|latest|recent)\b/.test(t) &&
+      /\b(issue|problem|bug|discussion|conversation|update|customer)\b/.test(t) &&
+      /\bslack\b/.test(t));
+  // Explicit "and create a jira" after slack find
+  const andCreate =
+    /\b(and|,)\s*(then\s+)?(create|open|file|make)\b/.test(t) ||
+    /\bcreate\s+(a\s+)?(jira\s+)?(ticket|issue|bug)\b/.test(t);
+  if (!wantsJiraCreate || !wantsSlackFind || !andCreate) return false;
+  // Exclude notify/post/send as the Slack verb (write, not search)
+  if (/\b(notify|post|send|message)\b/.test(t) && !/\b(find|search|look\s+for)\b/.test(t)) return false;
+  return true;
+}
+
+/** Short follow-up that should reuse prior turn context (handled via memory / history). */
+export function isFollowUpContinuation(query: string): boolean {
+  const t = routingQuery(query).trim().toLowerCase();
+  return /^(do that|do it|yes\.?|go ahead|please do|that one|same thing|follow up)$/i.test(t);
+}
+
+/** Any query that implies live workspace data — never answer from generic LLM alone. */
+export function impliesLiveWorkspaceData(query: string): boolean {
+  return (
+    isGmailSoftReadQuery(query) ||
+    isGmailDestinationQuery(query) ||
+    isJiraReadQuery(query) ||
+    isSlackSoftReadQuery(query) ||
+    isWorkPulseQuery(query) ||
+    isNotionDocQuery(query) ||
+    isCrossToolSlackJiraQuery(query) ||
+    isFollowUpContinuation(query)
+  );
+}
+
 export type GmailSearchMemory = {
   query?: string;
   gmailQuery?: string;
