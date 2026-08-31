@@ -4,6 +4,7 @@ import { SmoothScroll } from '@/components/landing/SmoothScroll';
 import { MarketingNav } from '@/components/landing/MarketingNav';
 import { MarketingFooter } from '@/components/landing/MarketingFooter';
 import { ChatAssistant } from '@/components/landing/ChatAssistant';
+import { MARKETING_NAV_LINKS } from '@/lib/marketingNav';
 
 export function MarketingShell({
   children,
@@ -22,7 +23,7 @@ export function MarketingShell({
         <div className="absolute inset-0 bg-noise opacity-40" />
       </div>
 
-      <MarketingNav />
+      <MarketingNav links={MARKETING_NAV_LINKS.map((l) => ({ href: l.href, label: l.label }))} />
 
       {(title || subtitle) && (
         <section className="mx-auto max-w-7xl px-4 pb-8 pt-28 sm:px-6 sm:pt-32">
