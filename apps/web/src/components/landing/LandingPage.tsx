@@ -26,6 +26,7 @@ import { TestimonialsSlider } from '@/components/landing/TestimonialsSlider';
 import { AnalysisDashboard } from '@/components/landing/AnalysisDashboard';
 import { ChatAssistant } from '@/components/landing/ChatAssistant';
 import { FounderDesk } from '@/components/landing/FounderDesk';
+import { SectionExploreCta } from '@/components/landing/SectionExploreCta';
 import { cn } from '@/lib/utils';
 
 const INTEGRATIONS = LANDING_TOOLS.map((t) => t.name);
@@ -266,6 +267,7 @@ export function LandingPage() {
         <div className="mt-14">
           <IntegrationHub />
         </div>
+        <SectionExploreCta href="/integrations" label="Explore integrations" />
       </section>
 
       {/* Integrations accordion — directly after intelligence layer */}
@@ -278,12 +280,14 @@ export function LandingPage() {
         <div className="mt-12">
           <IntegrationAccordion />
         </div>
+        <SectionExploreCta href="/integrations" label="View all integrations" />
       </section>
 
       {/* Agents — directly after integrations */}
       <section id="agents" className="mx-auto max-w-7xl px-4 py-20 sm:px-6">
         <SectionHeading eyebrow="AI Agents" title="Specialists that share one OS." />
         <AgentLivingCards />
+        <SectionExploreCta href="/ai-agents" label="Explore AI agents" />
       </section>
 
       {/* How it works — before Why Nexora */}
@@ -334,6 +338,7 @@ export function LandingPage() {
             </motion.div>
           ))}
         </div>
+        <SectionExploreCta href="/how-it-works" label="See how it works" />
       </section>
 
       {/* Analytics — immediately after How it works */}
@@ -344,6 +349,7 @@ export function LandingPage() {
           body="Real-time metrics and intelligence for faster decisions and measurable impact."
         />
         <AnalysisDashboard />
+        <SectionExploreCta href="/analytics" label="Explore analytics" />
       </section>
 
       {/* Why Nexora — glass stack with floating layers */}

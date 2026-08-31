@@ -5,7 +5,7 @@ import { AnalysisDashboard } from '@/components/landing/AnalysisDashboard';
 import { REGISTER } from '@/lib/routes';
 
 export const metadata: Metadata = {
-  title: 'Analytics — Nexora OS',
+  title: 'Nexora OS — Analytics',
   description: 'Operator-grade visibility into approvals, action outcomes, and workspace activity in Nexora OS.',
 };
 

@@ -5,7 +5,7 @@ import { IntegrationAccordion } from '@/components/landing/IntegrationAccordion'
 import { LOGIN, REGISTER } from '@/lib/routes';
 
 export const metadata: Metadata = {
-  title: 'Integrations — Nexora OS',
+  title: 'Nexora OS — Integrations',
   description: 'Connect Slack, Notion, Gmail, Jira, Zoom, Asana, Microsoft 365, Discord, and Salesforce.',
 };
 
@@ -13,7 +13,7 @@ export default function MarketingIntegrationsPage() {
   return (
     <MarketingShell
       title="Integrations"
-      subtitle="Hover a tool to expand it. Slack, Notion, and Jira run live today — the rest are ready for your workspace."
+      subtitle="Hover a tool to expand it. Slack, Notion, Jira, and Gmail run live today — the rest are ready for your workspace."
     >
       <IntegrationAccordion />
       <div className="mt-10 flex flex-wrap gap-3">

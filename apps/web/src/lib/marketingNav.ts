@@ -2,11 +2,16 @@
 
 export type MarketingNavLink = { href: string; label: string; hash?: boolean };
 
-export const MARKETING_NAV_LINKS: MarketingNavLink[] = [
-  { href: '/how-it-works', label: 'How It Works' },
-  { href: '/ai-agents', label: 'AI Agents' },
+export const MARKETING_PRIMARY_NAV: MarketingNavLink[] = [
   { href: '/analytics', label: 'Analytics' },
+  { href: '/ai-agents', label: 'AI Agents' },
   { href: '/integrations', label: 'Integrations' },
+  { href: '/how-it-works', label: 'How It Works' },
+];
+
+/** @deprecated use MARKETING_PRIMARY_NAV */
+export const MARKETING_NAV_LINKS: MarketingNavLink[] = [
+  ...MARKETING_PRIMARY_NAV,
   { href: '/features', label: 'Features' },
 ];
 

@@ -129,11 +129,51 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
   const abortRef = useRef<AbortController | null>(null);
   const lastUserMessageRef = useRef<string>('');
   const recognitionRef = useRef<any>(null);
-  const voiceTranscriptRef = useRef('');
+  const inputRef = useRef('');
+  const voiceSessionRef = useRef({
+    active: false,
+    baseInput: '',
+    finalCommitted: false,
+  });
   const loadedIdRef = useRef<string | undefined>(undefined);
   const turnsRef = useRef<Turn[]>([]);
   turnsRef.current = turns;
   voiceMutedRef.current = voiceMuted;
+  inputRef.current = input;
+
+  function resetVoiceSession() {
+    voiceSessionRef.current = { active: false, baseInput: '', finalCommitted: false };
+  }
+
+  function beginVoiceSession() {
+    voiceSessionRef.current = {
+      active: true,
+      baseInput: inputRef.current.trim(),
+      finalCommitted: false,
+    };
+  }
+
+  function updateInterimPreview(interim: string) {
+    const session = voiceSessionRef.current;
+    if (!session.active || session.finalCommitted) return;
+    const piece = interim.trim();
+    if (!piece) {
+      setInput(session.baseInput);
+      return;
+    }
+    setInput(session.baseInput ? `${session.baseInput} ${piece}` : piece);
+  }
+
+  function commitFinalTranscript(finalText: string) {
+    const session = voiceSessionRef.current;
+    if (!session.active || session.finalCommitted) return;
+    const piece = finalText.trim();
+    if (!piece) return;
+    session.finalCommitted = true;
+    const next = session.baseInput ? `${session.baseInput} ${piece}` : piece;
+    setInput(next);
+    inputRef.current = next;
+  }
 
   useEffect(() => {
     setTtsSupported(canUseSpeechSynthesis());
@@ -588,23 +628,19 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
     return w.SpeechRecognition || w.webkitSpeechRecognition || null;
   }
 
-  function applyVoiceTranscript(text: string) {
-    const trimmed = text.trim();
-    if (!trimmed) return;
-    setInput((prev) => {
-      const base = prev.trim();
-      return base ? `${base} ${trimmed}` : trimmed;
-    });
-  }
-
   function stopListening() {
     try {
       recognitionRef.current?.abort?.();
+    } catch {
+      // ignore
+    }
+    try {
       recognitionRef.current?.stop?.();
     } catch {
       // ignore
     }
     recognitionRef.current = null;
+    resetVoiceSession();
     setMicState('idle');
     setAgentState((s) => (s === 'listening' ? 'idle' : s));
   }
@@ -618,19 +654,13 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
       setMicHint('Voice input is not supported in this browser. Try Chrome or Edge, or type your message.');
       return;
     }
-    if (micState === 'listening') {
+    if (micState === 'listening' || voiceSessionRef.current.active) {
       stopListening();
       return;
     }
 
-    // Chrome throws if start() is called while a prior session is still winding down.
-    try {
-      recognitionRef.current?.abort?.();
-    } catch {
-      // ignore
-    }
-    recognitionRef.current = null;
-    voiceTranscriptRef.current = '';
+    stopListening();
+    beginVoiceSession();
 
     const recognition = new Ctor();
     recognition.continuous = false;
@@ -655,31 +685,32 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
         setMicHint(`Voice input failed: ${code || 'unknown error'}`);
       }
       recognitionRef.current = null;
+      resetVoiceSession();
     };
     recognition.onend = () => {
-      if (voiceTranscriptRef.current.trim()) {
-        applyVoiceTranscript(voiceTranscriptRef.current);
-        voiceTranscriptRef.current = '';
-      }
       recognitionRef.current = null;
-      setMicState((s) => (s === 'listening' ? 'idle' : s));
+      resetVoiceSession();
+      setMicState('idle');
       setAgentState((s) => (s === 'listening' ? 'idle' : s));
     };
     recognition.onresult = (event: any) => {
+      if (!voiceSessionRef.current.active || voiceSessionRef.current.finalCommitted) return;
+
       let interim = '';
-      let finalText = '';
+      let finalChunk = '';
       for (let i = event.resultIndex; i < event.results.length; i++) {
-        const piece = event.results[i][0]?.transcript || '';
-        if (event.results[i].isFinal) finalText += piece;
-        else interim += piece;
+        const result = event.results[i];
+        const transcript = result[0]?.transcript ?? '';
+        if (result.isFinal) finalChunk += transcript;
+        else interim += transcript;
       }
-      const combined = (finalText || interim).trim();
-      if (combined) voiceTranscriptRef.current = combined;
-      if (finalText.trim()) {
-        applyVoiceTranscript(finalText.trim());
-        voiceTranscriptRef.current = '';
-        setMicState('idle');
-        setAgentState('idle');
+
+      if (finalChunk.trim()) {
+        commitFinalTranscript(finalChunk);
+        return;
+      }
+      if (interim.trim()) {
+        updateInterimPreview(interim);
       }
     };
 
@@ -690,6 +721,7 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
       setMicState('error');
       setMicHint(err instanceof Error ? err.message : 'Could not start microphone.');
       recognitionRef.current = null;
+      resetVoiceSession();
     }
   }
 
