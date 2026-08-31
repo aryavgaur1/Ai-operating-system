@@ -129,6 +129,7 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
   const abortRef = useRef<AbortController | null>(null);
   const lastUserMessageRef = useRef<string>('');
   const recognitionRef = useRef<any>(null);
+  const voiceTranscriptRef = useRef('');
   const loadedIdRef = useRef<string | undefined>(undefined);
   const turnsRef = useRef<Turn[]>([]);
   turnsRef.current = turns;
@@ -382,6 +383,8 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
         : '');
     if (!payload) return;
 
+    stopListening();
+
     const now = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
     setInput('');
     setError(null);
@@ -585,8 +588,18 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
     return w.SpeechRecognition || w.webkitSpeechRecognition || null;
   }
 
+  function applyVoiceTranscript(text: string) {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    setInput((prev) => {
+      const base = prev.trim();
+      return base ? `${base} ${trimmed}` : trimmed;
+    });
+  }
+
   function stopListening() {
     try {
+      recognitionRef.current?.abort?.();
       recognitionRef.current?.stop?.();
     } catch {
       // ignore
@@ -610,6 +623,15 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
       return;
     }
 
+    // Chrome throws if start() is called while a prior session is still winding down.
+    try {
+      recognitionRef.current?.abort?.();
+    } catch {
+      // ignore
+    }
+    recognitionRef.current = null;
+    voiceTranscriptRef.current = '';
+
     const recognition = new Ctor();
     recognition.continuous = false;
     recognition.interimResults = true;
@@ -621,6 +643,7 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
     };
     recognition.onerror = (event: any) => {
       const code = String(event?.error || '');
+      if (code === 'aborted') return;
       if (code === 'not-allowed' || code === 'service-not-allowed') {
         setMicState('denied');
         setMicHint('Microphone permission is required for voice input. Allow mic access and retry.');
@@ -634,22 +657,29 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
       recognitionRef.current = null;
     };
     recognition.onend = () => {
+      if (voiceTranscriptRef.current.trim()) {
+        applyVoiceTranscript(voiceTranscriptRef.current);
+        voiceTranscriptRef.current = '';
+      }
       recognitionRef.current = null;
       setMicState((s) => (s === 'listening' ? 'idle' : s));
+      setAgentState((s) => (s === 'listening' ? 'idle' : s));
     };
     recognition.onresult = (event: any) => {
-      let transcript = '';
+      let interim = '';
+      let finalText = '';
       for (let i = event.resultIndex; i < event.results.length; i++) {
-        transcript += event.results[i][0]?.transcript || '';
+        const piece = event.results[i][0]?.transcript || '';
+        if (event.results[i].isFinal) finalText += piece;
+        else interim += piece;
       }
-      transcript = transcript.trim();
-      if (!transcript) return;
-      setInput((prev) => {
-        const base = prev.trim();
-        return base ? `${base} ${transcript}` : transcript;
-      });
-      if (event.results[event.results.length - 1]?.isFinal) {
+      const combined = (finalText || interim).trim();
+      if (combined) voiceTranscriptRef.current = combined;
+      if (finalText.trim()) {
+        applyVoiceTranscript(finalText.trim());
+        voiceTranscriptRef.current = '';
         setMicState('idle');
+        setAgentState('idle');
       }
     };
 

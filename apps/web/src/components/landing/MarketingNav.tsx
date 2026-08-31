@@ -4,30 +4,17 @@ import { useEffect, useState } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { Menu, X } from 'lucide-react';
+import { MARKETING_NAV_LINKS } from '@/lib/marketingNav';
 import { cn } from '@/lib/utils';
-
-const DEFAULT_LINKS = [
-  { href: '#features', label: 'Why Nexora', hash: true },
-  { href: '#product', label: 'Product', hash: true },
-  { href: '#analysis', label: 'Analysis', hash: true },
-  { href: '#agents', label: 'Agents', hash: true },
-  { href: '#integrations', label: 'Integrations', hash: true },
-] as const;
-
-type NavLink = { href: string; label: string; hash?: boolean };
 
 /**
  * Fixed header — logo left, floating glass pill nav center, actions right.
- * Stays put while scrolling (no hide/reveal).
  */
-export function MarketingNav({
-  links = DEFAULT_LINKS as unknown as NavLink[],
-}: {
-  links?: NavLink[];
-}) {
+export function MarketingNav() {
   const pathname = usePathname();
   const [scrolled, setScrolled] = useState(false);
-  const [activeHash, setActiveHash] = useState('');
+  const [mobileOpen, setMobileOpen] = useState(false);
 
   useEffect(() => {
     function onScroll() {
@@ -39,36 +26,8 @@ export function MarketingNav({
   }, []);
 
   useEffect(() => {
-    const ids = links
-      .map((l) => l.href.replace(/^\/?#/, ''))
-      .filter(Boolean);
-    if (!ids.length) return;
-
-    const els = ids
-      .map((id) => document.getElementById(id))
-      .filter((el): el is HTMLElement => !!el);
-
-    if (!els.length) return;
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const visible = entries
-          .filter((e) => e.isIntersecting)
-          .sort((a, b) => b.intersectionRatio - a.intersectionRatio);
-        if (visible[0]?.target?.id) setActiveHash(visible[0].target.id);
-      },
-      { rootMargin: '-20% 0px -55% 0px', threshold: [0.1, 0.35, 0.6] }
-    );
-
-    els.forEach((el) => observer.observe(el));
-    return () => observer.disconnect();
-  }, [links]);
-
-  function isActive(item: NavLink) {
-    const id = item.href.replace(/^\/?#/, '');
-    if (item.hash || item.href.includes('#')) return activeHash === id;
-    return pathname === item.href;
-  }
+    setMobileOpen(false);
+  }, [pathname]);
 
   return (
     <header className="pointer-events-none fixed inset-x-0 top-0 z-50">
@@ -78,7 +37,6 @@ export function MarketingNav({
           scrolled && 'py-2.5 sm:py-3'
         )}
       >
-        {/* Logo */}
         <Link href="/" className="relative z-10 flex shrink-0 items-center gap-2.5">
           <span className="relative h-9 w-9 overflow-hidden rounded-2xl">
             <Image src="/nexora-logo.png" alt="Nexora" fill className="object-contain" sizes="36px" />
@@ -86,7 +44,6 @@ export function MarketingNav({
           <span className="font-display text-sm font-semibold tracking-[0.2em] text-white">NEXORA</span>
         </Link>
 
-        {/* Floating glass pill — stays fixed, does not slide away */}
         <nav
           className={cn(
             'absolute left-1/2 top-1/2 hidden -translate-x-1/2 -translate-y-1/2 items-center gap-1 rounded-full border px-1.5 py-1.5 lg:flex',
@@ -98,29 +55,34 @@ export function MarketingNav({
           }}
           aria-label="Primary"
         >
-          {links.map((item) => {
-            const active = isActive(item);
-            const className = cn(
-              'rounded-full px-3.5 py-1.5 text-[11px] font-medium uppercase tracking-[0.14em] transition-colors duration-300',
-              active
-                ? 'bg-white/12 text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]'
-                : 'text-neutral-400 hover:text-white'
-            );
-            const isHash = item.hash || item.href.includes('#');
-            return isHash ? (
-              <a key={item.href} href={item.href} className={className}>
-                {item.label}
-              </a>
-            ) : (
-              <Link key={item.href} href={item.href} className={className}>
+          {MARKETING_NAV_LINKS.map((item) => {
+            const active = pathname === item.href;
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                className={cn(
+                  'rounded-full px-3.5 py-1.5 text-[11px] font-medium uppercase tracking-[0.14em] transition-colors duration-300',
+                  active
+                    ? 'bg-white/12 text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]'
+                    : 'text-neutral-400 hover:text-white'
+                )}
+              >
                 {item.label}
               </Link>
             );
           })}
         </nav>
 
-        {/* Actions */}
         <div className="relative z-10 flex shrink-0 items-center gap-2">
+          <button
+            type="button"
+            className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/10 text-white lg:hidden"
+            aria-label={mobileOpen ? 'Close menu' : 'Open menu'}
+            onClick={() => setMobileOpen((v) => !v)}
+          >
+            {mobileOpen ? <X size={18} /> : <Menu size={18} />}
+          </button>
           <Link href="/login" className="hidden rounded-full px-4 py-2 text-sm text-neutral-300 hover:text-white sm:inline">
             Login
           </Link>
@@ -132,6 +94,31 @@ export function MarketingNav({
           </Link>
         </div>
       </div>
+
+      {mobileOpen && (
+        <div className="pointer-events-auto border-b border-white/10 bg-[#05060a]/95 px-4 py-4 backdrop-blur-xl lg:hidden">
+          <nav className="flex flex-col gap-1" aria-label="Mobile">
+            {MARKETING_NAV_LINKS.map((item) => (
+              <Link
+                key={item.href}
+                href={item.href}
+                className={cn(
+                  'rounded-xl px-4 py-3 text-sm',
+                  pathname === item.href ? 'bg-white/10 text-white' : 'text-neutral-300 hover:bg-white/5'
+                )}
+              >
+                {item.label}
+              </Link>
+            ))}
+            <Link href="/about" className="rounded-xl px-4 py-3 text-sm text-neutral-300 hover:bg-white/5">
+              About
+            </Link>
+            <Link href="/contact" className="rounded-xl px-4 py-3 text-sm text-neutral-300 hover:bg-white/5">
+              Contact
+            </Link>
+          </nav>
+        </div>
+      )}
     </header>
   );
 }
