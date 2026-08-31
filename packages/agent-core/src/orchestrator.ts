@@ -17,7 +17,10 @@ import {
   cancelReply,
   dryRunReplyForPlan,
   stampCapabilityContext,
+  extractActionOutcomes,
 } from './os';
+import { routingQuery } from './os/intentDetector';
+import { isActionMutationQuery } from './os/workAssistantIntent';
 import { formatGmailSearchReply } from './os/gmailQuery';
 import { expandGmailFollowUp, type GmailSearchMemory } from './os/workAssistantIntent';
 import { recall } from './os/threadMemory';
@@ -168,6 +171,16 @@ function formatReply(executedCalls: AgentTurnResult['executedCalls'], plan: Agen
         'searchMessages',
       ].includes(call.action)
     ) {
+      if (call.action === 'createWarRoom' || call.action === 'createChannel') {
+        const name = String(output?.name ?? output?.channelName ?? planned?.input?.name ?? 'channel').replace(/^#/, '');
+        const url = output?.url ? `\nOpen: ${output.url}` : '';
+        return `Your launch war room **#${name}** is ready.${url}`;
+      }
+      if (call.action === 'createIncident') {
+        const name = String(output?.name ?? output?.channelName ?? 'incident');
+        const url = output?.url ? `\nOpen: ${output.url}` : '';
+        return `Incident channel **#${String(name).replace(/^#/, '')}** is ready.${url}`;
+      }
       return String(output?.summary ?? `Finished checking Slack.`);
     }
     if (call.tool === 'notion') {
@@ -537,9 +550,26 @@ export async function runAgentTurn(
       ? `Slack is connected (live). Try:\n- create new channel investor-pitch\n- post "kickoff in 10 mins" to #general on slack\n- Create a launch war room for Project Atlas`
       : `Notion is connected (live). Try:\n- create a notion page titled Weekly Update`;
   } else if (executedCalls.length === 0 && pendingApprovalIds.length === 0) {
-    reply =
-      plan.responseDraft ||
-      `I understood this as **${osIntent.kind}** (${route.rationale}). No tool ran.`;
+    const liveQuery = routingQuery(query);
+    const intendedTools = plan.toolCalls.length > 0 || Boolean(route.lockedTool);
+    const actionIntent =
+      intendedTools ||
+      isActionMutationQuery(liveQuery) ||
+      route.mode === 'execute' ||
+      ['create', 'post', 'delete', 'update', 'launch', 'incident'].includes(route.routeAction);
+    if (actionIntent) {
+      const blocked =
+        strippedTools.length > 0
+          ? ` Blocked tools: ${strippedTools.map((s) => `${s.tool}.${s.action}`).join(', ')}.`
+          : '';
+      reply =
+        `I understood this as an actionable request, but nothing executed yet.${blocked} ` +
+        `Check **Integrations** for Gmail, Slack, Jira, and Notion — or clarify the target system and details.`;
+    } else {
+      reply =
+        plan.responseDraft ||
+        `I understood this as **${osIntent.kind}** (${route.rationale}). No tool ran.`;
+    }
   } else {
     reply = formatReply(executedCalls, plan, approvalNote);
   }
@@ -565,6 +595,7 @@ export async function runAgentTurn(
     plan,
     executedCalls,
     pendingApprovalIds,
+    actionOutcomes: extractActionOutcomes(executedCalls, plan.toolCalls, pendingApprovalIds),
     workflow: {
       intent: osIntent,
       reasoning,

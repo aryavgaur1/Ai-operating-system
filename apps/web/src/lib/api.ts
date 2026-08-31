@@ -121,6 +121,17 @@ export interface AgentTurnResult {
   };
   executedCalls: ToolCallResult[];
   pendingApprovalIds: string[];
+  actionOutcomes?: Array<{
+    status: 'success' | 'failed' | 'pending_approval';
+    action: string;
+    integration: string;
+    summary: string;
+    resource?: string;
+    resourceUrl?: string;
+    resourceType?: string;
+    externalId?: string;
+    timestamp?: string;
+  }>;
   sources?: string[];
 }
 

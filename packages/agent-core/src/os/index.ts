@@ -63,7 +63,10 @@ export {
   isNotionDocQuery,
   isCrossToolSlackJiraQuery,
   impliesLiveWorkspaceData,
+  impliesWorkspaceExecution,
+  isActionMutationQuery,
 } from './workAssistantIntent';
+export { extractActionOutcomes, openLinkLabel } from './actionOutcomes';
 export type { GmailSearchMemory } from './workAssistantIntent';
 export {
   ApprovalIntegrityError,

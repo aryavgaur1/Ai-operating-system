@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
+  ExternalLink,
   Check,
   Copy,
   FileUp,
@@ -22,6 +23,8 @@ import {
   X,
 } from 'lucide-react';
 import { api, type AgentTurnResult } from '@/lib/api';
+import { outcomesFromTurn, openLabelFor } from '@/lib/actionOutcomes';
+import { humanToolStart, humanToolResult, shouldAutoSpeakReply } from '@/lib/humanizeTools';
 import { GlassCard, Reveal } from '@/components/motion';
 import { MarkdownLite } from '@/components/MarkdownLite';
 import { RiskRadial } from '@/components/charts';
@@ -430,14 +433,15 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
             });
           }
           if (event.type === 'tool_start') {
-            setStatusLine(`Running ${event.tool}.${event.action}…`);
+            setStatusLine(humanToolStart(event.tool, event.action));
             setAgentState('tool');
           }
           if (event.type === 'tool_result') {
-            setStatusLine(
-              event.ok ? `✓ ${event.tool}.${event.action}` : `✗ ${event.tool}.${event.action}: ${event.error || 'failed'}`
-            );
+            setStatusLine(humanToolResult(event.tool, event.action, event.ok, event.error));
             setAgentState(event.ok ? 'success' : 'error');
+          }
+          if (event.type === 'approval') {
+            setStatusLine('Action ready for your approval.');
           }
           if (event.type === 'error') {
             setError(event.message);
@@ -465,13 +469,20 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
               loadedIdRef.current = event.result.conversationId;
               setConversationId(event.result.conversationId);
             }
-            if (reply) {
-              speakNexora(reply, {
-                muted: voiceMutedRef.current,
-                onStart: () => setAgentState('speaking'),
-                onEnd: () => setAgentState('idle'),
-                onError: () => setAgentState('idle'),
-              });
+            if (reply && shouldAutoSpeakReply(reply)) {
+              const hasWork =
+                (event.result.executedCalls?.some((c) => c.ok && !c.mocked) ?? false) ||
+                (event.result.pendingApprovalIds?.length ?? 0) > 0;
+              if (hasWork) {
+                speakNexora(reply, {
+                  muted: voiceMutedRef.current,
+                  onStart: () => setAgentState('speaking'),
+                  onEnd: () => setAgentState('idle'),
+                  onError: () => setAgentState('idle'),
+                });
+              } else {
+                setAgentState('idle');
+              }
             } else {
               setAgentState('idle');
             }
@@ -840,6 +851,51 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
                     {turn.role === 'assistant' ? <MarkdownLite content={turn.content} /> : turn.content}
                   </div>
 
+                  {turn.role === 'assistant' && turn.detail && (() => {
+                    const outcomes =
+                      turn.detail.actionOutcomes ||
+                      outcomesFromTurn(
+                        turn.detail.executedCalls,
+                        turn.detail.pendingApprovalIds,
+                        turn.detail.plan.toolCalls
+                      );
+                    const completed = outcomes.filter((o) => o.status === 'success');
+                    if (!completed.length) return null;
+                    return (
+                      <div className="mt-4 space-y-2">
+                        {completed.map((o, oi) => (
+                          <div
+                            key={oi}
+                            className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-3 text-sm text-neutral-200"
+                          >
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div>
+                                <div className="text-xs font-semibold uppercase tracking-wide text-emerald-300">
+                                  {o.integration}
+                                </div>
+                                <div className="mt-1 text-white">{o.summary}</div>
+                                {o.resource && (
+                                  <div className="mt-1 text-xs text-neutral-400">{o.resource}</div>
+                                )}
+                              </div>
+                              {o.resourceUrl && (
+                                <a
+                                  href={o.resourceUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/5 px-3 py-1.5 text-xs font-medium text-white hover:bg-white/10"
+                                >
+                                  {openLabelFor(o.integration)}
+                                  <ExternalLink size={12} />
+                                </a>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
+
                   {turn.role === 'assistant' && (
                     <button
                       type="button"
@@ -912,9 +968,36 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
                                       Approval required · {level} risk
                                     </div>
                                     <p className="mt-2 text-sm leading-6 text-neutral-300">
-                                      This action is paused for human review. Approve here to create it now, or open
-                                      Approvals for a full preview.
+                                      This action is paused for human review. Approve here to run the real connector
+                                      operation, or open Approvals for the full intent and impact preview.
                                     </p>
+                                    {turn.detail.plan.toolCalls
+                                      .filter((c) => c.requiresApproval)
+                                      .slice(0, 2)
+                                      .map((c, pi) => (
+                                        <div
+                                          key={pi}
+                                          className="mt-3 rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-xs text-neutral-300"
+                                        >
+                                          <div className="font-semibold uppercase tracking-wide text-rose-100/90">
+                                            {c.tool}.{c.action}
+                                          </div>
+                                          {c.input?._goal ? (
+                                            <div className="mt-1">Goal: {String(c.input._goal)}</div>
+                                          ) : null}
+                                          {c.input?.summary || c.input?.title || c.input?.channel ? (
+                                            <div className="mt-1 text-neutral-400">
+                                              {c.input.summary
+                                                ? `Summary: ${String(c.input.summary)}`
+                                                : c.input.title
+                                                  ? `Title: ${String(c.input.title)}`
+                                                  : c.input.channel
+                                                    ? `Channel: ${String(c.input.channel)}`
+                                                    : null}
+                                            </div>
+                                          ) : null}
+                                        </div>
+                                      ))}
                                     <div className="mt-3 flex flex-wrap gap-2">
                                       <Link
                                         href={`${APP_ROUTES.approvals}?focus=${encodeURIComponent(

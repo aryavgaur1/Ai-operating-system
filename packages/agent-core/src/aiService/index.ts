@@ -4,7 +4,7 @@ import { createLLMClient, type LLMMessage } from '../llmClient';
 import { runAgentTurn } from '../orchestrator';
 import { recall, listRecentMemory } from '../os/threadMemory';
 import { detectOsIntent, isExplicitSlackCommand, isExplicitNotionCommand } from '../os/intentDetector';
-import { impliesLiveWorkspaceData } from '../os/workAssistantIntent';
+import { impliesWorkspaceExecution } from '../os/workAssistantIntent';
 import { getConnectorContext, hasSlackTokenInContext, hasNotionTokenInContext, hasJiraTokenInContext, hasGmailTokenInContext } from '@enterprise-ai-os/connectors';
 
 // ============================================================
@@ -75,7 +75,7 @@ Do not invent pricing or features not in the knowledge context.`;
 
 export function wantsWorkspaceTools(message: string): boolean {
   const q = message.trim();
-  if (impliesLiveWorkspaceData(q)) return true;
+  if (impliesWorkspaceExecution(q)) return true;
   if (isExplicitSlackCommand(q) || isExplicitNotionCommand(q)) return true;
   const os = detectOsIntent(q);
   if (os.kind !== 'read_only') return true;
@@ -318,7 +318,7 @@ export async function runNexoraTurn(input: NexoraTurnInput): Promise<AgentTurnRe
   }
 
   // Authenticated work-like queries must not silently use generic LLM when tools are unavailable
-  if (input.mode === 'authenticated' && impliesLiveWorkspaceData(input.message)) {
+  if (input.mode === 'authenticated' && impliesWorkspaceExecution(input.message)) {
     const reply =
       `I need your connected workspace tools to answer that, but the tool engine isn't available right now. ` +
       `Try again from Chat, or check Integrations for Gmail, Slack, Jira, and Notion.`;
@@ -391,7 +391,7 @@ export async function* streamNexoraTurn(input: NexoraTurnInput): AsyncGenerator<
       return;
     }
 
-    if (input.mode === 'authenticated' && impliesLiveWorkspaceData(input.message)) {
+    if (input.mode === 'authenticated' && impliesWorkspaceExecution(input.message)) {
       const reply =
         `I need your connected workspace tools to answer that, but the tool engine isn't available right now. ` +
         `Try again from Chat, or check Integrations for Gmail, Slack, Jira, and Notion.`;

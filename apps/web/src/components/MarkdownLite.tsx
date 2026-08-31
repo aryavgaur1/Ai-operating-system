@@ -3,30 +3,60 @@
 import { Fragment } from 'react';
 
 function renderInline(text: string, keyPrefix: string) {
-  const parts = text.split(/(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*)/g).filter(Boolean);
-  return parts.map((part, i) => {
-    if (part.startsWith('`') && part.endsWith('`')) {
+  const linkParts = text.split(/(\[[^\]]+\]\([^)]+\)|https?:\/\/[^\s<>"']+)/g).filter(Boolean);
+  return linkParts.map((segment, i) => {
+    const mdLink = segment.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+    if (mdLink) {
       return (
-        <code key={`${keyPrefix}-${i}`} className="code rounded-md bg-white/10 px-1.5 py-0.5 text-[0.85em] text-accent2">
-          {part.slice(1, -1)}
-        </code>
+        <a
+          key={`${keyPrefix}-lnk-${i}`}
+          href={mdLink[2]}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-accent underline decoration-accent/40 underline-offset-2 hover:text-white"
+        >
+          {mdLink[1]}
+        </a>
       );
     }
-    if (part.startsWith('**') && part.endsWith('**')) {
+    if (/^https?:\/\//.test(segment)) {
       return (
-        <strong key={`${keyPrefix}-${i}`} className="font-semibold text-white">
-          {part.slice(2, -2)}
-        </strong>
+        <a
+          key={`${keyPrefix}-url-${i}`}
+          href={segment}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="break-all text-accent underline decoration-accent/40 underline-offset-2 hover:text-white"
+        >
+          {segment}
+        </a>
       );
     }
-    if (part.startsWith('*') && part.endsWith('*')) {
-      return (
-        <em key={`${keyPrefix}-${i}`} className="italic text-neutral-200">
-          {part.slice(1, -1)}
-        </em>
-      );
-    }
-    return <Fragment key={`${keyPrefix}-${i}`}>{part}</Fragment>;
+    const parts = segment.split(/(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*)/g).filter(Boolean);
+    return parts.map((part, j) => {
+      if (part.startsWith('`') && part.endsWith('`')) {
+        return (
+          <code key={`${keyPrefix}-${i}-${j}`} className="code rounded-md bg-white/10 px-1.5 py-0.5 text-[0.85em] text-accent2">
+            {part.slice(1, -1)}
+          </code>
+        );
+      }
+      if (part.startsWith('**') && part.endsWith('**')) {
+        return (
+          <strong key={`${keyPrefix}-${i}-${j}`} className="font-semibold text-white">
+            {part.slice(2, -2)}
+          </strong>
+        );
+      }
+      if (part.startsWith('*') && part.endsWith('*')) {
+        return (
+          <em key={`${keyPrefix}-${i}-${j}`} className="italic text-neutral-200">
+            {part.slice(1, -1)}
+          </em>
+        );
+      }
+      return <Fragment key={`${keyPrefix}-${i}-${j}`}>{part}</Fragment>;
+    });
   });
 }
 

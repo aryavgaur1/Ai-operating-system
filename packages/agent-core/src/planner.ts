@@ -987,15 +987,15 @@ export async function buildPlan(
   query = routingQuery(query);
   const lower = query.toLowerCase();
   if (
-    (/\b(gmail|salesforce)\b/.test(lower) ||
-      (/\b(send|draft|compose)\b/.test(lower) && /\b(email|e-mail)\b/.test(lower) && !/\b(slack|jira|notion)\b/.test(lower)) ||
-      (/\b(opportunity|crm)\b/.test(lower) && /\b(salesforce|create|update)\b/.test(lower) && !/\b(jira|slack|notion)\b/.test(lower)))
+    /\b(salesforce|opportunity|crm)\b/.test(lower) &&
+    /\b(salesforce|create|update)\b/.test(lower) &&
+    !/\b(jira|slack|notion|gmail)\b/.test(lower)
   ) {
-    const which = /\bsalesforce|opportunity|crm\b/.test(lower) ? 'Salesforce' : 'Gmail';
-    const responseDraft = `Not implemented — **${which}** is not available yet. Live actions today: **Slack**, **Jira**, and **Notion**. Connect those under Integrations.`;
+    const responseDraft =
+      'Not implemented — **Salesforce** is not available yet. Live actions today: **Slack**, **Jira**, **Notion**, and **Gmail**. Connect those under Integrations.';
     return {
       intent,
-      reasoning: `${which} requested but not implemented — zero tool calls.`,
+      reasoning: 'Salesforce requested but not implemented — zero tool calls.',
       toolCalls: [],
       responseDraft,
     };
@@ -1019,7 +1019,7 @@ export async function buildPlan(
     {
       role: 'system',
       content:
-        'You are the reasoning engine of an enterprise AI operating system. Answer using only the provided context, and be explicit when a proposed action needs human approval. Never claim a tool succeeded unless a live connector result is present. If Gmail or Salesforce is requested, say Not implemented. Never invent Slack war rooms for Jira ticket requests.',
+        'You are the reasoning engine of an enterprise AI operating system. Answer using only the provided context, and be explicit when a proposed action needs human approval. Never claim a tool succeeded unless a live connector result is present. Gmail, Slack, Jira, and Notion are live connectors — route real actions through them. Salesforce is not implemented. Never invent Slack war rooms for Jira ticket requests.',
     },
     { role: 'user', content: `Question: ${query}\n\n${contextSummary}` },
   ]);

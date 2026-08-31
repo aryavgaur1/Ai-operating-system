@@ -1,9 +1,14 @@
 /**
- * Natural business-language intent helpers for Jarvis / Nexora work assistant.
+ * Natural business-language intent helpers for Nexora work assistant.
  * Routes soft NL into real connector families — never invents tool results.
  */
 
-import { routingQuery } from './intentDetector';
+import {
+  isExplicitJiraCreate,
+  isExplicitNotionCommand,
+  isExplicitSlackCommand,
+  routingQuery,
+} from './intentDetector';
 import { isGmailDestinationQuery, isGmailSendQuery } from './gmailQuery';
 
 /** Soft Gmail reads that omit the word "email" (manager / inbox urgency). */
@@ -144,6 +149,29 @@ export function isCrossToolSlackJiraQuery(query: string): boolean {
 export function isFollowUpContinuation(query: string): boolean {
   const t = routingQuery(query).trim().toLowerCase();
   return /^(do that|do it|yes\.?|go ahead|please do|that one|same thing|follow up)$/i.test(t);
+}
+
+/** Mutation / write intents — must route to real connectors, never generic LLM simulation. */
+export function isActionMutationQuery(query: string): boolean {
+  const t = routingQuery(query).toLowerCase();
+  if (isGmailSendQuery(query)) return true;
+  if (isExplicitJiraCreate(query) || isExplicitSlackCommand(query) || isExplicitNotionCommand(query)) {
+    return true;
+  }
+  const mutationVerb =
+    /\b(create|make|open|file|log|track|new|update|edit|delete|remove|send|post|invite|launch|announce)\b/.test(t);
+  if (!mutationVerb) return false;
+  if (/\b(war\s*room|launch\s+war|channel|ticket|issue|bug|page|doc|document|email|mail|message|announcement|project)\b/.test(t)) {
+    return true;
+  }
+  if (/\b(slack|jira|notion|gmail)\b/.test(t)) return true;
+  if (/\b(on\s+slack|in\s+jira|in\s+notion|via\s+gmail)\b/.test(t)) return true;
+  return false;
+}
+
+/** Any query that must use workspace tools — reads OR writes. */
+export function impliesWorkspaceExecution(query: string): boolean {
+  return impliesLiveWorkspaceData(query) || isActionMutationQuery(query);
 }
 
 /** Any query that implies live workspace data — never answer from generic LLM alone. */

@@ -92,6 +92,19 @@ export interface ToolCallResult {
   mocked: boolean;
 }
 
+/** Normalized external action result for UI + audit. */
+export interface ActionOutcome {
+  status: 'success' | 'failed' | 'pending_approval';
+  action: string;
+  integration: ToolName;
+  summary: string;
+  resource?: string;
+  resourceUrl?: string;
+  resourceType?: string;
+  externalId?: string;
+  timestamp?: string;
+}
+
 export interface AgentPlan {
   intent: ClassifiedIntent;
   reasoning: string;
@@ -104,6 +117,8 @@ export interface AgentTurnResult {
   plan: AgentPlan;
   executedCalls: ToolCallResult[];
   pendingApprovalIds: string[];
+  /** Structured integration results with real resource URLs when available */
+  actionOutcomes?: ActionOutcome[];
   /** Enterprise OS execution trace (optional — additive) */
   workflow?: WorkflowTrace;
 }

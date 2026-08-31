@@ -277,9 +277,22 @@ function executionArtifacts(
   if (approval.tool === 'slack') {
     const channel = slackChannelLabel(o.channelName || o.channel, input.channel);
     const ts = o.ts ? String(o.ts) : undefined;
+    const url = typeof o.url === 'string' ? o.url : undefined;
     return {
       primary: channel,
-      detail: ts ? `Posted · ts ${ts}` : 'Message posted',
+      url,
+      detail: url ? 'Open in Slack' : ts ? `Posted · ts ${ts}` : 'Message posted',
+    };
+  }
+
+  if (approval.tool === 'gmail' && approval.action === 'sendEmail') {
+    const to = String(o.to || input.to || '').trim();
+    const subject = String(o.subject || input.subject || '').trim();
+    const url = typeof o.url === 'string' ? o.url : undefined;
+    return {
+      primary: to || 'Email sent',
+      url,
+      detail: subject || (url ? 'Open in Gmail' : undefined),
     };
   }
 

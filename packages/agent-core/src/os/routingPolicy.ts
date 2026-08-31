@@ -38,6 +38,8 @@ import {
   isNotionDocQuery,
   isCrossToolSlackJiraQuery,
   impliesLiveWorkspaceData,
+  impliesWorkspaceExecution,
+  isActionMutationQuery,
 } from './workAssistantIntent';
 
 /**
@@ -159,6 +161,9 @@ export function detectRequestMode(query: string): RequestMode {
     return 'execute';
   }
   if (isCrossToolSlackJiraQuery(query)) {
+    return 'execute';
+  }
+  if (isActionMutationQuery(query)) {
     return 'execute';
   }
   if (/\?/.test(query) && !/\b(create|open|post|send|delete|update|launch)\b/i.test(query)) {
