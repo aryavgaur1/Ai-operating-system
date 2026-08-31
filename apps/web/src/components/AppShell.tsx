@@ -6,7 +6,6 @@ import { WorkspaceRail } from '@/components/WorkspaceRail';
 import { AmbientBackground } from '@/components/AmbientBackground';
 import { AuthGuard } from '@/components/AuthGuard';
 import { WorkspaceProvider } from '@/components/WorkspaceProvider';
-import { JarvisProvider } from '@/components/JarvisProvider';
 import {
   isAppPath,
   isAuthPath,
@@ -57,13 +56,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <>
       <AmbientBackground />
       <AuthGuard>
-        {app ? (
-          <WorkspaceProvider>
-            <JarvisProvider>{appChrome}</JarvisProvider>
-          </WorkspaceProvider>
-        ) : (
-          appChrome
-        )}
+        {app ? <WorkspaceProvider>{appChrome}</WorkspaceProvider> : appChrome}
       </AuthGuard>
     </>
   );

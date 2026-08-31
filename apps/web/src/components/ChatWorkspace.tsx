@@ -31,11 +31,10 @@ import { writeActiveConversationHint, resolveResumeConversationId } from '@/lib/
 import {
   NexoraPresence,
   type NexoraAgentState,
+  speakNexora,
+  stopNexoraSpeech,
   canUseSpeechSynthesis,
 } from '@/components/NexoraPresence';
-import { useJarvis } from '@/components/JarvisProvider';
-import { consumePendingJarvisPrompt } from '@/lib/jarvisGreeting';
-import { humanToolStart, humanToolResult, shouldSpeakAgentReply } from '@/lib/humanizeTools';
 
 const riskScore: Record<string, number> = { low: 24, medium: 58, high: 88 };
 const riskColor: Record<string, string> = { low: '#8be9d0', medium: '#f5b95d', high: '#fb7185' };
@@ -49,10 +48,10 @@ interface Turn {
 }
 
 const SUGGESTIONS = [
-  'Find my top priority emails.',
-  'Show my unread emails.',
-  'Show my pending approvals and what needs attention.',
-  "What's important for me today across email and approvals?",
+  'Find my top priority emails',
+  'Show my unread emails',
+  'Create a launch war room for Project Atlas on slack',
+  'Create a Notion page named Investor Notes',
 ];
 
 const riskBadgeClasses: Record<string, string> = {
@@ -97,7 +96,6 @@ function mapMessagesToTurns(messages: any[]): Turn[] {
 
 export function ChatWorkspace({ routeConversationId }: { routeConversationId?: string }) {
   const router = useRouter();
-  const jarvis = useJarvis();
   const [turns, setTurns] = useState<Turn[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -123,7 +121,6 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
   const [ttsSupported, setTtsSupported] = useState(false);
   const [agentState, setAgentState] = useState<NexoraAgentState>('idle');
   const voiceMutedRef = useRef(false);
-  const sendRef = useRef<(message: string, opts?: { regenerate?: boolean }) => Promise<void>>();
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -135,29 +132,12 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
   voiceMutedRef.current = voiceMuted;
 
   useEffect(() => {
-    if (jarvis?.firstName) setUserFirstName(jarvis.firstName);
-  }, [jarvis?.firstName]);
-
-  // Keep Jarvis welcome presence in sync with real chat activity (not decorative).
-  useEffect(() => {
-    if (!jarvis) return;
-    const next: NexoraAgentState =
-      micState === 'listening'
-        ? 'listening'
-        : loading && agentState === 'idle'
-          ? 'thinking'
-          : agentState;
-    jarvis.setAgentState(next);
-  }, [jarvis, agentState, loading, micState]);
-
-  useEffect(() => {
     setTtsSupported(canUseSpeechSynthesis());
     let cancelled = false;
     api
       .me()
       .then((res) => {
         if (cancelled) return;
-        if (jarvis?.firstName) return;
         const raw = (res.user.displayName || '').trim();
         const first = raw.split(/\s+/)[0] || null;
         setUserFirstName(first && first.length > 1 ? first : null);
@@ -166,7 +146,7 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
     return () => {
       cancelled = true;
     };
-  }, [jarvis?.firstName]);
+  }, []);
 
   function setConversationId(id: string | undefined) {
     setConversationIdState(id);
@@ -450,11 +430,13 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
             });
           }
           if (event.type === 'tool_start') {
-            setStatusLine(humanToolStart(event.tool, event.action));
+            setStatusLine(`Running ${event.tool}.${event.action}…`);
             setAgentState('tool');
           }
           if (event.type === 'tool_result') {
-            setStatusLine(humanToolResult(event.tool, event.action, event.ok, event.error));
+            setStatusLine(
+              event.ok ? `✓ ${event.tool}.${event.action}` : `✗ ${event.tool}.${event.action}: ${event.error || 'failed'}`
+            );
             setAgentState(event.ok ? 'success' : 'error');
           }
           if (event.type === 'error') {
@@ -484,12 +466,12 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
               setConversationId(event.result.conversationId);
             }
             if (reply) {
-              if (!voiceMutedRef.current && shouldSpeakAgentReply(reply, event.result)) {
-                if (jarvis?.speakReply) void jarvis.speakReply(reply);
-                else window.dispatchEvent(new CustomEvent('nexora:jarvis-speak', { detail: reply }));
-              } else {
-                setAgentState('idle');
-              }
+              speakNexora(reply, {
+                muted: voiceMutedRef.current,
+                onStart: () => setAgentState('speaking'),
+                onEnd: () => setAgentState('idle'),
+                onError: () => setAgentState('idle'),
+              });
             } else {
               setAgentState('idle');
             }
@@ -520,50 +502,6 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
       setAgentState((s) => (s === 'speaking' ? s : 'idle'));
     }
   }
-  sendRef.current = send;
-
-  // Jarvis welcome suggestions / voice → same chat pipeline
-  useEffect(() => {
-    function onJarvisPrompt(e: Event) {
-      const prompt = String((e as CustomEvent<string>).detail || '').trim();
-      if (!prompt || loading || hydrating) return;
-      void sendRef.current?.(prompt);
-    }
-    window.addEventListener('nexora:jarvis-prompt', onJarvisPrompt as EventListener);
-    return () => window.removeEventListener('nexora:jarvis-prompt', onJarvisPrompt as EventListener);
-  }, [loading, hydrating]);
-
-  // Floating Jarvis turns share the same conversation — reload when voice/layer runs a turn
-  useEffect(() => {
-    function onJarvisTurn(e: Event) {
-      const detail = (e as CustomEvent<{ conversationId?: string }>).detail;
-      const id = detail?.conversationId?.trim();
-      if (!id || loading) return;
-      void (async () => {
-        try {
-          const data = await api.getConversation(id);
-          loadedIdRef.current = id;
-          setConversationId(id);
-          writeActiveConversationHint(id);
-          setTurns(mapMessagesToTurns(data.messages || []));
-        } catch {
-          // ignore — chat may be on a different conversation
-        }
-      })();
-    }
-    window.addEventListener('nexora:jarvis-turn', onJarvisTurn as EventListener);
-    return () => window.removeEventListener('nexora:jarvis-turn', onJarvisTurn as EventListener);
-  }, [loading]);
-
-  useEffect(() => {
-    if (hydrating || loading) return;
-    try {
-      const pending = consumePendingJarvisPrompt(window.sessionStorage);
-      if (pending) void sendRef.current?.(pending);
-    } catch {
-      // ignore
-    }
-  }, [hydrating, loading]);
 
   function stopGeneration() {
     abortRef.current?.abort();
@@ -721,8 +659,7 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
       } catch {
         // ignore
       }
-      // Do NOT stopNexoraSpeech here — Jarvis TTS lives in AppShell and must
-      // continue across route changes (dashboard ↔ chat ↔ settings, etc.).
+      stopNexoraSpeech();
     };
   }, []);
 
@@ -785,13 +722,7 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
                 </span>
               </div>
               <h1 className="font-display mt-4 text-2xl font-semibold tracking-tight text-white sm:text-3xl lg:text-4xl">
-                {jarvis?.greeting?.headline ? (
-                  <>
-                    {jarvis.greeting.headline.replace(/\.$/, '')}
-                    {'. '}
-                    <span className="gradient-text">I&apos;m Nexora</span>
-                  </>
-                ) : userFirstName ? (
+                {userFirstName ? (
                   <>
                     Hi {userFirstName}, I&apos;m <span className="gradient-text">Nexora</span>
                   </>
@@ -802,18 +733,9 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
                 )}
               </h1>
               <p className="mt-2 text-sm leading-6 text-neutral-400 sm:leading-7">
-                {jarvis?.greeting?.subline ||
-                  'How can I assist you today? I use your connected Gmail, Slack, Notion, and Jira — with approvals for consequential actions.'}
+                How can I assist you today? I use your connected Gmail, Slack, Notion, and Jira — with approvals for
+                consequential actions.
               </p>
-              {jarvis?.speechBlocked ? (
-                <button
-                  type="button"
-                  onClick={() => void jarvis.enableVoice()}
-                  className="mt-3 inline-flex items-center gap-2 rounded-full border border-accent/30 bg-accent/10 px-3.5 py-2 text-sm text-accent hover:bg-accent/20"
-                >
-                  <Volume2 size={15} /> Enable Jarvis voice
-                </button>
-              ) : null}
             </div>
 
             <div className="hidden w-full max-w-sm rounded-[24px] border border-white/10 bg-black/25 p-5 sm:block">
@@ -852,7 +774,7 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
                       const next = !voiceMuted;
                       setVoiceMuted(next);
                       if (next) {
-                        jarvis?.interruptSpeech?.();
+                        stopNexoraSpeech();
                         setAgentState('idle');
                       }
                     }}
@@ -868,7 +790,7 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
                       type="button"
                       title="Stop speaking"
                       onClick={() => {
-                        jarvis?.interruptSpeech?.();
+                        stopNexoraSpeech();
                         setAgentState('idle');
                       }}
                       className="rounded-full border border-white/10 px-3 py-1.5 text-[11px] uppercase tracking-wide text-neutral-300 hover:text-white"
@@ -1048,12 +970,13 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
                   <Wand2 size={26} />
                 </div>
                 <h3 className="mb-2 text-lg font-semibold text-white sm:text-xl">
-                  {jarvis?.greeting?.headline ||
-                    (userFirstName ? `Good to see you, ${userFirstName}.` : "Hi, I'm Nexora.")}
+                  {userFirstName
+                    ? `Hi ${userFirstName}, I'm Nexora.`
+                    : "Hi, I'm Nexora."}
                 </h3>
                 <p className="text-sm leading-6 text-neutral-400">
-                  {jarvis?.greeting?.subline ||
-                    'How can I help you today? Ask about your inbox, Slack, Notion, or Jira — I run real tools, never demo data.'}
+                  How can I assist you today? Ask about your inbox, Slack, Notion, or Jira — I run real tools, never
+                  demo data.
                 </p>
               </div>
             )}
