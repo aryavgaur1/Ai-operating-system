@@ -24,17 +24,17 @@ import {
 } from 'lucide-react';
 import { api, type AgentTurnResult } from '@/lib/api';
 import { outcomesFromTurn, openLabelFor } from '@/lib/actionOutcomes';
-import { humanToolStart, humanToolResult, shouldAutoSpeakReply } from '@/lib/humanizeTools';
+import { humanToolStart, humanToolResult } from '@/lib/humanizeTools';
 import { GlassCard, Reveal } from '@/components/motion';
 import { MarkdownLite } from '@/components/MarkdownLite';
 import { RiskRadial } from '@/components/charts';
 import { cn } from '@/lib/utils';
 import { APP_ROUTES, chatConversationPath } from '@/lib/routes';
 import { writeActiveConversationHint, resolveResumeConversationId } from '@/lib/activeConversation';
+import { useWorkspaces } from '@/components/WorkspaceProvider';
 import {
   NexoraPresence,
   type NexoraAgentState,
-  speakNexora,
   stopNexoraSpeech,
   canUseSpeechSynthesis,
 } from '@/components/NexoraPresence';
@@ -73,17 +73,49 @@ type MicState = 'idle' | 'listening' | 'unsupported' | 'denied' | 'error';
 function mapMessagesToTurns(messages: any[]): Turn[] {
   return (messages || []).map((m: any) => {
     const stored = m.tool_calls;
-    const detail: AgentTurnResult | undefined =
-      stored && typeof stored === 'object' && stored.plan
-        ? {
-            reply: m.content,
-            plan: stored.plan,
-            executedCalls: Array.isArray(stored.executedCalls) ? stored.executedCalls : [],
-            pendingApprovalIds: Array.isArray(stored.pendingApprovalIds)
-              ? stored.pendingApprovalIds
-              : [],
-          }
-        : undefined;
+    let detail: AgentTurnResult | undefined;
+
+    if (stored && typeof stored === 'object' && stored.plan) {
+      detail = {
+        reply: m.content,
+        plan: stored.plan,
+        executedCalls: Array.isArray(stored.executedCalls) ? stored.executedCalls : [],
+        pendingApprovalIds: Array.isArray(stored.pendingApprovalIds)
+          ? stored.pendingApprovalIds
+          : [],
+        actionOutcomes: Array.isArray(stored.actionOutcomes) ? stored.actionOutcomes : undefined,
+      };
+    } else if (
+      stored &&
+      typeof stored === 'object' &&
+      stored.kind === 'approval_execution_result' &&
+      stored.tool &&
+      stored.action
+    ) {
+      const executedCalls = [
+        {
+          tool: stored.tool,
+          action: stored.action,
+          ok: Boolean(stored.ok),
+          mocked: Boolean(stored.mocked),
+          output: stored.output ?? null,
+          error: stored.error ?? undefined,
+        },
+      ];
+      detail = {
+        reply: m.content,
+        plan: {
+          intent: { intent: 'action', confidence: 1, rationale: 'approval' },
+          reasoning: '',
+          toolCalls: [],
+          responseDraft: m.content,
+        },
+        executedCalls,
+        pendingApprovalIds: [],
+        actionOutcomes: outcomesFromTurn(executedCalls),
+      };
+    }
+
     return {
       role: (m.role === 'assistant' ? 'assistant' : 'user') as 'user' | 'assistant',
       content: m.content,
@@ -99,6 +131,8 @@ function mapMessagesToTurns(messages: any[]): Turn[] {
 
 export function ChatWorkspace({ routeConversationId }: { routeConversationId?: string }) {
   const router = useRouter();
+  const { current: workspace } = useWorkspaces();
+  const workspaceIdRef = useRef<string | undefined>(workspace?.organizationId);
   const [turns, setTurns] = useState<Turn[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -208,6 +242,24 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
     }
   }
 
+  // When workspace changes, drop stale conversation URLs from another org.
+  useEffect(() => {
+    const nextOrgId = workspace?.organizationId;
+    const prevOrgId = workspaceIdRef.current;
+    if (!nextOrgId) return;
+    if (prevOrgId && prevOrgId !== nextOrgId) {
+      loadedIdRef.current = undefined;
+      writeActiveConversationHint(undefined);
+      setConversationIdState(undefined);
+      setTurns([]);
+      setError(null);
+      if (routeConversationId) {
+        router.replace(APP_ROUTES.chat);
+      }
+    }
+    workspaceIdRef.current = nextOrgId;
+  }, [workspace?.organizationId, routeConversationId, router]);
+
   async function refreshHistory() {
     try {
       const res = await api.listConversations();
@@ -287,7 +339,7 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
               } catch {
                 // ignore
               }
-              setError('Conversation not found or inaccessible.');
+              setError('This chat belongs to another workspace. Starting a new chat in your current workspace.');
               setTurns([]);
               if (!cancelled) setHydrating(false);
               return;
@@ -406,7 +458,10 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
     router.push(chatConversationPath(id));
   }
 
-  async function send(message: string, opts?: { regenerate?: boolean }) {
+  async function send(
+    message: string,
+    opts?: { regenerate?: boolean; skipStaleConversation?: boolean }
+  ) {
     const trimmed = message.trim();
     const readyAttachments = pendingAttachments.filter((a) => !a.uploading);
     if ((!trimmed && readyAttachments.length === 0) || loading) return;
@@ -448,7 +503,7 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
     try {
       // Create + bind conversation BEFORE streaming so URL is canonical and Approvals can link.
       // Layout-owned ChatWorkspace survives router.replace — no mid-stream remount wipe.
-      let activeId = conversationId;
+      let activeId = opts?.skipStaleConversation ? undefined : conversationId;
       if (!activeId) {
         const created = await api.createConversation(payload.slice(0, 80));
         activeId = created.conversation.id;
@@ -512,23 +567,7 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
               loadedIdRef.current = event.result.conversationId;
               setConversationId(event.result.conversationId);
             }
-            if (reply && shouldAutoSpeakReply(reply)) {
-              const hasWork =
-                (event.result.executedCalls?.some((c) => c.ok && !c.mocked) ?? false) ||
-                (event.result.pendingApprovalIds?.length ?? 0) > 0;
-              if (hasWork) {
-                speakNexora(reply, {
-                  muted: voiceMutedRef.current,
-                  onStart: () => setAgentState('speaking'),
-                  onEnd: () => setAgentState('idle'),
-                  onError: () => setAgentState('idle'),
-                });
-              } else {
-                setAgentState('idle');
-              }
-            } else {
-              setAgentState('idle');
-            }
+            setAgentState('idle');
           }
         },
       });
@@ -541,7 +580,29 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
       if ((err as Error).name === 'AbortError') {
         setStatusLine('Stopped');
       } else {
-        setError((err as Error).message);
+        const msg = (err as Error).message || '';
+        if (
+          !opts?.skipStaleConversation &&
+          /conversation not found|inaccessible/i.test(msg)
+        ) {
+          loadedIdRef.current = undefined;
+          writeActiveConversationHint(undefined);
+          setConversationIdState(undefined);
+          router.replace(APP_ROUTES.chat);
+          setError('That chat is from another workspace — retrying in your current workspace…');
+          setTurns((prev) => {
+            const last = prev[prev.length - 1];
+            if (last?.role === 'assistant' && !last.content) return prev.slice(0, -1);
+            return prev;
+          });
+          setLoading(false);
+          setStatusLine(null);
+          abortRef.current = null;
+          setAgentState('idle');
+          await send(message, { ...opts, regenerate: true, skipStaleConversation: true });
+          return;
+        }
+        setError(msg);
         // Remove empty assistant placeholder on hard failure
         setTurns((prev) => {
           const last = prev[prev.length - 1];
