@@ -16,8 +16,13 @@ export default function AdminPage() {
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
-  const [tab, setTab] = useState<'overview' | 'users' | 'integrations' | 'audit'>('overview');
+  const [tab, setTab] = useState<'overview' | 'users' | 'integrations' | 'security' | 'audit'>('overview');
   const [allowed, setAllowed] = useState(false);
+  const [loginActivity, setLoginActivity] = useState<any[]>([]);
+  const [loginStats, setLoginStats] = useState<any>(null);
+  const [loginPeriod, setLoginPeriod] = useState<'today' | '7d' | '30d'>('7d');
+  const [loginMethod, setLoginMethod] = useState<'all' | 'google' | 'password'>('all');
+  const [loginOrder, setLoginOrder] = useState<'desc' | 'asc'>('desc');
 
   useEffect(() => {
     api
@@ -31,6 +36,16 @@ export default function AdminPage() {
       })
       .catch(() => router.replace(APP_ROUTES.dashboard));
   }, [router]);
+
+  async function loadLoginActivity() {
+    const data = await api.adminLoginActivity({
+      period: loginPeriod,
+      method: loginMethod === 'all' ? undefined : loginMethod,
+      order: loginOrder,
+    });
+    setLoginActivity(data.events || []);
+    setLoginStats(data.stats || null);
+  }
 
   async function load() {
     try {
@@ -55,6 +70,12 @@ export default function AdminPage() {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allowed, search]);
+
+  useEffect(() => {
+    if (!allowed || tab !== 'security') return;
+    loadLoginActivity().catch((e: any) => setError(e?.message || 'Failed to load login activity'));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allowed, tab, loginPeriod, loginMethod, loginOrder]);
 
   if (!allowed) {
     return (
@@ -86,7 +107,7 @@ export default function AdminPage() {
         <h1 className="font-display mt-3 text-3xl font-semibold text-white">Control plane</h1>
         <p className="mt-2 text-sm text-neutral-400">Users, integrations, and system activity across Nexora.</p>
         <div className="mt-5 flex flex-wrap gap-2">
-          {(['overview', 'users', 'integrations', 'audit'] as const).map((t) => (
+          {(['overview', 'users', 'integrations', 'security', 'audit'] as const).map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
@@ -241,6 +262,100 @@ export default function AdminPage() {
             </div>
           ))}
           {!connections.length && <div className="text-sm text-neutral-500">No connected integrations yet.</div>}
+        </div>
+      )}
+
+      {tab === 'security' && (
+        <div className="space-y-4">
+          <div className="glass rounded-[28px] p-6">
+            <div className="text-[11px] uppercase tracking-[0.2em] text-accent2">Security</div>
+            <h2 className="mt-2 text-2xl font-semibold text-white">Login Activity</h2>
+            <p className="mt-2 text-sm text-neutral-400">
+              Real successful sign-ins across Nexora — platform administrator view only.
+            </p>
+            <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
+              {[
+                ['Successful logins today', loginStats?.logins_today ?? 0],
+                ['Active workspaces (7d)', loginStats?.active_workspaces_7d ?? 0],
+                ['Active members (7d)', loginStats?.active_members_7d ?? 0],
+              ].map(([label, value]) => (
+                <div key={String(label)} className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                  <div className="text-[11px] uppercase tracking-wide text-neutral-500">{label}</div>
+                  <div className="mt-2 text-2xl font-semibold text-white">{value}</div>
+                </div>
+              ))}
+            </div>
+            <div className="mt-5 flex flex-wrap gap-2">
+              {(['today', '7d', '30d'] as const).map((p) => (
+                <button
+                  key={p}
+                  onClick={() => setLoginPeriod(p)}
+                  className={`rounded-full border px-3 py-1.5 text-xs ${loginPeriod === p ? 'border-accent/40 bg-accent/20 text-white' : 'border-white/10 text-neutral-400'}`}
+                >
+                  {p === 'today' ? 'Today' : p === '7d' ? 'Last 7 days' : 'Last 30 days'}
+                </button>
+              ))}
+              <select
+                value={loginMethod}
+                onChange={(e) => setLoginMethod(e.target.value as 'all' | 'google' | 'password')}
+                className="rounded-full border border-white/10 bg-black/30 px-3 py-1.5 text-xs text-neutral-300"
+              >
+                <option value="all">All methods</option>
+                <option value="google">Google</option>
+                <option value="password">Password</option>
+              </select>
+              <button
+                onClick={() => setLoginOrder((o) => (o === 'desc' ? 'asc' : 'desc'))}
+                className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-neutral-400"
+              >
+                {loginOrder === 'desc' ? 'Newest first' : 'Oldest first'}
+              </button>
+            </div>
+          </div>
+
+          <div className="glass rounded-[28px] p-6">
+            <div className="mb-4 text-sm font-medium text-white">Recent login activity</div>
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-left text-sm">
+                <thead className="text-xs uppercase tracking-wide text-neutral-500">
+                  <tr>
+                    <th className="pb-3 pr-4">User</th>
+                    <th className="pb-3 pr-4">Method</th>
+                    <th className="pb-3 pr-4">Workspace</th>
+                    <th className="pb-3 pr-4">Time</th>
+                    <th className="pb-3">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {loginActivity.map((row) => {
+                    const method =
+                      row.authentication_method === 'google' || row.auth_provider === 'google'
+                        ? 'Google'
+                        : 'Password';
+                    return (
+                      <tr key={row.id} className="border-t border-white/8 text-neutral-300">
+                        <td className="py-3 pr-4">
+                          <div className="font-medium text-white">{row.display_name || row.email}</div>
+                          <div className="text-xs text-neutral-500">{row.email}</div>
+                        </td>
+                        <td className="py-3 pr-4">{method}</td>
+                        <td className="py-3 pr-4">{row.workspace_name || '—'}</td>
+                        <td className="py-3 pr-4">{new Date(row.created_at).toLocaleString()}</td>
+                        <td className="py-3">
+                          <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-xs text-emerald-300">
+                            Successful
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            {!loginActivity.length && (
+              <div className="text-sm text-neutral-500">No successful logins in this period.</div>
+            )}
+          </div>
         </div>
       )}
 

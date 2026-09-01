@@ -188,6 +188,78 @@ adminRouter.get(
 );
 
 adminRouter.get(
+  '/auth/login-activity',
+  asyncHandler(async (req, res) => {
+    const period = String(req.query.period ?? '7d');
+    const userId = String(req.query.user ?? '').trim();
+    const method = String(req.query.method ?? '').trim().toLowerCase();
+    const workspaceId = String(req.query.workspace ?? '').trim();
+    const order = String(req.query.order ?? 'desc').toLowerCase() === 'asc' ? 'asc' : 'desc';
+
+    const params: unknown[] = [];
+    const clauses: string[] = ['lh.success = true'];
+    let p = 1;
+
+    if (period === 'today') {
+      clauses.push(`lh.created_at >= date_trunc('day', now())`);
+    } else if (period === '30d') {
+      clauses.push(`lh.created_at >= now() - interval '30 days'`);
+    } else if (period !== 'all') {
+      clauses.push(`lh.created_at >= now() - interval '7 days'`);
+    }
+
+    if (userId) {
+      clauses.push(`lh.user_id = $${p++}::uuid`);
+      params.push(userId);
+    }
+    if (method === 'google' || method === 'password' || method === 'email') {
+      clauses.push(`coalesce(lh.authentication_method, 'password') = $${p++}`);
+      params.push(method);
+    }
+    if (workspaceId) {
+      clauses.push(`lh.organization_id = $${p++}::uuid`);
+      params.push(workspaceId);
+    }
+
+    const where = clauses.length ? `where ${clauses.join(' and ')}` : '';
+
+    const [events, stats] = await Promise.all([
+      query(
+        `select lh.id, lh.user_id, lh.organization_id, lh.ip, lh.device, lh.browser,
+                lh.authentication_method, lh.success, lh.created_at,
+                u.email, u.display_name, u.auth_provider,
+                o.name as workspace_name
+         from login_history lh
+         join users u on u.id = lh.user_id
+         left join organizations o on o.id = lh.organization_id
+         ${where}
+         order by lh.created_at ${order}
+         limit 250`,
+        params
+      ),
+      query(
+        `select
+           count(*) filter (where lh.success = true and lh.created_at >= date_trunc('day', now()))::int as logins_today,
+           count(distinct lh.organization_id) filter (where lh.success = true and lh.created_at >= now() - interval '7 days')::int as active_workspaces_7d,
+           count(distinct lh.user_id) filter (where lh.success = true and lh.created_at >= now() - interval '7 days')::int as active_members_7d
+         from login_history lh
+         ${where}`,
+        params
+      ),
+    ]);
+
+    ok(res, {
+      events: events.rows,
+      stats: stats.rows[0] ?? {
+        logins_today: 0,
+        active_workspaces_7d: 0,
+        active_members_7d: 0,
+      },
+    });
+  })
+);
+
+adminRouter.get(
   '/audit',
   asyncHandler(async (req, res) => {
     const { rows } = await query(

@@ -22,6 +22,11 @@ import {
   slugify,
 } from '../lib/authTokens';
 import { isPlatformAdminEmail } from '../lib/platformAdmin';
+import {
+  buildWelcomeMessage,
+  loginRequestMeta,
+  recordSuccessfulLogin,
+} from '../lib/authLoginEvents';
 
 export const authRouter = Router();
 
@@ -192,8 +197,7 @@ authRouter.post(
       [String(email).toLowerCase()]
     );
     const user = result.rows[0];
-    const { device, browser, os } = parseUserAgent(req.header('user-agent'));
-    const ip = (req.header('x-forwarded-for') ?? req.socket.remoteAddress ?? 'unknown').toString();
+    const meta = loginRequestMeta(req);
 
     if (!user || !user.password_hash) {
       throw new AppError('Invalid email or password', 401);
@@ -201,43 +205,40 @@ authRouter.post(
     const valid = await bcrypt.compare(password, user.password_hash);
     if (!valid) {
       await query(
-        `insert into login_history (user_id, organization_id, ip, user_agent, device, browser, success)
-         values ($1, $2, $3, $4, $5, $6, false)`,
-        [user.id, user.organization_id, ip, req.header('user-agent'), device, browser]
+        `insert into login_history (user_id, organization_id, ip, user_agent, device, browser, success, authentication_method)
+         values ($1, $2, $3, $4, $5, $6, false, 'password')`,
+        [user.id, user.organization_id, meta.ip, meta.userAgent, meta.device, meta.browser]
       ).catch(() => undefined);
       throw new AppError('Invalid email or password', 401);
     }
     if (user.is_suspended) throw new AppError('This account has been suspended', 403);
 
-    await query('update users set last_login = now() where id = $1', [user.id]);
-    await query(
-      `insert into login_history (user_id, organization_id, ip, user_agent, device, browser, success)
-       values ($1, $2, $3, $4, $5, $6, true)`,
-      [user.id, user.organization_id, ip, req.header('user-agent'), device, browser]
-    ).catch(() => undefined);
-
-    const time = new Date().toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
-    await mailer.sendLoginNotification(user.email, {
-      name: user.display_name || user.email,
-      time,
-      device,
-      browser,
-      os,
-      ip,
+    const loginResult = await recordSuccessfulLogin({
+      userId: user.id,
+      email: user.email,
+      displayName: user.display_name,
+      homeOrganizationId: user.organization_id,
+      authMethod: 'password',
+      ip: meta.ip,
+      userAgent: meta.userAgent,
+      device: meta.device,
+      browser: meta.browser,
+      os: meta.os,
     });
-    await logAuthEvent(user.organization_id, user.id, 'login_success', { device, browser, os, ip });
 
     const session = await issueSession(res, user.id, user.organization_id, {
       rememberMe: Boolean(rememberMe),
-      userAgent: req.header('user-agent'),
-      ip,
+      userAgent: meta.userAgent,
+      ip: meta.ip,
     });
 
     ok(res, {
       token: session.accessToken,
       accessToken: session.accessToken,
       refreshToken: session.refreshToken,
-      user: serializeUserProfile(user),
+      user: serializeUserProfile({ ...user, last_login: new Date().toISOString() }),
+      welcomeMessage: buildWelcomeMessage(user.display_name, user.email),
+      loginEventId: loginResult.loginEventId,
     });
   })
 );
@@ -689,14 +690,19 @@ authRouter.get('/google/callback', async (req, res) => {
       Object.assign(user, await ensurePlatformAdminRole(user));
     }
 
-    const { device, browser } = parseUserAgent(req.header('user-agent'));
-    const ip = (req.header('x-forwarded-for') ?? req.socket.remoteAddress ?? 'unknown').toString();
-    await query(
-      `insert into login_history (user_id, organization_id, ip, user_agent, device, browser, success)
-       values ($1, $2, $3, $4, $5, $6, true)`,
-      [user.id, user.organization_id, ip, req.header('user-agent'), device, browser]
-    ).catch(() => undefined);
-    await logAuthEvent(user.organization_id, user.id, 'google_login', { email: user.email, device, browser, ip });
+    const meta = loginRequestMeta(req);
+    await recordSuccessfulLogin({
+      userId: user.id,
+      email: user.email,
+      displayName: user.display_name,
+      homeOrganizationId: user.organization_id,
+      authMethod: 'google',
+      ip: meta.ip,
+      userAgent: meta.userAgent,
+      device: meta.device,
+      browser: meta.browser,
+      os: meta.os,
+    });
 
     const session = await issueSession(res, user.id, user.organization_id, {
       rememberMe: true,

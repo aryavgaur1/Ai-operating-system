@@ -614,6 +614,22 @@ export const api = {
     request<null>(`/admin/users/${id}/reset-password`, { method: 'POST' }),
   adminIntegrations: () => request<{ connections: any[] }>('/admin/integrations'),
   adminAudit: () => request<{ events: any[] }>('/admin/audit'),
+  adminLoginActivity: (opts?: {
+    period?: 'today' | '7d' | '30d' | 'all';
+    user?: string;
+    method?: string;
+    workspace?: string;
+    order?: 'asc' | 'desc';
+  }) => {
+    const params = new URLSearchParams();
+    if (opts?.period) params.set('period', opts.period);
+    if (opts?.user) params.set('user', opts.user);
+    if (opts?.method) params.set('method', opts.method);
+    if (opts?.workspace) params.set('workspace', opts.workspace);
+    if (opts?.order) params.set('order', opts.order);
+    const q = params.toString();
+    return request<{ events: any[]; stats: any }>(`/admin/auth/login-activity${q ? `?${q}` : ''}`);
+  },
   adminChatbotDocs: () => request<{ docs: any[]; ready: boolean }>('/admin/chatbot/docs'),
   adminChatbotReindex: () =>
     request<{ docs: number; chunks: number }>('/admin/chatbot/reindex', { method: 'POST' }),

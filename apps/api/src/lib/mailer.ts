@@ -493,6 +493,51 @@ export const mailer = {
     ), text);
   },
 
+  sendPlatformAdminLoginNotification: (opts: {
+    name: string | null;
+    email: string;
+    method: string;
+    workspaceName: string | null;
+    timestamp: string;
+    ip?: string;
+    browser?: string;
+    device?: string;
+  }) => {
+    const admin = getPlatformAdminEmail();
+    const subject = 'New successful login — Nexora OS';
+    const workspace = opts.workspaceName || 'Unknown workspace';
+    const text = [
+      'New successful login on Nexora OS.',
+      '',
+      opts.name || opts.email,
+      opts.email,
+      '',
+      `Signed in with ${opts.method}`,
+      `Workspace: ${workspace}`,
+      opts.timestamp,
+      opts.browser ? `Browser: ${opts.browser}` : '',
+      opts.ip ? `IP: ${opts.ip}` : '',
+      '',
+      'Nexora OS',
+    ]
+      .filter(Boolean)
+      .join('\n');
+    return send(admin, subject, baseTemplate(subject,
+      `<p style="margin:0 0 16px;font-size:18px;font-weight:600;color:#18181b;">New successful login</p>
+       <p style="margin:0 0 8px;font-size:16px;font-weight:600;color:#18181b;">${escapeHtml(opts.name || opts.email)}</p>
+       <p style="margin:0 0 20px;color:#52525b;">${escapeHtml(opts.email)}</p>
+       <table cellpadding="0" cellspacing="0" border="0" style="width:100%;margin:0 0 8px;">${[
+         infoRow('Method', opts.method),
+         infoRow('Workspace', workspace),
+         infoRow('Time', opts.timestamp),
+         opts.browser ? infoRow('Browser', opts.browser) : '',
+         opts.device ? infoRow('Device', opts.device) : '',
+         opts.ip ? infoRow('IP address', opts.ip) : '',
+       ].filter(Boolean).join('')}</table>`,
+      `Login: ${opts.email}`
+    ), text);
+  },
+
   sendPlatformAdminMemberJoinedNotification: (opts: {
     workspaceName: string; userName: string | null; email: string;
     role: string; inviterName: string | null; timestamp: string;
