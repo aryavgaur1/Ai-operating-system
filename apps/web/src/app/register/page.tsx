@@ -4,7 +4,7 @@ import { FormEvent, Suspense, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { api, googleLoginUrl, setAccessToken } from '@/lib/api';
-import { isSafeNextPath } from '@/lib/routes';
+import { APP_HOME, isSafeNextPath } from '@/lib/routes';
 
 function RegisterInner() {
   const router = useRouter();
@@ -29,7 +29,7 @@ function RegisterInner() {
       const data = await api.signup({ email, password, confirmPassword, displayName, workspaceName });
       setAccessToken(data.accessToken || data.token);
       const next = search.get('next');
-      router.replace(isSafeNextPath(next) ? next! : '/app/dashboard');
+      router.replace(isSafeNextPath(next) ? next! : APP_HOME);
     } catch (err: any) {
       setError(err.message || 'Signup failed');
     } finally {

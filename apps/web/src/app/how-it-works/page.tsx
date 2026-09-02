@@ -20,7 +20,7 @@ export default function HowItWorksPage() {
         <h2 className="font-display text-2xl font-semibold text-white">The Nexora action loop</h2>
         <ol className="mt-6 space-y-4">
           {[
-            ['User intent', 'You ask in natural language — typed or voice.'],
+            ['User intent', 'You ask in natural language — typed in chat.'],
             ['Understand', 'Nexora classifies read vs action and picks the connector family.'],
             ['Plan', 'Tool calls are prepared with inputs, risk, and impact preview.'],
             ['Show what will happen', 'Approval cards show intent, target, and blast radius.'],

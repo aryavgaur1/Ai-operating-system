@@ -26,11 +26,25 @@ export function formatApprovalExecutionMessage(
     if (summary) lines.push(`Title: ${summary}`);
     if (out.url) lines.push(`View: ${out.url}`);
   } else if (approval.tool === 'slack') {
-    const channel = String(out.channel || approval.input?.channel || '').trim();
+    const channelObj =
+      out.channel && typeof out.channel === 'object' ? (out.channel as Record<string, unknown>) : {};
+    const channel = String(
+      out.channelName || out.name || channelObj.name || approval.input?.channel || ''
+    ).trim();
+    const channelId = String(out.id || channelObj.id || '').trim();
     const ts = String(out.ts || '').trim();
-    if (channel) lines.push(`Channel: ${channel}`);
+    if (channel) lines.push(`Channel: ${channel.startsWith('#') ? channel : `#${channel}`}`);
+    if (channelId) lines.push(`Channel ID: ${channelId}`);
     if (ts) lines.push(`ts: ${ts}`);
-    if (out.url) lines.push(`View: ${out.url}`);
+    const url =
+      typeof out.url === 'string'
+        ? out.url
+        : typeof channelObj.url === 'string'
+          ? channelObj.url
+          : channelId
+            ? `https://slack.com/app_redirect?channel=${channelId}`
+            : undefined;
+    if (url) lines.push(`View: ${url}`);
   } else if (approval.tool === 'notion') {
     const id = String(out.id || out.pageId || '').trim();
     const title = String(approval.input?.title || out.title || '').trim();

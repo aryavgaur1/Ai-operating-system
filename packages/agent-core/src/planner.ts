@@ -7,6 +7,7 @@ import {
 import type { LLMClient } from './llmClient';
 import { isExplicitNotionCommand, isExplicitSlackCommand, isExplicitJiraCreate, isExplicitJiraDelete, routingQuery } from './os/intentDetector';
 import { detectRequestMode, type AuthoritativeRoute, toolCallFromRoute } from './os/routingPolicy';
+import { isActionMutationQuery } from './os/workAssistantIntent';
 import { resolveNotionCreateBody } from './notionContent';
 
 // ============================================================
@@ -1015,16 +1016,39 @@ export async function buildPlan(
 
   const contextSummary = summarizeContext(context);
 
-  const responseDraft = await llm.complete([
-    {
-      role: 'system',
-      content:
-        'You are the reasoning engine of an enterprise AI operating system. Answer using only the provided context, and be explicit when a proposed action needs human approval. Never claim a tool succeeded unless a live connector result is present. Gmail, Slack, Jira, and Notion are live connectors — route real actions through them. Salesforce is not implemented. Never invent Slack war rooms for Jira ticket requests.',
-    },
-    { role: 'user', content: `Question: ${query}\n\n${contextSummary}` },
-  ]);
-
   const toolCalls = intent.intent === 'action' || route?.lockedTool ? proposeToolCalls(query, route) : [];
+
+  if (
+    toolCalls.length === 0 &&
+    route?.mode === 'execute' &&
+    isActionMutationQuery(query)
+  ) {
+    return {
+      intent,
+      reasoning: 'Action route but no tool calls proposed — integrations or missing fields.',
+      toolCalls: [],
+      responseDraft:
+        'I understood this as an action request but could not build a concrete tool plan. ' +
+        'Check **Integrations** or add details (recipient, project key, channel name, page title).',
+    };
+  }
+
+  let responseDraft: string;
+  if (route?.lockedTool && route?.lockedAction) {
+    responseDraft = `Prepared ${route.lockedTool}.${route.lockedAction} for review.`;
+  } else if (toolCalls.length > 0) {
+    const summary = toolCalls.map((c) => `${c.tool}.${c.action}`).join(', ');
+    responseDraft = `Prepared: ${summary}.`;
+  } else {
+    responseDraft = await llm.complete([
+      {
+        role: 'system',
+        content:
+          'You are the reasoning engine of an enterprise AI operating system. Answer using only the provided context, and be explicit when a proposed action needs human approval. Never claim a tool succeeded unless a live connector result is present. Gmail, Slack, Jira, and Notion are live connectors — route real actions through them. Salesforce is not implemented. Never invent Slack war rooms for Jira ticket requests.',
+      },
+      { role: 'user', content: `Question: ${query}\n\n${contextSummary}` },
+    ]);
+  }
 
   return {
     intent,

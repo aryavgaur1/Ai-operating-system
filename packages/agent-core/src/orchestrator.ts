@@ -16,11 +16,12 @@ import {
   clarifyReplyForJira,
   cancelReply,
   dryRunReplyForPlan,
+  workflowPlanReply,
   stampCapabilityContext,
   extractActionOutcomes,
 } from './os';
 import { routingQuery } from './os/intentDetector';
-import { isActionMutationQuery } from './os/workAssistantIntent';
+import { isActionRouteIntent, shouldSkipHybridRetrieve } from './os/workAssistantIntent';
 import { formatGmailSearchReply } from './os/gmailQuery';
 import { expandGmailFollowUp, type GmailSearchMemory } from './os/workAssistantIntent';
 import { recall } from './os/threadMemory';
@@ -34,8 +35,8 @@ import { recall } from './os/threadMemory';
 
 function formatReply(executedCalls: AgentTurnResult['executedCalls'], plan: AgentPlan, approvalNote: string): string {
   if (executedCalls.length === 0) {
-    if (approvalNote) {
-      const pending = plan.toolCalls.filter((c) => c.requiresApproval);
+    const pending = plan.toolCalls.filter((c) => c.requiresApproval);
+    if (approvalNote || pending.length > 0) {
       if (pending.length > 0) {
         const lines = pending.map((c) => {
           const product =
@@ -48,6 +49,10 @@ function formatReply(executedCalls: AgentTurnResult['executedCalls'], plan: Agen
                   : c.tool === 'notion'
                     ? 'Notion'
                     : c.tool;
+          if (c.tool === 'slack' && c.action === 'createWarRoom') {
+            const project = String(c.input?.project ?? 'launch').trim();
+            return `• **Slack launch war room** for ${project} — waiting for your approval before creation`;
+          }
           if (c.tool === 'slack' && (c.action === 'postMessage' || c.action === 'postMessageExternalChannel')) {
             const ch = String(c.input?.channel ?? 'channel').replace(/^#/, '');
             return `• Prepared a Slack message for **#${ch}** — waiting for your approval before send`;
@@ -60,6 +65,10 @@ function formatReply(executedCalls: AgentTurnResult['executedCalls'], plan: Agen
             const summary = String(c.input?.summary ?? 'new issue');
             return `• Prepared a Jira ticket “${summary.slice(0, 80)}” — waiting for your approval`;
           }
+          if (c.tool === 'notion' && (c.action === 'createPage' || c.action === 'createProject')) {
+            const title = String(c.input?.title ?? c.input?.name ?? 'document');
+            return `• Prepared a Notion page “${title.slice(0, 80)}” — waiting for your approval`;
+          }
           return `• Prepared a ${product} action — waiting for your approval`;
         });
         return (
@@ -69,6 +78,19 @@ function formatReply(executedCalls: AgentTurnResult['executedCalls'], plan: Agen
           approvalNote
         );
       }
+      if (approvalNote) {
+        return (
+          `Action(s) are queued for your review. Open **Approvals** → **Approve & run** to execute.` +
+          approvalNote
+        );
+      }
+    }
+    if (plan.toolCalls.length > 0) {
+      return (
+        `I understood this as an actionable request, but nothing completed yet. ` +
+        `Open **Approvals** or check **Integrations** for Gmail, Slack, Jira, and Notion.` +
+        approvalNote
+      );
     }
     return plan.responseDraft + approvalNote;
   }
@@ -172,9 +194,17 @@ function formatReply(executedCalls: AgentTurnResult['executedCalls'], plan: Agen
       ].includes(call.action)
     ) {
       if (call.action === 'createWarRoom' || call.action === 'createChannel') {
-        const name = String(output?.name ?? output?.channelName ?? planned?.input?.name ?? 'channel').replace(/^#/, '');
-        const url = output?.url ? `\nOpen: ${output.url}` : '';
-        return `Your launch war room **#${name}** is ready.${url}`;
+        const channel = output?.channel as Record<string, unknown> | undefined;
+        const name = String(
+          output?.name ?? output?.channelName ?? channel?.name ?? planned?.input?.name ?? 'channel'
+        ).replace(/^#/, '');
+        const url =
+          (typeof output?.url === 'string' && output.url) ||
+          (typeof channel?.url === 'string' && channel.url) ||
+          '';
+        const urlLine = url ? `\nOpen: ${url}` : '';
+        if (output?.reused) return `Slack channel #${name} already existed — reused it.${urlLine}`;
+        return `Your launch war room **#${name}** is ready.${urlLine}`;
       }
       if (call.action === 'createIncident') {
         const name = String(output?.name ?? output?.channelName ?? 'incident');
@@ -328,7 +358,9 @@ export async function runAgentTurn(
           rationale: route.rationale,
         };
 
-  const context = await hybridRetrieve(query, organizationId, vectorStore, graphStore);
+  const context = shouldSkipHybridRetrieve(route, effectiveQuery)
+    ? { vectorMatches: [], graph: { nodes: [], edges: [] }, keywordMatches: [] }
+    : await hybridRetrieve(query, organizationId, vectorStore, graphStore);
   const llm = createLLMClient();
   const reasoning: string[] = [
     `Authoritative route: family=${route.family} mode=${route.mode} tool=${route.lockedTool ?? '—'} action=${route.lockedAction ?? '—'} ambiguous=${route.ambiguous}`,
@@ -409,20 +441,10 @@ export async function runAgentTurn(
   }
 
   if (route.allowWorkflow && workflow.toolCalls.length > 0) {
-    const draft = await llm.complete([
-      {
-        role: 'system',
-        content:
-          'You are the reasoning engine of an enterprise AI operating system. Briefly confirm the workflow you will execute. Do not invent tool results.',
-      },
-      {
-        role: 'user',
-        content: `User: ${query}\n\nPlan:\n${workflow.planSteps.map((s, i) => `${i + 1}. ${s}`).join('\n')}\n\nReasoning:\n${workflow.reasoning.join('\n')}`,
-      },
-    ]);
+    const draft = workflowPlanReply(workflow);
     plan = {
       intent: legacyIntent,
-      reasoning: [...workflow.reasoning, draft].join('\n'),
+      reasoning: workflow.reasoning.join('\n'),
       toolCalls: workflow.toolCalls,
       responseDraft: draft,
     };
@@ -551,20 +573,20 @@ export async function runAgentTurn(
       : `Notion is connected (live). Try:\n- create a notion page titled Weekly Update`;
   } else if (executedCalls.length === 0 && pendingApprovalIds.length === 0) {
     const liveQuery = routingQuery(query);
-    const intendedTools = plan.toolCalls.length > 0 || Boolean(route.lockedTool);
-    const actionIntent =
-      intendedTools ||
-      isActionMutationQuery(liveQuery) ||
-      route.mode === 'execute' ||
-      ['create', 'post', 'delete', 'update', 'launch', 'incident'].includes(route.routeAction);
+    const actionIntent = isActionRouteIntent(route, liveQuery) || plan.toolCalls.length > 0;
     if (actionIntent) {
       const blocked =
         strippedTools.length > 0
           ? ` Blocked tools: ${strippedTools.map((s) => `${s.tool}.${s.action}`).join(', ')}.`
           : '';
+      const failed = executedCalls.filter((c) => !c.ok);
+      const errLine =
+        failed.length > 0
+          ? ` ${failed.map((c) => `${c.tool}.${c.action}: ${c.error || 'failed'}`).join('; ')}.`
+          : '';
       reply =
-        `I understood this as an actionable request, but nothing executed yet.${blocked} ` +
-        `Check **Integrations** for Gmail, Slack, Jira, and Notion — or clarify the target system and details.`;
+        `I understood this as an actionable request, but nothing executed yet.${blocked}${errLine} ` +
+        `Check **Integrations** for Gmail, Slack, Jira, and Notion — or add any missing details (recipient, project, channel).`;
     } else {
       reply =
         plan.responseDraft ||

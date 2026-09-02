@@ -87,31 +87,3 @@ export function humanToolResult(tool: string, action: string, ok: boolean, error
   if (ACTION_OK[key]) return ACTION_OK[key];
   return `Finished with ${TOOL_LABELS[tool] || 'your tools'}.`;
 }
-
-/** Auto-speak only short, conversational replies — not long dumps. */
-export function shouldAutoSpeakReply(reply: string): boolean {
-  const plain = reply
-    .replace(/```[\s\S]*?```/g, ' ')
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
-    .replace(/[*_#>`]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-  if (plain.length < 24) return false;
-  if (plain.length > 420) return false;
-  // Long bullet lists stay visual
-  const lines = plain.split(/\n/).filter(Boolean);
-  if (lines.length > 8) return false;
-  return true;
-}
-
-/** Voice should narrate verified tool work — not generic LLM prose. */
-export function shouldSpeakAgentReply(
-  reply: string,
-  detail?: { executedCalls?: Array<{ ok?: boolean; mocked?: boolean }>; pendingApprovalIds?: string[] }
-): boolean {
-  if (!reply?.trim()) return false;
-  const executed = detail?.executedCalls?.filter((c) => c.ok && !c.mocked) ?? [];
-  const pending = detail?.pendingApprovalIds?.length ?? 0;
-  if (executed.length === 0 && pending === 0) return false;
-  return shouldAutoSpeakReply(reply);
-}

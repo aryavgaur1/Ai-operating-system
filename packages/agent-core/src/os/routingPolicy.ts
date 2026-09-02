@@ -1205,6 +1205,19 @@ export function cancelReply(): string {
   return `Cancelled — I will not create or run any ticket/action from that request.`;
 }
 
+/** Deterministic workflow confirmation — no LLM. */
+export function workflowPlanReply(workflow: { planSteps: string[]; toolCalls: ToolCall[] }): string {
+  const steps = workflow.planSteps.map((s, i) => `${i + 1}. ${s}`).join('\n');
+  const needsApproval = workflow.toolCalls.some((c) => c.requiresApproval);
+  if (needsApproval) {
+    return (
+      `**Action proposed** — I'll run this workflow:\n\n${steps}\n\n` +
+      `High-impact steps will pause in **Approvals** for your review before they execute.`
+    );
+  }
+  return `**Executing** — ${steps}`;
+}
+
 export function dryRunReplyForPlan(calls: ToolCall[]): string {
   if (calls.length === 0) {
     return `Dry run: I don’t have a concrete tool plan yet. Tell me the project, summary, and any vendor name.`;

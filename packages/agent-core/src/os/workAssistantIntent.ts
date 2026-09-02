@@ -174,6 +174,35 @@ export function impliesWorkspaceExecution(query: string): boolean {
   return impliesLiveWorkspaceData(query) || isActionMutationQuery(query);
 }
 
+/** Skip vector/graph retrieval for deterministic action routes (latency). */
+export function shouldSkipHybridRetrieve(
+  route: { mode: string; ambiguous?: boolean; lockedTool?: string | null; lockedAction?: string | null; allowWorkflow?: boolean; osIntent?: { kind?: string } },
+  query: string
+): boolean {
+  if (route.mode !== 'execute' || route.ambiguous) return false;
+  const live = routingQuery(query);
+  if (route.lockedTool && route.lockedAction) return true;
+  if (isActionMutationQuery(live)) return true;
+  const kind = route.osIntent?.kind ?? '';
+  if (route.allowWorkflow && kind && kind !== 'workspace_intelligence' && kind !== 'read_only') {
+    return true;
+  }
+  return false;
+}
+
+/** True when the route must never fall back to generic LLM conversational prose. */
+export function isActionRouteIntent(
+  route: { mode: string; lockedTool?: string | null; routeAction?: string; ambiguous?: boolean },
+  query: string
+): boolean {
+  if (route.ambiguous) return false;
+  if (route.mode === 'execute' && route.lockedTool) return true;
+  if (route.mode === 'execute' && route.routeAction && route.routeAction !== 'unknown' && route.routeAction !== 'read') {
+    return true;
+  }
+  return isActionMutationQuery(routingQuery(query));
+}
+
 /** Any query that implies live workspace data — never answer from generic LLM alone. */
 export function impliesLiveWorkspaceData(query: string): boolean {
   return (

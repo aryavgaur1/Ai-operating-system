@@ -26,6 +26,7 @@ import {
   findUsersByRole,
 } from './slackService';
 import * as intelligence from './slackIntelligence';
+import { normalizeSlackChannelOutput } from './slackResource';
 
 // ============================================================
 // Slack Connector — core CRUD preserved; enterprise AI workflows
@@ -536,24 +537,28 @@ class SlackConnector implements ToolConnector {
           case 'createWarRoom':
             return okResult(
               action,
-              await intelligence.createWarRoom({
-                name: input.name as string | undefined,
-                project: (input.project as string) ?? (input.name as string) ?? undefined,
-                topic: input.topic as string | undefined,
-                roles: input.roles as string[] | undefined,
-                docs: input.docs as string[] | undefined,
-                roadmap: input.roadmap as string | undefined,
-              })
+              normalizeSlackChannelOutput(
+                (await intelligence.createWarRoom({
+                  name: input.name as string | undefined,
+                  project: (input.project as string) ?? (input.name as string) ?? undefined,
+                  topic: input.topic as string | undefined,
+                  roles: input.roles as string[] | undefined,
+                  docs: input.docs as string[] | undefined,
+                  roadmap: input.roadmap as string | undefined,
+                })) as Record<string, unknown>
+              )
             );
           case 'createIncident':
             return okResult(
               action,
-              await intelligence.createIncident({
-                name: input.name as string | undefined,
-                severity: input.severity as string | undefined,
-                summary: (input.summary as string) ?? (input.text as string) ?? undefined,
-                roles: input.roles as string[] | undefined,
-              })
+              normalizeSlackChannelOutput(
+                (await intelligence.createIncident({
+                  name: input.name as string | undefined,
+                  severity: input.severity as string | undefined,
+                  summary: (input.summary as string) ?? (input.text as string) ?? undefined,
+                  roles: input.roles as string[] | undefined,
+                })) as Record<string, unknown>
+              )
             );
           case 'summarizeThread':
             return okResult(

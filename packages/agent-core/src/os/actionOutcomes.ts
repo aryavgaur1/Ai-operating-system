@@ -4,6 +4,23 @@ function asRecord(output: unknown): Record<string, unknown> {
   return output && typeof output === 'object' ? (output as Record<string, unknown>) : {};
 }
 
+function slackFieldsFromOutput(output: Record<string, unknown>) {
+  const channel = asRecord(output.channel);
+  const channelId = String(output.id || channel.id || output.channelId || '').trim();
+  const channelName = String(output.channelName || output.name || channel.name || '')
+    .replace(/^#/, '')
+    .trim();
+  let resourceUrl: string | undefined;
+  if (typeof output.url === 'string' && output.url.startsWith('http')) {
+    resourceUrl = output.url;
+  } else if (typeof channel.url === 'string' && channel.url.startsWith('http')) {
+    resourceUrl = channel.url;
+  } else if (channelId) {
+    resourceUrl = `https://slack.com/app_redirect?channel=${encodeURIComponent(channelId)}`;
+  }
+  return { channelId, channelName, resourceUrl };
+}
+
 function integrationLabel(tool: ToolName): string {
   if (tool === 'gmail') return 'Gmail';
   if (tool === 'slack') return 'Slack';
@@ -94,10 +111,10 @@ function extractOne(
   }
 
   if (integration === 'slack') {
-    const channelName = String(
-      output.channelName || output.name || input.channel || input.name || ''
-    ).replace(/^#/, '');
-    const channelId = String(output.id || output.channel || '').trim();
+    const slack = slackFieldsFromOutput(output);
+    const channelName = slack.channelName || String(input.channel || input.name || '').replace(/^#/, '');
+    const channelId = slack.channelId;
+    const resolvedUrl = slack.resourceUrl || resourceUrl;
     let summary = 'Finished in Slack';
     if (call.action === 'createWarRoom' || call.action === 'createChannel') {
       summary = channelName ? `Launch war room #${channelName} is ready` : 'Slack channel created';
@@ -113,7 +130,7 @@ function extractOne(
       integration,
       summary,
       resource: channelName ? `#${channelName}` : channelId || undefined,
-      resourceUrl,
+      resourceUrl: resolvedUrl,
       resourceType: call.action.includes('Channel') || call.action.includes('WarRoom') ? 'slack_channel' : 'slack_message',
       externalId: channelId || undefined,
       timestamp: new Date().toISOString(),

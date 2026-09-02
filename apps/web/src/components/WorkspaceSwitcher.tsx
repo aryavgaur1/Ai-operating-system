@@ -3,7 +3,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import Link from 'next/link';
-import { motion } from 'framer-motion';
 import { Building2, Check, ChevronDown, Plus, UserRound } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { APP_ROUTES } from '@/lib/routes';
@@ -126,14 +125,11 @@ export function WorkspaceSwitcher({
     mounted &&
     open &&
     coords &&
-    createPortal(
-      <motion.div
+      createPortal(
+          <div
           ref={menuRef}
-          initial={{ opacity: 0, y: 8, scale: 0.98 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          transition={{ duration: 0.16 }}
           style={{ top: coords.top, left: coords.left }}
-          className="menu-panel fixed z-[300] w-[min(320px,calc(100vw-16px))] max-h-[min(70vh,520px)] overflow-y-auto rounded-[22px] border border-accent/30 p-2"
+          className="menu-panel fixed z-[300] w-[min(320px,calc(100vw-16px))] max-h-[min(70vh,520px)] overflow-y-auto rounded-lg border border-white/15 bg-[#0f1117] p-2 shadow-lg"
           role="listbox"
         >
           {(error || actionError) && (
@@ -216,7 +212,7 @@ export function WorkspaceSwitcher({
           >
             Workspace settings · Members · Invites
           </Link>
-        </motion.div>,
+        </div>,
       document.body
     );
 
@@ -236,7 +232,7 @@ export function WorkspaceSwitcher({
           });
         }}
         className={cn(
-          'flex items-center gap-2 rounded-2xl border border-accent/35 bg-accent/10 text-left transition hover:border-accent/55 hover:bg-accent/15',
+          'focus-ring flex items-center gap-2 rounded-md border border-white/15 bg-white/[0.03] text-left transition hover:border-white/25 hover:bg-white/[0.05]',
           compact ? 'max-w-[148px] px-2 py-1.5 sm:max-w-[168px]' : 'min-w-[180px] max-w-[260px] px-3 py-2'
         )}
         aria-expanded={open}

@@ -228,6 +228,117 @@ body::-webkit-scrollbar-track {
     transform: rotate(360deg);
   }
 }
+/* ---------------- Enterprise app shell (Phase 7) ---------------- */
+
+.app-bg {
+  position: fixed;
+  inset: 0;
+  z-index: -10;
+  background: #06070b;
+}
+
+.app-bg-grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(to right, rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: linear-gradient(to bottom, black 0%, black 70%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, black 0%, black 70%, transparent 100%);
+}
+
+@layer components {
+  .focus-ring {
+    @apply outline-none focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:ring-offset-2 focus-visible:ring-offset-[#06070b];
+  }
+
+  .nx-eyebrow {
+    @apply text-[11px] font-medium uppercase tracking-[0.16em] text-neutral-500;
+  }
+
+  .nx-title {
+    @apply font-display text-2xl font-semibold tracking-tight text-white;
+  }
+
+  .nx-description {
+    @apply mt-1 max-w-2xl text-sm leading-relaxed text-neutral-400;
+  }
+
+  .nx-panel {
+    @apply overflow-hidden rounded-lg border border-white/10 bg-[#0a0c11]/80;
+  }
+
+  .nx-panel-header {
+    @apply flex items-center justify-between gap-3 border-b border-white/10 px-4 py-3;
+  }
+
+  .nx-panel-title {
+    @apply text-sm font-medium text-white;
+  }
+
+  .nx-panel-body {
+    @apply p-4;
+  }
+
+  .nx-btn {
+    @apply focus-ring inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .nx-btn-primary {
+    @apply nx-btn bg-accent px-3 py-1.5 font-semibold text-[#04101f] hover:bg-[#7db6ff];
+  }
+
+  .nx-btn-secondary {
+    @apply nx-btn border border-white/15 bg-white/[0.03] px-3 py-1.5 text-neutral-200 hover:border-white/25 hover:bg-white/[0.06];
+  }
+
+  .nx-btn-ghost {
+    @apply nx-btn px-3 py-1.5 text-neutral-400 hover:bg-white/5 hover:text-neutral-200;
+  }
+
+  .nx-btn-danger {
+    @apply nx-btn border border-rose-500/30 px-3 py-1.5 text-rose-300 hover:bg-rose-500/10;
+  }
+
+  .nx-input {
+    @apply focus-ring w-full rounded-md border border-white/10 bg-[#0a0c11] px-3 py-2 text-sm text-white placeholder:text-neutral-500 hover:border-white/15 focus:border-white/25;
+  }
+
+  .nx-alert {
+    @apply rounded-lg border px-4 py-3 text-sm;
+  }
+
+  .nx-alert-error {
+    @apply nx-alert border-rose-500/30 bg-rose-500/10 text-rose-100;
+  }
+
+  .nx-alert-success {
+    @apply nx-alert border-emerald-500/30 bg-emerald-500/10 text-emerald-100;
+  }
+
+  .nx-alert-info {
+    @apply nx-alert border-white/10 bg-white/[0.03] text-neutral-300;
+  }
+
+  .nx-empty {
+    @apply px-4 py-8 text-center text-sm text-neutral-400;
+  }
+
+  .nx-skel {
+    @apply animate-pulse rounded-md bg-white/[0.06];
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ambient-blob,
+  .animate-floatSlow,
+  .animate-floatSlower,
+  .animate-risk-orbit {
+    animation: none !important;
+  }
+}
+
 .animate-risk-orbit {
   animation: risk-orbit-in 2.2s ease-out 1, risk-orbit-spin 9s linear 2.2s infinite;
 }

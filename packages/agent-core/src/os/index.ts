@@ -28,6 +28,7 @@ export {
   clarifyReplyForJira,
   cancelReply,
   dryRunReplyForPlan,
+  workflowPlanReply,
   isCancelRequest,
   isClarifyRequest,
   isDryRunRequest,
@@ -65,6 +66,8 @@ export {
   impliesLiveWorkspaceData,
   impliesWorkspaceExecution,
   isActionMutationQuery,
+  shouldSkipHybridRetrieve,
+  isActionRouteIntent,
 } from './workAssistantIntent';
 export { extractActionOutcomes, openLinkLabel } from './actionOutcomes';
 export type { GmailSearchMemory } from './workAssistantIntent';

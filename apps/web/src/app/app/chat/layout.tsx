@@ -1,10 +1,20 @@
 'use client';
 
+import { Suspense } from 'react';
 import { usePathname } from 'next/navigation';
 import { ChatWorkspace } from '@/components/ChatWorkspace';
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function ChatRoute() {
+  const pathname = usePathname() || '';
+  const match = pathname.match(/^\/app\/chat\/([^/]+)\/?$/);
+  const raw = match?.[1] ? decodeURIComponent(match[1]) : undefined;
+  const routeConversationId = raw && UUID_RE.test(raw) ? raw : undefined;
+
+  return <ChatWorkspace routeConversationId={routeConversationId} />;
+}
 
 /**
  * Chat layout owns ChatWorkspace so navigating between /app/chat and
@@ -12,14 +22,11 @@ const UUID_RE =
  * That eliminates the mid-stream / return-navigation wipe.
  */
 export default function ChatLayout({ children }: { children: React.ReactNode }) {
-  const pathname = usePathname() || '';
-  const match = pathname.match(/^\/app\/chat\/([^/]+)\/?$/);
-  const raw = match?.[1] ? decodeURIComponent(match[1]) : undefined;
-  const routeConversationId = raw && UUID_RE.test(raw) ? raw : undefined;
-
   return (
     <>
-      <ChatWorkspace routeConversationId={routeConversationId} />
+      <Suspense fallback={<div className="px-6 py-8 text-sm text-neutral-500">Loading command…</div>}>
+        <ChatRoute />
+      </Suspense>
       {/* Route segment pages are identity-only; workspace lives here. */}
       <div className="hidden" aria-hidden>
         {children}

@@ -13,6 +13,7 @@ export { gmailConnector } from './gmail';
 export { salesforceConnector } from './salesforce';
 export { notionConnector, initializeNotionClient, clearNotionClient } from './notion';
 export { slackService, SlackServiceError, verifySlackSignature } from './slackService';
+export { normalizeSlackChannelOutput, slackAppRedirectUrl } from './slackResource';
 export { default as slack_service } from './slackService';
 export * as slackIntelligence from './slackIntelligence';
 export {

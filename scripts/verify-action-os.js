@@ -14,13 +14,19 @@ const {
   detectRequestMode,
   toolCallFromRoute,
   filterToolCallsByFamily,
+  workflowPlanReply,
 } = require(path.join(__dirname, '../packages/agent-core/dist/os/routingPolicy'));
+const { planWorkflow } = require(path.join(__dirname, '../packages/agent-core/dist/os/workflowPlanner'));
 const {
   isActionMutationQuery,
   impliesWorkspaceExecution,
+  shouldSkipHybridRetrieve,
+  isActionRouteIntent,
 } = require(path.join(__dirname, '../packages/agent-core/dist/os/workAssistantIntent'));
 const { extractActionOutcomes } = require(path.join(__dirname, '../packages/agent-core/dist/os/actionOutcomes'));
 const { buildPlan } = require(path.join(__dirname, '../packages/agent-core/dist/planner'));
+
+const EMPTY_CTX = { vectorMatches: [], graph: { nodes: [], edges: [] }, keywordMatches: [] };
 
 async function planFor(query) {
   const route = resolveAuthoritativeRoute(query);
@@ -28,7 +34,7 @@ async function planFor(query) {
   const plan = await buildPlan(
     query,
     { intent: 'action', confidence: 0.9, rationale: route.rationale },
-    { vectorMatches: [], graph: { nodes: [], edges: [] }, keywordMatches: [] },
+    EMPTY_CTX,
     llm,
     route
   );
@@ -38,7 +44,7 @@ async function planFor(query) {
     const locked = toolCallFromRoute(route, query);
     if (locked) calls = [locked];
   }
-  return { route, calls };
+  return { route, calls, plan };
 }
 
 function ok(label, cond) {
@@ -56,9 +62,36 @@ async function main() {
 
   ok('war room routes execute', detectRequestMode('Create a launch war room?') === 'execute');
 
+  const warRoute = resolveAuthoritativeRoute('Create a launch war room.');
+  ok('war room skip hybrid retrieve', shouldSkipHybridRetrieve(warRoute, 'Create a launch war room.'));
+  ok('war room is action route intent', isActionRouteIntent(warRoute, 'Create a launch war room.'));
+
   const war = await planFor('Create a launch war room for Project Atlas on slack');
   ok('war room mode execute', war.route.mode === 'execute');
   ok('war room locks slack', war.route.lockedTool === 'slack' || war.calls.some((c) => c.tool === 'slack'));
+
+  const warWf = planWorkflow('Create a launch war room.', warRoute.osIntent);
+  ok('workflow has createWarRoom', warWf.toolCalls.some((c) => c.action === 'createWarRoom'));
+  const wfReply = workflowPlanReply(warWf);
+  ok('workflow reply is action proposed', /Action proposed/i.test(wfReply));
+  ok('workflow reply not VC pitch', !/VC|pitch deck|investor meeting/i.test(wfReply));
+
+  let llmCalled = false;
+  const jiraRoute = resolveAuthoritativeRoute('Create a Jira ticket for the payment bug.');
+  const jiraPlan = await buildPlan(
+    'Create a Jira ticket for the payment bug.',
+    { intent: 'action', confidence: 0.95, rationale: jiraRoute.rationale },
+    EMPTY_CTX,
+    {
+      async complete() {
+        llmCalled = true;
+        return 'Here is a pitch you could give to a VC about payment systems.';
+      },
+    },
+    jiraRoute
+  );
+  ok('locked jira skips LLM draft', !llmCalled);
+  ok('jira draft not VC pitch', !/VC|pitch/i.test(jiraPlan.responseDraft));
 
   const jira = await planFor('Create a Jira ticket for the login bug.');
   ok('jira ticket mode execute', jira.route.mode === 'execute');
@@ -73,6 +106,10 @@ async function main() {
   const gmail = await planFor('Find my important emails.');
   ok('gmail read locks gmail', gmail.route.lockedTool === 'gmail');
   ok('gmail read searchEmails', gmail.route.lockedAction === 'searchEmails');
+
+  const capitalRoute = resolveAuthoritativeRoute('What is the capital of France?');
+  ok('capital not action route', !isActionRouteIntent(capitalRoute, 'What is the capital of France?'));
+  ok('capital not action mutation', !isActionMutationQuery('What is the capital of France?'));
 
   const outcomes = extractActionOutcomes(
     [
@@ -100,6 +137,37 @@ async function main() {
   ok('outcomes count', outcomes.length === 2);
   ok('jira outcome url', outcomes[0].resourceUrl?.includes('NEX-123'));
   ok('slack outcome url', outcomes[1].resourceUrl?.includes('slack.com'));
+
+  const nestedWarRoom = extractActionOutcomes(
+    [
+      {
+        tool: 'slack',
+        action: 'createWarRoom',
+        ok: true,
+        mocked: false,
+        output: {
+          workflow: 'createWarRoom',
+          channel: {
+            id: 'C01234567',
+            name: 'launch-war-room',
+            url: 'https://slack.com/app_redirect?channel=C01234567',
+          },
+        },
+      },
+    ],
+    [{ tool: 'slack', action: 'createWarRoom', input: {}, riskLevel: 'high', requiresApproval: true }],
+    []
+  );
+  ok('nested war room url', nestedWarRoom[0].resourceUrl?.includes('C01234567'));
+  ok('nested war room name', nestedWarRoom[0].resource === '#launch-war-room');
+
+  const failedOutcome = extractActionOutcomes(
+    [{ tool: 'slack', action: 'createWarRoom', ok: false, mocked: false, error: 'Slack is not connected.' }],
+    [{ tool: 'slack', action: 'createWarRoom', input: {}, riskLevel: 'high', requiresApproval: true }],
+    []
+  );
+  ok('failed outcome status', failedOutcome[0].status === 'failed');
+  ok('failed outcome surfaces error', /not connected/i.test(failedOutcome[0].summary || ''));
 
   console.log('\nAll Action OS checks passed.');
 }

@@ -344,6 +344,7 @@ chatRouter.post(
                   executedCalls: finalResult.executedCalls,
                   pendingApprovalIds: finalResult.pendingApprovalIds,
                   sources: finalResult.sources,
+                  actionOutcomes: finalResult.actionOutcomes,
                 },
               });
               res.write(`data: ${JSON.stringify({ type: 'conversation', conversationId: savedConversationId })}\n\n`);
@@ -383,6 +384,7 @@ chatRouter.post(
               executedCalls: result.executedCalls,
               pendingApprovalIds: result.pendingApprovalIds,
               sources: result.sources,
+              actionOutcomes: result.actionOutcomes,
             },
           });
         } catch (err) {

@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
+import { APP_HOME } from '@/lib/routes';
 
 const STEPS = ['Workspace', 'Profile', 'Gmail', 'Notion', 'Slack', 'Jira', 'Finish'] as const;
 
@@ -32,7 +33,7 @@ export default function OnboardingPage() {
         setWorkspaceName(res.workspace?.name || '');
         setAvatarUrl(res.profile?.avatar_url || '');
         if (res.profile?.preferences?.onboardingCompleted) {
-          router.replace('/app/dashboard');
+          router.replace(APP_HOME);
         }
       })
       .catch(() => router.replace('/login'));
@@ -61,7 +62,7 @@ export default function OnboardingPage() {
     setError(null);
     try {
       await api.completeOnboarding({ workspaceName, displayName, avatarUrl: avatarUrl || undefined });
-      router.replace('/app/dashboard');
+      router.replace(APP_HOME);
     } catch (err: any) {
       setError(err.message || 'Could not finish setup');
     } finally {

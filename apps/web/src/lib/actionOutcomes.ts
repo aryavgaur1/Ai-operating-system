@@ -22,6 +22,23 @@ function asRecord(output: unknown): Record<string, unknown> {
   return output && typeof output === 'object' ? (output as Record<string, unknown>) : {};
 }
 
+function slackFieldsFromOutput(output: Record<string, unknown>) {
+  const channel = asRecord(output.channel);
+  const channelId = String(output.id || channel.id || output.channelId || '').trim();
+  const channelName = String(output.channelName || output.name || channel.name || '')
+    .replace(/^#/, '')
+    .trim();
+  let resourceUrl: string | undefined;
+  if (typeof output.url === 'string' && output.url.startsWith('http')) {
+    resourceUrl = output.url;
+  } else if (typeof channel.url === 'string' && channel.url.startsWith('http')) {
+    resourceUrl = channel.url;
+  } else if (channelId) {
+    resourceUrl = `https://slack.com/app_redirect?channel=${encodeURIComponent(channelId)}`;
+  }
+  return { channelId, channelName, resourceUrl };
+}
+
 export function openLabelFor(integration: string): string {
   return OPEN_LABELS[integration] || 'Open resource';
 }
@@ -43,9 +60,11 @@ export function outcomesFromTurn(
         summary: call.error || `${call.tool} did not complete.`,
       };
     }
-    const resourceUrl = typeof output.url === 'string' && output.url.startsWith('http') ? output.url : undefined;
+    let resourceUrl =
+      typeof output.url === 'string' && output.url.startsWith('http') ? output.url : undefined;
     let resource: string | undefined;
     let summary = `Completed ${action}`;
+    let externalId = String(output.id || output.key || '').trim() || undefined;
 
     if (call.tool === 'jira') {
       resource = String(output.key || output.issueKey || '').trim() || undefined;
@@ -54,9 +73,10 @@ export function outcomesFromTurn(
       resource = String(output.title || input.title || '').trim() || undefined;
       summary = resource ? `Created Notion page “${resource}”` : 'Notion page created';
     } else if (call.tool === 'slack') {
-      resource = String(output.channelName || output.name || input.channel || '')
-        .replace(/^#/, '');
-      if (resource) resource = `#${resource}`;
+      const slack = slackFieldsFromOutput(output);
+      resourceUrl = slack.resourceUrl;
+      externalId = slack.channelId || externalId;
+      if (slack.channelName) resource = `#${slack.channelName}`;
       if (call.action === 'createWarRoom' || call.action === 'createChannel') {
         summary = resource ? `Launch war room ${resource} is ready` : 'Slack channel created';
       }
@@ -72,7 +92,7 @@ export function outcomesFromTurn(
       summary,
       resource,
       resourceUrl,
-      externalId: String(output.id || output.key || '').trim() || undefined,
+      externalId,
     };
   });
 
