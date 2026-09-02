@@ -1,22 +1,16 @@
 /** Centralized frontend routes for marketing vs private app split */
 
-export const APP_HOME = '/app/overview';
+export const APP_HOME = '/app/dashboard';
 export const APP_BASE = '/app';
 export const LOGIN = '/login';
 export const REGISTER = '/register';
 
 export const APP_ROUTES = {
   home: APP_HOME,
-  overview: '/app/overview',
   dashboard: '/app/dashboard',
-  myWork: '/app/my-work',
-  projects: '/app/projects',
-  activity: '/app/activity',
-  command: '/app/chat',
   chat: '/app/chat',
   approvals: '/app/approvals',
   integrations: '/app/integrations',
-  connections: '/app/integrations',
   settings: '/app/settings',
   workspaceSettings: '/app/settings/workspace',
   workspace: '/app/workspace',

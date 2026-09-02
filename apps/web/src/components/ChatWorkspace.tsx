@@ -1,26 +1,19 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import {
-  FileUp,
-  RefreshCw,
-  X,
-} from 'lucide-react';
+import { AnimatePresence, motion } from 'framer-motion';
+import { Check, Copy, FileUp, RefreshCw, Send, Sparkles, Square, Wand2, X } from 'lucide-react';
 import { api, type AgentTurnResult } from '@/lib/api';
 import { outcomesFromTurn } from '@/lib/actionOutcomes';
 import { buildActionPreview, plannedExecutionSteps } from '@/lib/actionPlan';
 import { humanToolStart, humanToolResult } from '@/lib/humanizeTools';
-import { WorkSurface } from '@/components/work/WorkSurface';
-import { WorkPageHeader } from '@/components/work/WorkPageHeader';
-import { WorkPanel } from '@/components/work/WorkPanel';
+import { GlassCard, Reveal } from '@/components/motion';
 import { MarkdownLite } from '@/components/MarkdownLite';
-import { CommandInput } from '@/components/command-center/CommandInput';
 import { ActionPreviewCard } from '@/components/command-center/ActionPreviewCard';
-import { ActionPipeline, resolveActionPhase } from '@/components/command-center/ActionPipeline';
 import { ExecutionProgress, type ExecutionStepState } from '@/components/command-center/ExecutionProgress';
 import { ActionResultCard, ActionFailureCard } from '@/components/command-center/ActionResultCard';
+import { ActionPipeline, resolveActionPhase } from '@/components/command-center/ActionPipeline';
 import { cn } from '@/lib/utils';
 import { APP_ROUTES, chatConversationPath } from '@/lib/routes';
 import { writeActiveConversationHint, resolveResumeConversationId } from '@/lib/activeConversation';
@@ -34,6 +27,11 @@ interface Turn {
   messageId?: string;
 }
 
+const SUGGESTIONS = [
+  'Find my top priority emails',
+  'Create a launch war room for Project Atlas on Slack',
+  'Create a Notion page named Investor Notes',
+];
 
 const MAX_CLIENT_UPLOAD_BYTES = 12 * 1024 * 1024;
 const ALLOWED_CLIENT_EXT = /\.(pdf|docx|txt|md|markdown|csv|tsv|json|xlsx|xls|png|jpe?g|webp|gif|ts|tsx|js|jsx|py|sql|html|css|ya?ml)$/i;
@@ -124,6 +122,7 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
   const [executionByTurn, setExecutionByTurn] = useState<Record<number, ExecutionStepState[]>>({});
   const [failureByTurn, setFailureByTurn] = useState<Record<number, { title: string; reason: string }>>({});
   const [liveToolSteps, setLiveToolSteps] = useState<ExecutionStepState[]>([]);
+  const [userFirstName, setUserFirstName] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -143,6 +142,16 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
       setInput(q);
     }
   }, [searchParams]);
+
+  useEffect(() => {
+    api
+      .me()
+      .then((res) => {
+        const name = res.user.displayName?.split(/\s+/)[0] || res.user.email?.split('@')[0] || null;
+        setUserFirstName(name);
+      })
+      .catch(() => undefined);
+  }, [workspace?.organizationId]);
 
   function setConversationId(id: string | undefined) {
     setConversationIdState(id);
@@ -708,91 +717,78 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
     refreshHistory();
   }
 
+  const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+
+  async function copyAssistantMessage(index: number, text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedIndex(index);
+      window.setTimeout(() => setCopiedIndex((current) => (current === index ? null : current)), 1800);
+    } catch {
+      setCopiedIndex(null);
+    }
+  }
+
   return (
-    <div className="space-y-4 px-4 py-6 sm:space-y-6 sm:px-6 lg:py-8">
-      <WorkPageHeader
-        eyebrow="Command"
-        title={workspace?.name ?? 'Workspace'}
-        description="Tell Nexora what you need. It will plan the work, ask for approval when required, then execute in Slack, Gmail, Notion, or Jira."
-        meta={
-          <Link href={APP_ROUTES.myWork} className="focus-ring nx-btn-secondary px-3 py-1.5 text-xs">
-            My work
-          </Link>
-        }
-      />
-
-      <WorkPanel title="How actions work" className="border-white/10 bg-white/[0.02]">
-        <ol className="grid gap-2 text-sm text-neutral-400 sm:grid-cols-5">
-          {['You describe the work', 'Nexora plans steps', 'You approve changes', 'Nexora executes', 'You get a result link'].map(
-            (step, idx) => (
-              <li key={step} className="flex gap-2 sm:block">
-                <span className="font-medium text-neutral-300">{idx + 1}.</span>
-                <span>{step}</span>
-              </li>
-            )
-          )}
-        </ol>
-      </WorkPanel>
-
-      <CommandInput
-        value={input}
-        onChange={setInput}
-        onSubmit={() => {
-          if (pendingAttachments.some((a) => a.uploading)) {
-            setError('Wait for uploads to finish before sending.');
-            return;
-          }
-          send(input);
-        }}
-        onStop={stopGeneration}
-        onAttach={() => fileRef.current?.click()}
-        loading={loading}
-        uploading={uploading}
-        hasAttachments={pendingAttachments.length > 0}
-        fileInputRef={fileRef}
-        onFileChange={(file) => onPickFile(file)}
-      />
-
-      {pendingAttachments.length > 0 ? (
-        <div className="flex flex-wrap gap-2">
-          {pendingAttachments.map((a) => (
-            <span
-              key={a.id}
-              className="inline-flex items-center gap-2 rounded-full border border-white/12 bg-white/5 px-3 py-1 text-xs text-neutral-300"
-            >
-              <FileUp size={12} className="text-neutral-500" />
-              {a.uploading ? (
-                <span className="text-neutral-400">Uploading {a.filename}…</span>
-              ) : (
-                <span className={a.hasText ? 'text-emerald-300' : 'text-amber-300'}>
-                  {a.hasText ? '✓' : '!'} {a.filename}
+    <div className="app-page space-y-4 sm:space-y-6">
+      <Reveal>
+        <GlassCard variant="glow" className="p-4 sm:p-7" hoverLift={false}>
+          <div className="flex flex-col gap-5 xl:flex-row xl:items-center xl:justify-between">
+            <div className="min-w-0 max-w-2xl">
+              <div className="flex flex-wrap items-center gap-3">
+                <span className="badge border-white/10 bg-white/5 text-white">
+                  <Sparkles size={12} className="text-accent2" /> Agent core
                 </span>
-              )}
-              {!a.uploading ? (
-                <button
-                  type="button"
-                  onClick={() => setPendingAttachments((list) => list.filter((x) => x.id !== a.id))}
-                  className="text-neutral-500 hover:text-white"
-                  title="Remove attachment"
-                >
-                  <X size={12} />
-                </button>
-              ) : null}
-            </span>
-          ))}
-        </div>
-      ) : null}
+              </div>
+              <h1 className="font-display mt-4 text-2xl font-semibold tracking-tight text-white sm:text-3xl lg:text-4xl">
+                {userFirstName ? (
+                  <>
+                    Hi {userFirstName}, I&apos;m <span className="gradient-text">Nexora</span>
+                  </>
+                ) : (
+                  <>
+                    Hi, I&apos;m <span className="gradient-text">Nexora</span>
+                  </>
+                )}
+              </h1>
+              <p className="mt-2 text-sm leading-6 text-neutral-400 sm:leading-7">
+                How can I assist you today? I use your connected Gmail, Slack, Notion, and Jira — with approvals for
+                consequential actions.
+              </p>
+            </div>
+
+            <div className="hidden w-full max-w-sm rounded-[24px] border border-white/10 bg-black/25 p-5 sm:block">
+              <div className="text-xs uppercase tracking-[0.24em] text-neutral-500">Live system state</div>
+              <div className="mt-2 text-sm text-neutral-400">Secure reasoning · tool orchestration · human approval</div>
+              <div className="mt-4 grid gap-2 text-sm text-neutral-300">
+                {['Interactive agent session ready', 'Hybrid context store synced', 'Action approvals online'].map((s) => (
+                  <div key={s} className="flex items-center gap-2 rounded-xl border border-white/8 bg-white/5 px-3.5 py-2.5">
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                    {s}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </GlassCard>
+      </Reveal>
 
       <div className="grid gap-4 sm:gap-6 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,0.9fr)]">
-        <WorkSurface className="flex min-h-[min(70vh,640px)] flex-col p-3 sm:min-h-[560px] sm:p-6">
+        <GlassCard
+          className="flex min-h-[min(70vh,640px)] flex-col p-3 sm:min-h-[560px] sm:p-6"
+          hoverLift={false}
+        >
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3 sm:mb-5">
-            <h2 className="text-sm font-medium text-white">Work log</h2>
+            <div>
+              <div className="text-xs uppercase tracking-[0.24em] text-neutral-500">Agent session</div>
+              <h2 className="font-display text-lg font-semibold text-white sm:text-xl">Conversation</h2>
+            </div>
             <button
               type="button"
               onClick={startNewChat}
-              className="focus-ring nx-btn-secondary px-2.5 py-1 text-xs"
+              className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] uppercase tracking-[0.24em] text-accent hover:text-white"
             >
-              New request
+              New chat
             </button>
           </div>
 
@@ -804,168 +800,296 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
               </div>
             ) : (
               <>
-              {turns.map((turn, i) => {
-                const outcomes =
-                  turn.role === 'assistant' && turn.detail
-                    ? turn.detail.actionOutcomes ||
-                      outcomesFromTurn(turn.detail.executedCalls, [], turn.detail.plan.toolCalls)
-                    : [];
-                const completed = outcomes.filter((o) => o.status === 'success');
-                const failedOutcomes = outcomes.filter((o) => o.status === 'failed');
-                const pendingApproval =
-                  Boolean(turn.detail?.pendingApprovalIds?.length) &&
-                  !executionByTurn[i]?.length &&
-                  !failureByTurn[i];
-                const executing = Boolean(executionByTurn[i]?.length);
-                const hasActionFlow =
-                  turn.role === 'assistant' &&
-                  turn.detail &&
-                  (pendingApproval || executing || completed.length > 0 || failedOutcomes.length > 0 || failureByTurn[i]);
-                const phase = hasActionFlow
-                  ? resolveActionPhase({
-                      failed: Boolean(failureByTurn[i] || failedOutcomes.length > 0),
-                      hasResult: completed.length > 0,
-                      executing,
-                      pendingApproval,
-                    })
-                  : null;
-                const showAssistantText =
-                  turn.role === 'assistant' &&
-                  !pendingApproval &&
-                  !executing &&
-                  completed.length === 0 &&
-                  failedOutcomes.length === 0 &&
-                  !failureByTurn[i];
+                <AnimatePresence initial={false}>
+                  {turns.map((turn, i) => {
+                    const outcomes =
+                      turn.role === 'assistant' && turn.detail
+                        ? turn.detail.actionOutcomes ||
+                          outcomesFromTurn(turn.detail.executedCalls, [], turn.detail.plan.toolCalls)
+                        : [];
+                    const completed = outcomes.filter((o) => o.status === 'success');
+                    const failedOutcomes = outcomes.filter((o) => o.status === 'failed');
+                    const pendingApproval =
+                      Boolean(turn.detail?.pendingApprovalIds?.length) &&
+                      !executionByTurn[i]?.length &&
+                      !failureByTurn[i];
+                    const executing = Boolean(executionByTurn[i]?.length);
+                    const hasActionFlow =
+                      turn.role === 'assistant' &&
+                      turn.detail &&
+                      (pendingApproval || executing || completed.length > 0 || failedOutcomes.length > 0 || failureByTurn[i]);
+                    const phase = hasActionFlow
+                      ? resolveActionPhase({
+                          failed: Boolean(failureByTurn[i] || failedOutcomes.length > 0),
+                          hasResult: completed.length > 0,
+                          executing,
+                          pendingApproval,
+                        })
+                      : null;
+                    const showAssistantText =
+                      turn.role === 'assistant' &&
+                      !pendingApproval &&
+                      !executing &&
+                      completed.length === 0 &&
+                      failedOutcomes.length === 0 &&
+                      !failureByTurn[i];
 
-                return (
-                <div
-                  key={i}
-                  className={cn(
-                    'border-b border-white/10 py-4 last:border-b-0',
-                    turn.role === 'user' ? 'bg-white/[0.02]' : ''
-                  )}
-                >
-                  <div className="mb-2 flex items-center justify-between gap-3 text-xs text-neutral-500">
-                    <span className="font-medium text-neutral-400">
-                      {turn.role === 'user' ? 'Your request' : 'Nexora'}
-                    </span>
-                    <span>{turn.timestamp}</span>
-                  </div>
-
-                  {turn.role === 'user' ? (
-                    <p className="text-sm leading-relaxed text-neutral-100">{turn.content}</p>
-                  ) : showAssistantText ? (
-                    <div className="text-sm leading-relaxed text-neutral-200">
-                      {turn.content ? <MarkdownLite content={turn.content} /> : null}
-                    </div>
-                  ) : pendingApproval ? (
-                    <p className="text-sm text-neutral-400">Review the proposed action below before it runs.</p>
-                  ) : null}
-
-                  {phase ? <ActionPipeline phase={phase} /> : null}
-
-                  {turn.role === 'assistant' && turn.detail && executionByTurn[i]?.length ? (
-                    <ExecutionProgress steps={executionByTurn[i]} />
-                  ) : null}
-
-                  {turn.role === 'assistant' && failureByTurn[i] ? (
-                    <ActionFailureCard
-                      title={failureByTurn[i].title}
-                      reason={failureByTurn[i].reason}
-                      onRetry={() => approveAndRunFromChat(i, turn.detail?.pendingApprovalIds || [])}
-                      onCancel={() => {
-                        setFailureByTurn((prev) => {
-                          const next = { ...prev };
-                          delete next[i];
-                          return next;
-                        });
-                      }}
-                    />
-                  ) : null}
-
-                  {turn.role === 'assistant' && turn.detail && (() => {
                     return (
-                      <>
-                        {completed.map((o, oi) => (
-                          <ActionResultCard key={`ok-${oi}`} outcome={o} />
-                        ))}
-                        {failedOutcomes.map((o, oi) => (
+                      <motion.div
+                        key={i}
+                        initial={{ opacity: 0, y: 14, scale: 0.98 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+                        className={cn(
+                          'group relative max-w-[92%] overflow-hidden rounded-[26px] border p-5',
+                          turn.role === 'user'
+                            ? 'ml-auto rounded-br-lg border-accent/25 bg-accent/10'
+                            : 'mr-auto rounded-bl-lg border-white/12 bg-white/5'
+                        )}
+                      >
+                        <div className="mb-3 flex items-center justify-between gap-3 text-[11px] uppercase tracking-[0.22em] text-neutral-500">
+                          <div className="flex items-center gap-2">
+                            <span className={cn('h-2 w-2 rounded-full', turn.role === 'user' ? 'bg-accent2' : 'bg-accent')} />
+                            {turn.role === 'user' ? 'You' : 'Nexora'}
+                          </div>
+                          <span>{turn.timestamp}</span>
+                        </div>
+
+                        {turn.role === 'user' ? (
+                          <p className="text-sm leading-7 text-neutral-100">{turn.content}</p>
+                        ) : showAssistantText ? (
+                          <div className="text-sm leading-7 text-neutral-100">
+                            {turn.content ? <MarkdownLite content={turn.content} /> : null}
+                          </div>
+                        ) : pendingApproval ? (
+                          <p className="text-sm text-neutral-400">Review the proposed action below before it runs.</p>
+                        ) : null}
+
+                        {phase ? <ActionPipeline phase={phase} /> : null}
+
+                        {turn.role === 'assistant' && turn.detail && executionByTurn[i]?.length ? (
+                          <ExecutionProgress steps={executionByTurn[i]} />
+                        ) : null}
+
+                        {turn.role === 'assistant' && failureByTurn[i] ? (
                           <ActionFailureCard
-                            key={`fail-${oi}`}
-                            title={`Could not complete ${o.integration} action`}
-                            reason={o.summary}
-                            onRetry={() => regenerateLast()}
+                            title={failureByTurn[i].title}
+                            reason={failureByTurn[i].reason}
+                            onRetry={() => approveAndRunFromChat(i, turn.detail?.pendingApprovalIds || [])}
+                            onCancel={() => {
+                              setFailureByTurn((prev) => {
+                                const next = { ...prev };
+                                delete next[i];
+                                return next;
+                              });
+                            }}
                           />
-                        ))}
-                      </>
+                        ) : null}
+
+                        {turn.role === 'assistant' && turn.detail ? (
+                          <>
+                            {completed.map((o, oi) => (
+                              <ActionResultCard key={`ok-${oi}`} outcome={o} />
+                            ))}
+                            {failedOutcomes.map((o, oi) => (
+                              <ActionFailureCard
+                                key={`fail-${oi}`}
+                                title={`Could not complete ${o.integration} action`}
+                                reason={o.summary}
+                                onRetry={() => regenerateLast()}
+                              />
+                            ))}
+                          </>
+                        ) : null}
+
+                        {turn.role === 'assistant' &&
+                        turn.detail?.pendingApprovalIds?.length &&
+                        !executionByTurn[i]?.length &&
+                        !failureByTurn[i]
+                          ? (() => {
+                              const pendingCall =
+                                turn.detail.plan.toolCalls.find((c) => c.requiresApproval) ||
+                                turn.detail.plan.toolCalls[0];
+                              if (!pendingCall) return null;
+                              const preview = buildActionPreview(
+                                pendingCall.tool,
+                                pendingCall.action,
+                                pendingCall.input || {},
+                                (pendingCall.riskLevel as 'low' | 'medium' | 'high') || 'high',
+                                workspace?.name ?? 'Current workspace'
+                              );
+                              return (
+                                <ActionPreviewCard
+                                  preview={preview}
+                                  approvalId={turn.detail.pendingApprovalIds[0]}
+                                  approving={approvingTurn === i}
+                                  onApprove={() => approveAndRunFromChat(i, turn.detail!.pendingApprovalIds || [])}
+                                  onCancel={() => rejectFromChat(i, turn.detail!.pendingApprovalIds || [])}
+                                />
+                              );
+                            })()
+                          : null}
+
+                        {turn.role === 'assistant' && turn.content ? (
+                          <button
+                            type="button"
+                            onClick={() => copyAssistantMessage(i, turn.content)}
+                            className="absolute right-4 top-4 flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-black/40 text-neutral-400 opacity-0 transition group-hover:opacity-100 hover:text-white"
+                            title="Copy message"
+                          >
+                            {copiedIndex === i ? <Check size={12} /> : <Copy size={12} />}
+                          </button>
+                        ) : null}
+                      </motion.div>
                     );
-                  })()}
+                  })}
+                </AnimatePresence>
 
-                  {turn.role === 'assistant' &&
-                  turn.detail?.pendingApprovalIds?.length &&
-                  !executionByTurn[i]?.length &&
-                  !failureByTurn[i]
-                    ? (() => {
-                        const pendingCall =
-                          turn.detail.plan.toolCalls.find((c) => c.requiresApproval) ||
-                          turn.detail.plan.toolCalls[0];
-                        if (!pendingCall) return null;
-                        const preview = buildActionPreview(
-                          pendingCall.tool,
-                          pendingCall.action,
-                          pendingCall.input || {},
-                          (pendingCall.riskLevel as 'low' | 'medium' | 'high') || 'high',
-                          workspace?.name ?? 'Current workspace'
-                        );
-                        return (
-                          <ActionPreviewCard
-                            preview={preview}
-                            approvalId={turn.detail.pendingApprovalIds[0]}
-                            approving={approvingTurn === i}
-                            onApprove={() => approveAndRunFromChat(i, turn.detail!.pendingApprovalIds || [])}
-                            onCancel={() => rejectFromChat(i, turn.detail!.pendingApprovalIds || [])}
-                          />
-                        );
-                      })()
-                    : null}
-                </div>
-              );
-              })}
-
-            {turns.length === 0 && (
-              <div className="nx-empty rounded-lg border border-white/10 bg-black/20 px-5 py-8 sm:px-8">
-                <h3 className="mb-2 text-base font-medium text-white">Start with a work request</h3>
-                <p className="text-sm leading-6 text-neutral-400">
-                  Examples: create a Slack war room, find priority email, open a Jira ticket, or update a Notion page.
-                  Changes to external systems always require your approval first.
-                </p>
-              </div>
-            )}
+                {turns.length === 0 && (
+                  <div className="mx-auto w-full max-w-lg rounded-[28px] border border-white/10 bg-black/20 px-5 py-10 text-center sm:px-8 sm:py-14">
+                    <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-3xl bg-white/5 text-accent2">
+                      <Wand2 size={26} />
+                    </div>
+                    <h3 className="mb-2 text-lg font-semibold text-white sm:text-xl">
+                      {userFirstName ? `Hi ${userFirstName}, I'm Nexora.` : "Hi, I'm Nexora."}
+                    </h3>
+                    <p className="text-sm leading-6 text-neutral-400">
+                      How can I assist you today? Ask about your inbox, Slack, Notion, or Jira — I run real tools, never
+                      demo data.
+                    </p>
+                  </div>
+                )}
               </>
             )}
 
             {loading && liveToolSteps.length > 0 ? (
-              <>
+              <div className="mr-auto max-w-[92%] rounded-[26px] border border-white/12 bg-white/5 p-5">
                 <ActionPipeline phase="execution" />
                 <ExecutionProgress steps={liveToolSteps} />
-              </>
+              </div>
             ) : loading ? (
-              <div className="border-t border-white/10 py-4" role="status" aria-live="polite">
+              <div className="mr-auto flex max-w-[70%] flex-col gap-3 rounded-[26px] border border-white/12 bg-white/5 px-5 py-3.5 text-sm text-neutral-300" role="status" aria-live="polite">
                 <ActionPipeline phase="intent" />
-                <p className="text-sm text-neutral-400">{statusLine || 'Processing your request…'}</p>
+                <div className="flex items-center gap-2">
+                  <span className="flex gap-1">
+                    <span className="h-1.5 w-1.5 animate-dots rounded-full bg-accent" style={{ animationDelay: '0ms' }} />
+                    <span className="h-1.5 w-1.5 animate-dots rounded-full bg-accent" style={{ animationDelay: '160ms' }} />
+                    <span className="h-1.5 w-1.5 animate-dots rounded-full bg-accent" style={{ animationDelay: '320ms' }} />
+                  </span>
+                  {statusLine || 'thinking'}
+                </div>
               </div>
             ) : null}
-            {error ? <div className="nx-alert-error" role="alert">{error}</div> : null}
+            {error ? (
+              <div className="rounded-2xl border border-red-500/25 bg-red-500/10 p-3.5 text-sm text-red-300" role="alert">
+                {error}
+              </div>
+            ) : null}
             <div ref={bottomRef} />
           </div>
-        </WorkSurface>
 
-        <aside className="hidden space-y-5 xl:block">
-          <WorkSurface className="p-5">
+          {pendingAttachments.length > 0 && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {pendingAttachments.map((a) => (
+                <span
+                  key={a.id}
+                  className="inline-flex items-center gap-2 rounded-full border border-white/12 bg-white/5 px-3 py-1 text-xs text-neutral-300"
+                >
+                  <FileUp size={12} className="text-neutral-500" />
+                  {a.uploading ? (
+                    <span className="text-neutral-400">Uploading {a.filename}…</span>
+                  ) : (
+                    <span className={a.hasText ? 'text-emerald-300' : 'text-amber-300'}>
+                      {a.hasText ? '✓' : '!'} {a.filename}
+                    </span>
+                  )}
+                  {!a.uploading ? (
+                    <button
+                      type="button"
+                      onClick={() => setPendingAttachments((list) => list.filter((x) => x.id !== a.id))}
+                      className="text-neutral-500 hover:text-white"
+                      title="Remove attachment"
+                    >
+                      <X size={12} />
+                    </button>
+                  ) : null}
+                </span>
+              ))}
+            </div>
+          )}
+
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (pendingAttachments.some((a) => a.uploading)) {
+                setError('Wait for uploads to finish before sending.');
+                return;
+              }
+              send(input);
+            }}
+            className="mt-4 flex flex-wrap items-center gap-2 rounded-[22px] border border-white/10 bg-black/25 p-2 pl-3 transition focus-within:border-accent/50 focus-within:ring-2 focus-within:ring-accent/15 sm:mt-5 sm:flex-nowrap sm:rounded-[26px] sm:pl-4"
+          >
+            <input
+              ref={fileRef}
+              type="file"
+              className="hidden"
+              accept=".pdf,.docx,.txt,.md,.markdown,.csv,.tsv,.json,.xlsx,.xls,.png,.jpg,.jpeg,.webp,.gif,.ts,.tsx,.js,.jsx,.py,.sql,.html,.css,.yaml,.yml,text/*,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,image/*"
+              onChange={(e) => onPickFile(e.target.files?.[0] ?? null)}
+            />
+            <button
+              type="button"
+              title="Attach a file"
+              disabled={uploading || loading}
+              onClick={() => fileRef.current?.click()}
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-neutral-500 transition hover:bg-white/5 hover:text-white disabled:opacity-40"
+            >
+              <FileUp size={16} />
+            </button>
+            <input
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder="Ask Nexora — emails, Slack, Notion, Jira…"
+              className="min-h-[44px] min-w-0 flex-1 bg-transparent text-sm text-white outline-none placeholder:text-neutral-500"
+            />
+            {loading ? (
+              <button
+                type="button"
+                onClick={stopGeneration}
+                title="Stop"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/15 bg-white/5 text-white transition hover:bg-white/10"
+              >
+                <Square size={14} />
+              </button>
+            ) : (
+              <>
+                {lastUserMessageRef.current && turns.length > 0 ? (
+                  <button
+                    type="button"
+                    title="Regenerate"
+                    onClick={() => regenerateLast()}
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-neutral-400 transition hover:bg-white/5 hover:text-white"
+                  >
+                    <RefreshCw size={15} />
+                  </button>
+                ) : null}
+                <button
+                  type="submit"
+                  disabled={loading || uploading || (!input.trim() && pendingAttachments.length === 0)}
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-accent text-[#04101f] transition hover:bg-[#7db6ff] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <Send size={15} />
+                </button>
+              </>
+            )}
+          </form>
+        </GlassCard>
+
+        <aside className="space-y-5">
+          <GlassCard className="p-5">
             <div className="flex items-center justify-between">
-              <div className="text-xs font-medium uppercase tracking-[0.16em] text-neutral-500">Recent requests</div>
-              <button type="button" onClick={startNewChat} className="focus-ring rounded-md text-[11px] text-accent hover:text-white">
-                New
+              <div className="text-xs uppercase tracking-[0.24em] text-neutral-500">History</div>
+              <button type="button" onClick={startNewChat} className="text-[11px] text-accent hover:text-white">
+                New chat
               </button>
             </div>
             <div className="mt-4 grid max-h-56 gap-2 overflow-y-auto">
@@ -976,10 +1100,10 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
                     type="button"
                     onClick={() => loadConversation(c.id)}
                     className={cn(
-                      'focus-ring flex-1 rounded-md border px-3 py-2.5 text-left text-sm transition',
+                      'flex-1 rounded-2xl border px-3 py-2.5 text-left text-sm transition',
                       conversationId === c.id
                         ? 'border-accent/40 bg-accent/10 text-white'
-                        : 'border-white/10 bg-black/20 text-neutral-300 hover:border-white/20'
+                        : 'border-white/8 bg-black/20 text-neutral-300 hover:border-white/20'
                     )}
                   >
                     {c.title || 'Untitled'}
@@ -988,36 +1112,46 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
                     type="button"
                     title="Delete"
                     onClick={() => deleteConversation(c.id)}
-                    className="focus-ring rounded-md border border-white/10 px-2 py-1 text-[10px] text-neutral-500 hover:text-white"
+                    className="rounded-full border border-white/10 px-2 py-1 text-[10px] text-neutral-500 hover:text-white"
                   >
                     Del
                   </button>
                 </div>
               ))}
             </div>
-          </WorkSurface>
+          </GlassCard>
 
-          <WorkSurface className="p-5">
-            <div className="text-xs font-medium uppercase tracking-[0.16em] text-neutral-500">Workspace</div>
-            <p className="mt-3 text-sm text-neutral-400">
-              Commands run in <span className="text-neutral-200">{workspace?.name ?? 'this workspace'}</span>
-              {workspace?.kind === 'team' ? ' (team)' : ' (personal)'}.
-            </p>
-            <div className="mt-4 flex flex-wrap gap-2">
-              <Link
-                href={APP_ROUTES.approvals}
-                className="focus-ring nx-btn-secondary px-3 py-1.5 text-xs"
-              >
-                Approvals
-              </Link>
-              <Link
-                href={APP_ROUTES.activity}
-                className="focus-ring nx-btn-secondary px-3 py-1.5 text-xs"
-              >
-                Activity
-              </Link>
+          <GlassCard className="p-5">
+            <div className="text-xs uppercase tracking-[0.24em] text-neutral-500">Suggested prompts</div>
+            <div className="mt-4 grid gap-2.5">
+              {SUGGESTIONS.map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => send(s)}
+                  className="rounded-2xl border border-white/8 bg-black/20 px-4 py-3 text-left text-sm text-neutral-300 transition hover:-translate-y-0.5 hover:border-accent/40 hover:bg-white/5 hover:text-white"
+                >
+                  {s}
+                </button>
+              ))}
             </div>
-          </WorkSurface>
+          </GlassCard>
+
+          <GlassCard className="p-5">
+            <div className="text-xs uppercase tracking-[0.24em] text-neutral-500">System health</div>
+            <div className="mt-4 space-y-2.5 text-sm">
+              {[
+                { label: 'Chat endpoint', status: 'Active' },
+                { label: 'Approvals queue', status: 'Ready' },
+                { label: 'Knowledge store', status: 'Synced' },
+              ].map((row) => (
+                <div key={row.label} className="flex items-center justify-between rounded-xl bg-white/5 px-3.5 py-2.5">
+                  <span className="text-neutral-300">{row.label}</span>
+                  <span className="text-accent">{row.status}</span>
+                </div>
+              ))}
+            </div>
+          </GlassCard>
         </aside>
       </div>
     </div>

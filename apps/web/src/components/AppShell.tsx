@@ -1,11 +1,11 @@
 'use client';
 
 import { usePathname } from 'next/navigation';
-import { AppBackground } from '@/components/work/AppBackground';
+import { Nav } from '@/components/Nav';
+import { WorkspaceRail } from '@/components/WorkspaceRail';
 import { AmbientBackground } from '@/components/AmbientBackground';
 import { AuthGuard } from '@/components/AuthGuard';
 import { WorkspaceProvider } from '@/components/WorkspaceProvider';
-import { WorkOsShell } from '@/components/work-os/WorkOsShell';
 import {
   isAppPath,
   isAuthPath,
@@ -36,12 +36,28 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     );
   }
 
-  const appChrome = app ? <WorkOsShell>{children}</WorkOsShell> : <main className="min-h-screen">{children}</main>;
+  const appChrome = (
+    <>
+      {app && <Nav />}
+      {app && <WorkspaceRail />}
+      <main
+        className={
+          auth || !app
+            ? 'min-h-screen'
+            : 'app-main mx-auto max-w-7xl px-3 pb-24 pt-4 sm:px-6 sm:pb-16 sm:pt-8 xl:pl-28'
+        }
+      >
+        {children}
+      </main>
+    </>
+  );
 
   return (
     <>
-      {app ? <AppBackground /> : <AmbientBackground />}
-      <AuthGuard>{app ? <WorkspaceProvider>{appChrome}</WorkspaceProvider> : appChrome}</AuthGuard>
+      <AmbientBackground />
+      <AuthGuard>
+        {app ? <WorkspaceProvider>{appChrome}</WorkspaceProvider> : appChrome}
+      </AuthGuard>
     </>
   );
 }
