@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { motion } from 'framer-motion';
 import {
@@ -15,12 +15,13 @@ import {
   Sparkles,
   Users,
 } from 'lucide-react';
-import { api, type HealthCheck, type IntegrationStatus, type ApprovalRequest } from '@/lib/api';
+import { api, type HealthCheck, type IntegrationStatus, type ApprovalRequest, type WorkspaceMember } from '@/lib/api';
 import { GlassCard, Reveal, StaggerGroup, fadeUp } from '@/components/motion';
 import { SparkArea, WeekBars } from '@/components/charts';
 import { cn } from '@/lib/utils';
 import { chatConversationPath, chatResumeHref } from '@/lib/routes';
 import { DashboardWorkspacePanel } from '@/components/DashboardWorkspacePanel';
+import { useWorkspaces } from '@/components/WorkspaceProvider';
 
 const sprintPlans = {
   'Sprint 1-2': {
@@ -55,14 +56,31 @@ const recentConversations = [
   { q: 'Draft client timeline email', time: '1h ago' },
 ];
 
-const teamMembers = [
-  { name: 'Aryav Sharma', role: 'Workspace owner', initials: 'AS' },
-  { name: 'Priyanshu Gupta', role: 'Ops lead', initials: 'PG' },
-  { name: 'Abhinav Garg', role: 'Engineering', initials: 'AG' },
-  { name: 'Ritika Malhotra', role: 'Revenue', initials: 'RM' },
-];
+function memberDisplayName(member: WorkspaceMember): string {
+  return member.displayName?.trim() || member.email;
+}
+
+function memberInitials(member: WorkspaceMember): string {
+  const label = memberDisplayName(member);
+  const parts = label.split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) return `${parts[0][0] ?? ''}${parts[1][0] ?? ''}`.toUpperCase();
+  return label.slice(0, 2).toUpperCase();
+}
+
+function memberRoleLabel(role: string): string {
+  if (role === 'owner') return 'Workspace owner';
+  if (role === 'admin') return 'Admin';
+  return 'Member';
+}
+
+function personalInitials(name: string): string {
+  const parts = name.split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) return `${parts[0][0] ?? ''}${parts[1][0] ?? ''}`.toUpperCase();
+  return name.slice(0, 2).toUpperCase();
+}
 
 export default function DashboardPage() {
+  const { current } = useWorkspaces();
   const [integrations, setIntegrations] = useState<IntegrationStatus[]>([]);
   const [pending, setPending] = useState<ApprovalRequest[]>([]);
   const [health, setHealth] = useState<HealthCheck | null>(null);
@@ -75,6 +93,9 @@ export default function DashboardPage() {
   const [connectedCount, setConnectedCount] = useState(0);
   const [liveAgents, setLiveAgents] = useState(0);
   const [pendingCount, setPendingCount] = useState(0);
+  const [workspaceMembers, setWorkspaceMembers] = useState<WorkspaceMember[]>([]);
+  const [membersLoading, setMembersLoading] = useState(false);
+  const [membersError, setMembersError] = useState<string | null>(null);
   const [actionTimeline, setActionTimeline] = useState<
     Array<{
       id: string;
@@ -125,6 +146,32 @@ export default function DashboardPage() {
     };
     load();
   }, []);
+
+  const loadWorkspaceMembers = useCallback(async () => {
+    const orgId = current?.organizationId;
+    if (!orgId || current.kind !== 'team') {
+      setWorkspaceMembers([]);
+      setMembersLoading(false);
+      setMembersError(null);
+      return;
+    }
+
+    setMembersLoading(true);
+    setMembersError(null);
+    try {
+      const res = await api.listWorkspaceMembers(orgId);
+      setWorkspaceMembers(res.members || []);
+    } catch (err) {
+      setWorkspaceMembers([]);
+      setMembersError(err instanceof Error ? err.message : 'Failed to load members');
+    } finally {
+      setMembersLoading(false);
+    }
+  }, [current?.organizationId, current?.kind]);
+
+  useEffect(() => {
+    void loadWorkspaceMembers();
+  }, [loadWorkspaceMembers]);
 
   const apiOnline = health?.ok;
 
@@ -402,21 +449,41 @@ export default function DashboardPage() {
         {/* Team members */}
         <GlassCard className="col-span-1 p-6">
           <div className="flex items-center justify-between">
-            <div className="text-xs uppercase tracking-[0.24em] text-neutral-500">Team</div>
+            <div className="text-xs uppercase tracking-[0.24em] text-neutral-500">
+              {current?.kind === 'team' ? 'Team' : 'Personal'}
+            </div>
             <Users size={14} className="text-neutral-500" />
           </div>
-          <div className="mt-4 space-y-3">
-            {teamMembers.map((m) => (
-              <div key={m.name} className="flex items-center gap-3">
+          <div className="thin-scroll mt-4 max-h-56 space-y-3 overflow-y-auto pr-1">
+            {current?.kind !== 'team' ? (
+              <div className="flex items-center gap-3">
                 <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-accent/50 to-violet/50 text-[11px] font-semibold text-white">
-                  {m.initials}
+                  {personalInitials(greetingName !== 'there' ? greetingName : 'You')}
                 </span>
                 <div className="min-w-0">
-                  <div className="truncate text-sm text-neutral-200">{m.name}</div>
-                  <div className="truncate text-[11px] text-neutral-500">{m.role}</div>
+                  <div className="truncate text-sm text-neutral-200">Personal workspace</div>
+                  <div className="truncate text-[11px] text-neutral-500">Your personal workspace</div>
                 </div>
               </div>
-            ))}
+            ) : membersLoading ? (
+              <p className="text-sm text-neutral-400">Loading members…</p>
+            ) : membersError ? (
+              <p className="text-sm text-rose-300">{membersError}</p>
+            ) : workspaceMembers.length === 0 ? (
+              <p className="text-sm text-neutral-400">No active members yet.</p>
+            ) : (
+              workspaceMembers.map((m) => (
+                <div key={m.userId} className="flex items-center gap-3">
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-accent/50 to-violet/50 text-[11px] font-semibold text-white">
+                    {memberInitials(m)}
+                  </span>
+                  <div className="min-w-0">
+                    <div className="truncate text-sm text-neutral-200">{memberDisplayName(m)}</div>
+                    <div className="truncate text-[11px] text-neutral-500">{memberRoleLabel(m.role)}</div>
+                  </div>
+                </div>
+              ))
+            )}
           </div>
         </GlassCard>
 
