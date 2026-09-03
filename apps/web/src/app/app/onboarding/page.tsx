@@ -1,13 +1,29 @@
 'use client';
 
-import { FormEvent, useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
-import { api } from '@/lib/api';
+import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { api, oauthConnectUrl } from '@/lib/api';
+import { APP_ROUTES } from '@/lib/routes';
 
 const STEPS = ['Workspace', 'Profile', 'Gmail', 'Notion', 'Slack', 'Jira', 'Finish'] as const;
+const ONBOARDING_RETURN = '/app/onboarding' as const;
+
+const TOOL_STEP: Record<string, number> = {
+  gmail: 2,
+  notion: 3,
+  slack: 4,
+  jira: 5,
+};
+
+function clampStep(n: unknown): number {
+  const v = typeof n === 'number' ? n : Number(n);
+  if (!Number.isFinite(v)) return 0;
+  return Math.max(0, Math.min(STEPS.length - 1, Math.floor(v)));
+}
 
 export default function OnboardingPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [step, setStep] = useState(0);
   const [workspaceName, setWorkspaceName] = useState('');
   const [displayName, setDisplayName] = useState('');
@@ -23,38 +39,142 @@ export default function OnboardingPage() {
   const [notionToken, setNotionToken] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
+  const persistTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stepRef = useRef(0);
+  stepRef.current = step;
+
+  const refreshIntegrations = useCallback(async () => {
+    const res = await api.listIntegrations();
+    const slack = res.tools.find((t) => t.tool === 'slack');
+    const notion = res.tools.find((t) => t.tool === 'notion');
+    const jira = res.tools.find((t) => t.tool === 'jira');
+    const gmail = res.tools.find((t) => t.tool === 'gmail');
+    setSlackConnected(slack?.status === 'active');
+    setNotionConnected(notion?.status === 'active');
+    setJiraConnected(jira?.status === 'active');
+    setGmailConnected(gmail?.status === 'active');
+    setSlackUrl(oauthConnectUrl('slack', ONBOARDING_RETURN) || slack?.connectUrl || null);
+    setNotionUrl(oauthConnectUrl('notion', ONBOARDING_RETURN) || notion?.connectUrl || null);
+    setJiraUrl(oauthConnectUrl('jira', ONBOARDING_RETURN) || jira?.connectUrl || null);
+    setGmailUrl(oauthConnectUrl('gmail', ONBOARDING_RETURN) || gmail?.connectUrl || null);
+  }, []);
+
+  const persistProgress = useCallback(
+    async (nextStep: number, draft?: { workspaceName?: string; displayName?: string; avatarUrl?: string }) => {
+      const ws = draft?.workspaceName ?? workspaceName;
+      const dn = draft?.displayName ?? displayName;
+      const av = draft?.avatarUrl ?? avatarUrl;
+      try {
+        await api.updateMe({
+          displayName: dn || undefined,
+          avatarUrl: av || undefined,
+          preferences: {
+            onboardingStep: nextStep,
+            onboardingDraft: {
+              workspaceName: ws,
+              displayName: dn,
+              avatarUrl: av,
+            },
+          },
+        });
+      } catch {
+        // Non-blocking — OAuth return still uses JWT returnTo; draft may be incomplete briefly.
+      }
+    },
+    [workspaceName, displayName, avatarUrl]
+  );
+
+  const schedulePersist = useCallback(
+    (nextStep: number) => {
+      if (persistTimer.current) clearTimeout(persistTimer.current);
+      persistTimer.current = setTimeout(() => {
+        void persistProgress(nextStep);
+      }, 400);
+    },
+    [persistProgress]
+  );
 
   useEffect(() => {
-    api
-      .me()
-      .then((res) => {
-        setDisplayName(res.user.displayName || '');
-        setWorkspaceName(res.workspace?.name || '');
-        setAvatarUrl(res.profile?.avatar_url || '');
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await api.me();
+        if (cancelled) return;
         if (res.profile?.preferences?.onboardingCompleted) {
           router.replace('/app/dashboard');
+          return;
         }
-      })
-      .catch(() => router.replace('/login'));
 
-    api
-      .listIntegrations()
-      .then((res) => {
-        const slack = res.tools.find((t) => t.tool === 'slack');
-        const notion = res.tools.find((t) => t.tool === 'notion');
-        const jira = res.tools.find((t) => t.tool === 'jira');
-        const gmail = res.tools.find((t) => t.tool === 'gmail');
-        setSlackConnected(slack?.status === 'active');
-        setNotionConnected(notion?.status === 'active');
-        setJiraConnected(jira?.status === 'active');
-        setGmailConnected(gmail?.status === 'active');
-        setSlackUrl(slack?.connectUrl || null);
-        setNotionUrl(notion?.connectUrl || null);
-        setJiraUrl(jira?.connectUrl || null);
-        setGmailUrl(gmail?.connectUrl || null);
-      })
-      .catch(() => undefined);
-  }, [router]);
+        const draft = res.profile?.preferences?.onboardingDraft || {};
+        const restoredName =
+          (typeof draft.displayName === 'string' && draft.displayName) ||
+          res.user.displayName ||
+          '';
+        const restoredWorkspace =
+          (typeof draft.workspaceName === 'string' && draft.workspaceName) ||
+          res.workspace?.name ||
+          '';
+        const restoredAvatar =
+          (typeof draft.avatarUrl === 'string' && draft.avatarUrl) ||
+          res.profile?.avatar_url ||
+          '';
+
+        setDisplayName(restoredName);
+        setWorkspaceName(restoredWorkspace);
+        setAvatarUrl(restoredAvatar);
+
+        let restoredStep = clampStep(res.profile?.preferences?.onboardingStep);
+        const connectedParam = searchParams.get('connected');
+        if (connectedParam && TOOL_STEP[connectedParam] !== undefined) {
+          restoredStep = TOOL_STEP[connectedParam];
+        }
+        setStep(restoredStep);
+        // Persist the OAuth-return step so refresh/reopen stays correct.
+        if (connectedParam && TOOL_STEP[connectedParam] !== undefined) {
+          void api.updateMe({
+            preferences: {
+              onboardingStep: restoredStep,
+              onboardingDraft: {
+                workspaceName: restoredWorkspace,
+                displayName: restoredName,
+                avatarUrl: restoredAvatar,
+              },
+            },
+          }).catch(() => undefined);
+        }
+
+        const oauthError = searchParams.get('error');
+        if (oauthError) setError(decodeURIComponent(oauthError));
+
+        await refreshIntegrations();
+
+        // Drop one-shot OAuth query params so refresh keeps persisted step, not sticky overrides.
+        if (typeof window !== 'undefined' && (connectedParam || oauthError)) {
+          window.history.replaceState({}, '', APP_ROUTES.onboarding);
+        }
+      } catch {
+        if (!cancelled) router.replace('/login');
+      } finally {
+        if (!cancelled) setHydrated(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (persistTimer.current) clearTimeout(persistTimer.current);
+    };
+  }, [router, searchParams, refreshIntegrations]);
+
+  async function startOAuth(tool: 'gmail' | 'notion' | 'slack' | 'jira', url: string | null) {
+    setError(null);
+    await persistProgress(stepRef.current);
+    const href = oauthConnectUrl(tool, ONBOARDING_RETURN) || url;
+    if (!href) {
+      setError(`${tool[0].toUpperCase()}${tool.slice(1)} OAuth is not configured on the server yet`);
+      return;
+    }
+    window.location.href = href;
+  }
 
   async function finish() {
     setLoading(true);
@@ -69,10 +189,24 @@ export default function OnboardingPage() {
     }
   }
 
+  function goToStep(next: number) {
+    const clamped = clampStep(next);
+    setStep(clamped);
+    schedulePersist(clamped);
+  }
+
   function next(e?: FormEvent) {
     e?.preventDefault();
-    if (step < STEPS.length - 1) setStep((s) => s + 1);
+    if (step < STEPS.length - 1) goToStep(step + 1);
     else finish();
+  }
+
+  if (!hydrated) {
+    return (
+      <div className="flex min-h-screen items-center justify-center px-4">
+        <div className="glass w-full max-w-lg rounded-[28px] p-8 text-sm text-neutral-400">Loading setup…</div>
+      </div>
+    );
   }
 
   return (
@@ -112,7 +246,10 @@ export default function OnboardingPage() {
                 <input
                   className="mt-1 w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2.5 text-sm"
                   value={workspaceName}
-                  onChange={(e) => setWorkspaceName(e.target.value)}
+                  onChange={(e) => {
+                    setWorkspaceName(e.target.value);
+                    schedulePersist(step);
+                  }}
                   placeholder="Acme Ops"
                   required
                 />
@@ -128,7 +265,10 @@ export default function OnboardingPage() {
                 <input
                   className="mt-1 w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2.5 text-sm"
                   value={displayName}
-                  onChange={(e) => setDisplayName(e.target.value)}
+                  onChange={(e) => {
+                    setDisplayName(e.target.value);
+                    schedulePersist(step);
+                  }}
                   placeholder="Your name"
                 />
               </label>
@@ -137,7 +277,10 @@ export default function OnboardingPage() {
                 <input
                   className="mt-1 w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2.5 text-sm"
                   value={avatarUrl}
-                  onChange={(e) => setAvatarUrl(e.target.value)}
+                  onChange={(e) => {
+                    setAvatarUrl(e.target.value);
+                    schedulePersist(step);
+                  }}
                   placeholder="https://…"
                 />
               </label>
@@ -157,10 +300,7 @@ export default function OnboardingPage() {
                 <button
                   type="button"
                   className="mt-4 rounded-full bg-accent/25 px-4 py-2 text-sm text-white"
-                  onClick={() => {
-                    if (gmailUrl) window.location.href = gmailUrl;
-                    else setError('Gmail OAuth is not configured on the server yet');
-                  }}
+                  onClick={() => startOAuth('gmail', gmailUrl)}
                 >
                   Connect Gmail
                 </button>
@@ -179,10 +319,7 @@ export default function OnboardingPage() {
                   <button
                     type="button"
                     className="mt-4 rounded-full bg-accent/25 px-4 py-2 text-sm text-white"
-                    onClick={() => {
-                      if (notionUrl) window.location.href = notionUrl;
-                      else setError('Notion OAuth is not configured on the server yet');
-                    }}
+                    onClick={() => startOAuth('notion', notionUrl)}
                   >
                     Connect Notion
                   </button>
@@ -213,6 +350,7 @@ export default function OnboardingPage() {
                           await api.connectNotionToken(notionToken.trim());
                           setNotionConnected(true);
                           setNotionToken('');
+                          await persistProgress(step);
                         } catch (err: any) {
                           setError(err.message || 'Could not connect Notion token');
                         } finally {
@@ -238,10 +376,7 @@ export default function OnboardingPage() {
                 <button
                   type="button"
                   className="mt-4 rounded-full bg-white/10 px-4 py-2 text-sm text-white"
-                  onClick={() => {
-                    if (slackUrl) window.location.href = slackUrl;
-                    else setError('Slack OAuth is not configured on the server yet');
-                  }}
+                  onClick={() => startOAuth('slack', slackUrl)}
                 >
                   Connect Slack
                 </button>
@@ -261,10 +396,7 @@ export default function OnboardingPage() {
                 <button
                   type="button"
                   className="mt-4 rounded-full bg-white/10 px-4 py-2 text-sm text-white"
-                  onClick={() => {
-                    if (jiraUrl) window.location.href = jiraUrl;
-                    else setError('Jira OAuth is not configured on the server yet');
-                  }}
+                  onClick={() => startOAuth('jira', jiraUrl)}
                 >
                   Connect Jira
                 </button>
@@ -287,7 +419,7 @@ export default function OnboardingPage() {
 
           <div className="flex flex-wrap gap-2 pt-2">
             {step > 0 && (
-              <button type="button" onClick={() => setStep((s) => s - 1)} className="rounded-full border border-white/10 px-4 py-2.5 text-sm text-neutral-300">
+              <button type="button" onClick={() => goToStep(step - 1)} className="rounded-full border border-white/10 px-4 py-2.5 text-sm text-neutral-300">
                 Back
               </button>
             )}
@@ -301,7 +433,7 @@ export default function OnboardingPage() {
                     : 'Next'}
             </button>
             {step >= 2 && step <= 5 && (
-              <button type="button" onClick={() => setStep((s) => s + 1)} className="rounded-full border border-white/10 px-4 py-2.5 text-sm text-neutral-400">
+              <button type="button" onClick={() => goToStep(step + 1)} className="rounded-full border border-white/10 px-4 py-2.5 text-sm text-neutral-400">
                 Skip
               </button>
             )}

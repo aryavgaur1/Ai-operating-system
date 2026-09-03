@@ -601,9 +601,34 @@ export const api = {
     ),
 
   adminMetrics: () => request<any>('/admin/metrics'),
-  adminUsers: (search?: string) =>
-    request<{ users: any[] }>(`/admin/users${search ? `?search=${encodeURIComponent(search)}` : ''}`),
+  adminUsers: (opts?: {
+    search?: string;
+    page?: number;
+    limit?: number;
+    sort?: string;
+    order?: 'asc' | 'desc';
+  }) => {
+    const params = new URLSearchParams();
+    if (opts?.search) params.set('search', opts.search);
+    if (opts?.page) params.set('page', String(opts.page));
+    if (opts?.limit) params.set('limit', String(opts.limit));
+    if (opts?.sort) params.set('sort', opts.sort);
+    if (opts?.order) params.set('order', opts.order);
+    const q = params.toString();
+    return request<{ users: any[]; pagination?: any }>(`/admin/users${q ? `?${q}` : ''}`);
+  },
   adminUserDetail: (id: string) => request<any>(`/admin/users/${id}/detail`),
+  adminWorkspaces: (opts?: { search?: string; kind?: string; page?: number; limit?: number }) => {
+    const params = new URLSearchParams();
+    if (opts?.search) params.set('search', opts.search);
+    if (opts?.kind) params.set('kind', opts.kind);
+    if (opts?.page) params.set('page', String(opts.page));
+    if (opts?.limit) params.set('limit', String(opts.limit));
+    const q = params.toString();
+    return request<{ workspaces: any[]; pagination?: any }>(`/admin/workspaces${q ? `?${q}` : ''}`);
+  },
+  adminWorkspaceMembers: (id: string) =>
+    request<{ workspace: any; members: any[] }>(`/admin/workspaces/${encodeURIComponent(id)}/members`),
   adminSuspend: (id: string, suspended: boolean) =>
     request<any>(`/admin/users/${id}/suspend`, { method: 'POST', body: JSON.stringify({ suspended }) }),
   adminVerify: (id: string) => request<any>(`/admin/users/${id}/verify`, { method: 'POST' }),
@@ -619,6 +644,7 @@ export const api = {
     user?: string;
     method?: string;
     workspace?: string;
+    search?: string;
     order?: 'asc' | 'desc';
   }) => {
     const params = new URLSearchParams();
@@ -626,6 +652,7 @@ export const api = {
     if (opts?.user) params.set('user', opts.user);
     if (opts?.method) params.set('method', opts.method);
     if (opts?.workspace) params.set('workspace', opts.workspace);
+    if (opts?.search) params.set('search', opts.search);
     if (opts?.order) params.set('order', opts.order);
     const q = params.toString();
     return request<{ events: any[]; stats: any }>(`/admin/auth/login-activity${q ? `?${q}` : ''}`);
@@ -656,10 +683,17 @@ export function googleLoginUrl(next?: string | null) {
   return `${API_URL}/auth/google/start${q}`;
 }
 
-export function oauthConnectUrl(tool: 'slack' | 'notion' | 'jira' | 'gmail'): string | null {
+export function oauthConnectUrl(
+  tool: 'slack' | 'notion' | 'jira' | 'gmail',
+  returnTo?: string
+): string | null {
   const token = getAccessToken();
   if (!token) return null;
-  return `${API_URL}/oauth/${tool}/start?token=${encodeURIComponent(token)}`;
+  const params = new URLSearchParams({ token });
+  if (returnTo === '/app/onboarding' || returnTo === '/app/integrations') {
+    params.set('returnTo', returnTo);
+  }
+  return `${API_URL}/oauth/${tool}/start?${params.toString()}`;
 }
 
 export { API_URL };

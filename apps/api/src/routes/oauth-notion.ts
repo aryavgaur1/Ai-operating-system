@@ -3,6 +3,7 @@ import { Router } from 'express';
 import jwt from 'jsonwebtoken';
 import { storeConnection, query } from '@enterprise-ai-os/stores';
 import { webAppUrl } from '../lib/authTokens';
+import { oauthAppRedirect, readOAuthReturnTo } from '../lib/oauthReturn';
 import { getJwtSecret } from '../middleware/auth';
 import { isFounderNotionEmail } from '../lib/platformAdmin';
 
@@ -65,24 +66,25 @@ function isDemoMode(): boolean {
 }
 
 /** Durable state (JWT) — survives API restart, same pattern as Slack OAuth. */
-function signState(userId: string, organizationId: string): string {
+function signState(userId: string, organizationId: string, returnTo?: string): string {
   return jwt.sign(
-    { sub: userId, org: organizationId, typ: 'notion_oauth' },
+    { sub: userId, org: organizationId, typ: 'notion_oauth', ret: returnTo },
     getJwtSecret(),
     { expiresIn: '30m' }
   );
 }
 
-function verifyState(state: string): { sub: string; org: string } {
+function verifyState(state: string): { sub: string; org: string; ret?: string } {
   const payload = jwt.verify(state, getJwtSecret()) as {
     sub: string;
     org: string;
     typ?: string;
+    ret?: string;
   };
   if (!payload.sub || !payload.org) {
     throw new Error('Invalid OAuth state payload');
   }
-  return { sub: payload.sub, org: payload.org };
+  return { sub: payload.sub, org: payload.org, ret: payload.ret };
 }
 
 function getNotionRedirectUri(): string | undefined {
@@ -205,6 +207,8 @@ oauthNotionRouter.get('/start', async (req, res) => {
     return;
   }
 
+  const returnTo = readOAuthReturnTo(req.query);
+
   // Founder / Public-app owner: Notion often forces re-login + hangs on Authorizing.
   // Attach platform Internal token immediately so Connect works on the owner's PC.
   try {
@@ -221,7 +225,10 @@ oauthNotionRouter.get('/start', async (req, res) => {
             workspace: attached.workspaceName,
           });
           res.redirect(
-            `${webAppUrl()}/app/integrations?connected=notion&method=founder_platform&workspace=${encodeURIComponent(attached.workspaceName)}`
+            oauthAppRedirect('notion', returnTo, {
+              method: 'founder_platform',
+              workspace: attached.workspaceName,
+            })
           );
           return;
         }
@@ -264,7 +271,7 @@ oauthNotionRouter.get('/start', async (req, res) => {
     return;
   }
 
-  const state = signState(payload.sub, payload.org);
+  const state = signState(payload.sub, payload.org, returnTo);
   const authorizeUrl = new URL('https://api.notion.com/v1/oauth/authorize');
   authorizeUrl.searchParams.set('client_id', clientId);
   authorizeUrl.searchParams.set('redirect_uri', redirectUri);
@@ -277,6 +284,7 @@ oauthNotionRouter.get('/start', async (req, res) => {
     clientIdSuffix: clientId.slice(-8),
     userId: payload.sub,
     orgId: payload.org,
+    returnTo,
     stateFingerprint: crypto.createHash('sha256').update(state).digest('hex').slice(0, 12),
   });
   res.redirect(authorizeUrl.toString());
@@ -312,7 +320,7 @@ oauthNotionRouter.get('/callback', async (req, res) => {
     return;
   }
 
-  let payload: { sub: string; org: string };
+  let payload: { sub: string; org: string; ret?: string };
   try {
     payload = verifyState(state);
   } catch (err) {
@@ -395,7 +403,7 @@ oauthNotionRouter.get('/callback', async (req, res) => {
       process.env.NOTION_API_KEY = tokenData.access_token;
     }
 
-    const dest = `${webAppUrl()}/app/integrations?connected=notion`;
+    const dest = oauthAppRedirect('notion', payload.ret);
     oauthLog('success', {
       dest,
       workspace: tokenData.workspace_name,

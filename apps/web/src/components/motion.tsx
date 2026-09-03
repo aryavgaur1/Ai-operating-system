@@ -4,8 +4,9 @@ import { motion, type HTMLMotionProps, type Variants } from 'framer-motion';
 import { cn } from '@/lib/utils';
 
 export const fadeUp: Variants = {
-  hidden: { opacity: 0, y: 18, filter: 'blur(6px)' },
-  show: { opacity: 1, y: 0, filter: 'blur(0px)', transition: { duration: 0.55, ease: [0.16, 1, 0.3, 1] } },
+  // No filter/blur — animated blur during scroll is a major compositor jank source.
+  hidden: { opacity: 0, y: 18 },
+  show: { opacity: 1, y: 0, transition: { duration: 0.45, ease: [0.16, 1, 0.3, 1] } },
 };
 
 export const stagger: Variants = {

@@ -2,7 +2,7 @@ import { Router } from 'express';
 import jwt from 'jsonwebtoken';
 import { storeConnection, revokeConnection, query } from '@enterprise-ai-os/stores';
 import { mailer } from '../lib/mailer';
-import { webAppUrl } from '../lib/authTokens';
+import { oauthAppRedirect, readOAuthReturnTo } from '../lib/oauthReturn';
 import { getJwtSecret } from '../middleware/auth';
 
 // ============================================================
@@ -21,16 +21,25 @@ const JIRA_SCOPES = [
   'read:account',
 ].join(' ');
 
-function signState(userId: string, organizationId: string): string {
-  return jwt.sign({ sub: userId, org: organizationId, typ: 'jira_oauth' }, getJwtSecret(), {
-    expiresIn: '30m',
-  });
+function signState(userId: string, organizationId: string, returnTo?: string): string {
+  return jwt.sign(
+    { sub: userId, org: organizationId, typ: 'jira_oauth', ret: returnTo },
+    getJwtSecret(),
+    {
+      expiresIn: '30m',
+    }
+  );
 }
 
-function verifyState(state: string): { sub: string; org: string } {
-  const payload = jwt.verify(state, getJwtSecret()) as { sub: string; org: string; typ?: string };
+function verifyState(state: string): { sub: string; org: string; ret?: string } {
+  const payload = jwt.verify(state, getJwtSecret()) as {
+    sub: string;
+    org: string;
+    typ?: string;
+    ret?: string;
+  };
   if (!payload.sub || !payload.org) throw new Error('Invalid OAuth state');
-  return { sub: payload.sub, org: payload.org };
+  return { sub: payload.sub, org: payload.org, ret: payload.ret };
 }
 
 function getRedirectUri(): string | undefined {
@@ -65,7 +74,8 @@ oauthJiraRouter.get('/start', (req, res) => {
     return;
   }
 
-  const state = signState(payload.sub, payload.org);
+  const returnTo = readOAuthReturnTo(req.query);
+  const state = signState(payload.sub, payload.org, returnTo);
   const url = new URL('https://auth.atlassian.com/authorize');
   url.searchParams.set('audience', 'api.atlassian.com');
   url.searchParams.set('client_id', clientId);
@@ -79,6 +89,7 @@ oauthJiraRouter.get('/start', (req, res) => {
     redirectUri,
     userId: payload.sub,
     orgId: payload.org,
+    returnTo,
   });
   res.redirect(url.toString());
 });
@@ -100,7 +111,7 @@ oauthJiraRouter.get('/callback', async (req, res) => {
     return;
   }
 
-  let payload: { sub: string; org: string };
+  let payload: { sub: string; org: string; ret?: string };
   try {
     payload = verifyState(state);
   } catch {
@@ -203,7 +214,7 @@ oauthJiraRouter.get('/callback', async (req, res) => {
       workspace: preferred.name,
       cloudId: preferred.id,
     });
-    res.redirect(`${webAppUrl()}/app/integrations?connected=jira`);
+    res.redirect(oauthAppRedirect('jira', payload.ret));
   } catch (err) {
     console.error('[oauth/jira] callback_exception', err);
     res.status(500).send('Something went wrong connecting Jira. Try again from Integrations.');

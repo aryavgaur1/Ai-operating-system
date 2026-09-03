@@ -236,12 +236,16 @@ export function WorkspaceSwitcher({
           });
         }}
         className={cn(
-          'flex items-center gap-2 rounded-2xl border border-accent/35 bg-accent/10 text-left transition hover:border-accent/55 hover:bg-accent/15',
-          compact ? 'max-w-[148px] px-2 py-1.5 sm:max-w-[168px]' : 'min-w-[180px] max-w-[260px] px-3 py-2'
+          'flex min-w-0 items-center gap-2 rounded-2xl border border-accent/35 bg-accent/10 text-left transition hover:border-accent/55 hover:bg-accent/15',
+          // Keep a usable hit target at laptop widths; truncate the label instead of collapsing the control.
+          compact
+            ? 'w-[clamp(9.5rem,18vw,13.5rem)] max-w-[13.5rem] px-2 py-1.5 sm:w-[clamp(10.5rem,16vw,14.5rem)] sm:max-w-[14.5rem]'
+            : 'min-w-[11rem] max-w-[16rem] px-3 py-2'
         )}
         aria-expanded={open}
         aria-haspopup="listbox"
-        aria-label="Workspace switcher"
+        aria-label={`Workspace switcher: ${activeLabel}`}
+        title={activeLabel}
       >
         <span
           className={cn(
@@ -252,13 +256,13 @@ export function WorkspaceSwitcher({
         >
           {activeKind === 'team' ? <Building2 size={compact ? 12 : 15} /> : <UserRound size={compact ? 12 : 15} />}
         </span>
-        <span className="min-w-0 flex-1">
-          <span className="block text-[9px] font-semibold uppercase tracking-[0.18em] text-accent2">
-            Workspace
+        <span className="min-w-0 flex-1 overflow-hidden">
+          <span className="hidden text-[9px] font-semibold uppercase tracking-[0.18em] text-accent2 sm:block">
+            {activeKind === 'team' ? 'Team' : activeKind === 'personal' ? 'Personal' : 'Workspace'}
           </span>
           <span className="block truncate text-xs font-semibold text-white sm:text-sm">{activeLabel}</span>
           {!compact && (
-            <span className="hidden text-[10px] uppercase tracking-[0.14em] text-neutral-500 sm:block">
+            <span className="hidden text-[10px] uppercase tracking-[0.14em] text-neutral-500 lg:block">
               {activeKind === 'team' ? 'Team' : activeKind === 'personal' ? 'Personal' : '—'}
               {current?.role ? ` · ${current.role}` : ''}
               {current ? ' · Active' : ''}

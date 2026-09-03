@@ -2,7 +2,7 @@ import { Router } from 'express';
 import jwt from 'jsonwebtoken';
 import { storeConnection, revokeConnection, upsertSlackInstallation, query } from '@enterprise-ai-os/stores';
 import { mailer } from '../lib/mailer';
-import { webAppUrl } from '../lib/authTokens';
+import { oauthAppRedirect, readOAuthReturnTo } from '../lib/oauthReturn';
 import { SLACK_BOT_SCOPES, SLACK_USER_SCOPES } from '../lib/slackScopes';
 import { getJwtSecret } from '../middleware/auth';
 
@@ -12,14 +12,14 @@ function isDemoMode(): boolean {
   return (process.env.SAAS_MODE ?? 'true') !== 'true';
 }
 
-function signState(userId: string, organizationId: string): string {
-  return jwt.sign({ sub: userId, org: organizationId }, getJwtSecret(), {
+function signState(userId: string, organizationId: string, returnTo?: string): string {
+  return jwt.sign({ sub: userId, org: organizationId, ret: returnTo }, getJwtSecret(), {
     expiresIn: '10m',
   });
 }
 
-function verifyState(state: string): { sub: string; org: string } {
-  return jwt.verify(state, getJwtSecret()) as { sub: string; org: string };
+function verifyState(state: string): { sub: string; org: string; ret?: string } {
+  return jwt.verify(state, getJwtSecret()) as { sub: string; org: string; ret?: string };
 }
 
 oauthSlackRouter.get('/start', (req, res) => {
@@ -44,7 +44,8 @@ oauthSlackRouter.get('/start', (req, res) => {
     return;
   }
 
-  const state = signState(payload.sub, payload.org);
+  const returnTo = readOAuthReturnTo(req.query);
+  const state = signState(payload.sub, payload.org, returnTo);
   const url = new URL('https://slack.com/oauth/v2/authorize');
   url.searchParams.set('client_id', clientId);
   url.searchParams.set('scope', SLACK_BOT_SCOPES.join(','));
@@ -65,7 +66,7 @@ oauthSlackRouter.get('/callback', async (req, res) => {
     return;
   }
 
-  let payload: { sub: string; org: string };
+  let payload: { sub: string; org: string; ret?: string };
   try {
     payload = verifyState(state);
   } catch {
@@ -160,7 +161,7 @@ oauthSlackRouter.get('/callback', async (req, res) => {
     const email = await query<{ email: string }>(`select email from users where id = $1`, [payload.sub]);
     if (email.rows[0]) await mailer.sendIntegrationConnected(email.rows[0].email, 'Slack');
 
-    res.redirect(`${webAppUrl()}/app/integrations?connected=slack`);
+    res.redirect(oauthAppRedirect('slack', payload.ret));
   } catch (err) {
     console.error('Slack OAuth callback error:', err);
     res.status(500).send('Something went wrong connecting Slack');

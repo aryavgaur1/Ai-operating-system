@@ -357,29 +357,29 @@ export function Nav() {
         initial={{ opacity: 0, y: -16 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
-        className="glass-strong relative z-[200] mx-auto flex max-w-7xl items-center gap-3 overflow-visible rounded-[26px] px-3 py-2.5 sm:gap-4 sm:px-5 sm:py-3"
+        className="glass-strong relative z-[200] mx-auto flex max-w-7xl items-center gap-2 overflow-visible rounded-[26px] px-3 py-2.5 sm:gap-3 sm:px-5 sm:py-3"
       >
         <Link href={APP_HOME} className="flex shrink-0 items-center gap-2.5 pr-1">
           <span className="relative inline-flex h-9 w-9 items-center justify-center rounded-2xl bg-gradient-to-br from-accent/30 to-accent2/20 text-accent shadow-glow">
             <Sparkles size={16} strokeWidth={2.4} />
           </span>
-          <span className="hidden font-display text-sm font-semibold tracking-[0.18em] text-white lg:inline">
+          <span className="hidden font-display text-sm font-semibold tracking-[0.18em] text-white xl:inline">
             NEXORA&nbsp;OS
           </span>
         </Link>
 
-        <div className="min-w-0 shrink-0">
+        <div className="min-w-[9.5rem] shrink-0 grow-0 basis-auto sm:min-w-[10.5rem]">
           <WorkspaceSwitcher compact />
         </div>
 
-        <nav className="hidden min-w-0 items-center gap-0.5 rounded-full border border-white/8 bg-black/20 p-1 md:flex">
+        <nav className="hidden min-w-0 flex-1 items-center justify-center gap-0.5 overflow-hidden rounded-full border border-white/8 bg-black/20 p-1 lg:flex">
           {LINKS.map((link) => {
             const matchPrefix = 'matchPrefix' in link && link.matchPrefix ? link.matchPrefix : link.href;
             const active = pathname?.startsWith(matchPrefix);
             const Icon = link.icon;
             const showApprovalBadge = matchPrefix === APP_ROUTES.approvals && pendingApprovals > 0;
             return (
-              <Link key={`${link.label}:${link.href}`} href={link.href} prefetch={false} className="relative">
+              <Link key={`${link.label}:${link.href}`} href={link.href} prefetch={false} className="relative min-w-0">
                 {active && (
                   <motion.span
                     layoutId="nav-pill"
@@ -389,12 +389,12 @@ export function Nav() {
                 )}
                 <span
                   className={cn(
-                    'relative z-10 flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-[13px] transition-colors xl:gap-1.5 xl:px-3.5 xl:py-2 xl:text-sm',
+                    'relative z-10 flex items-center gap-1.5 rounded-full px-2 py-1.5 text-[12px] transition-colors xl:gap-1.5 xl:px-3.5 xl:py-2 xl:text-sm',
                     active ? 'text-white' : 'text-neutral-400 hover:text-white'
                   )}
                 >
                   <Icon size={14} className="shrink-0" />
-                  <span className="whitespace-nowrap">{link.label}</span>
+                  <span className="hidden whitespace-nowrap xl:inline">{link.label}</span>
                   {showApprovalBadge ? (
                     <span className="ml-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-400 px-1 text-[9px] font-bold text-black">
                       {pendingApprovals > 9 ? '9+' : pendingApprovals}
@@ -406,7 +406,7 @@ export function Nav() {
           })}
         </nav>
 
-        <div className="relative ml-auto hidden max-w-xs flex-1 items-center lg:flex">
+        <div className="relative ml-auto hidden max-w-[12rem] flex-1 items-center xl:flex 2xl:max-w-xs">
           <Search size={14} className="pointer-events-none absolute left-3.5 text-neutral-500" />
           <input
             onFocus={() => setSearchFocused(true)}
@@ -419,7 +419,7 @@ export function Nav() {
           />
         </div>
 
-        <div className="ml-auto flex items-center gap-2 md:ml-3">
+        <div className="ml-auto flex shrink-0 items-center gap-2 lg:ml-2">
           <span className="hidden items-center gap-1.5 rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1.5 text-[11px] uppercase tracking-[0.2em] text-emerald-300 2xl:flex">
             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
             core online

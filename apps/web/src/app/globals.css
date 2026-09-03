@@ -36,7 +36,8 @@ html, body {
 }
 
 html {
-  scroll-behavior: auto; /* SmoothScroll component handles cream-smooth lerp on marketing */
+  /* Native scrolling only — no artificial smooth/lerp on the document */
+  scroll-behavior: auto;
   scroll-padding-top: 5.5rem;
 }
 
@@ -77,6 +78,9 @@ body::-webkit-scrollbar-track {
   backdrop-filter: blur(28px);
   -webkit-backdrop-filter: blur(28px);
   box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.05);
+  /* Own compositor layer so page scroll doesn't repaint glass blur every frame */
+  transform: translateZ(0);
+  contain: layout style;
 }
 
 .glass-strong {
@@ -85,6 +89,8 @@ body::-webkit-scrollbar-track {
   backdrop-filter: blur(32px);
   -webkit-backdrop-filter: blur(32px);
   box-shadow: 0 30px 100px -30px rgba(0,0,0,0.7), inset 0 1px 0 0 rgba(255,255,255,0.07);
+  transform: translateZ(0);
+  contain: layout style;
 }
 
 /* Opaque popovers — never use glass for menus (page text bleeds through). */
@@ -115,6 +121,8 @@ body::-webkit-scrollbar-track {
   box-shadow: 0 30px 100px -30px rgba(91, 157, 255, 0.18), inset 0 1px 0 0 rgba(255,255,255,0.06);
   backdrop-filter: blur(28px);
   -webkit-backdrop-filter: blur(28px);
+  transform: translateZ(0);
+  contain: layout style;
 }
 
 .neon-text {
@@ -167,6 +175,11 @@ body::-webkit-scrollbar-track {
   z-index: -10;
   overflow: hidden;
   background: #05060a;
+  pointer-events: none;
+  isolation: isolate;
+  /* Isolate expensive blur blobs from main document scroll paints */
+  contain: strict;
+  transform: translateZ(0);
 }
 
 .ambient-blob {
@@ -174,7 +187,14 @@ body::-webkit-scrollbar-track {
   border-radius: 999px;
   filter: blur(90px);
   opacity: 0.55;
-  will-change: transform;
+  /* Transform-only animation; avoid perpetual will-change memory cost */
+  backface-visibility: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ambient-blob {
+    animation: none !important;
+  }
 }
 
 .ambient-grid {

@@ -2,7 +2,7 @@ import { Router } from 'express';
 import jwt from 'jsonwebtoken';
 import { storeConnection, revokeConnection, query } from '@enterprise-ai-os/stores';
 import { mailer } from '../lib/mailer';
-import { webAppUrl } from '../lib/authTokens';
+import { oauthAppErrorRedirect, oauthAppRedirect, readOAuthReturnTo } from '../lib/oauthReturn';
 import { getJwtSecret } from '../middleware/auth';
 
 // ============================================================
@@ -25,24 +25,25 @@ const GMAIL_SCOPES = [
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function signState(userId: string, organizationId: string): string {
+function signState(userId: string, organizationId: string, returnTo?: string): string {
   return jwt.sign(
-    { sub: userId, org: organizationId, typ: 'gmail_connector_oauth' },
+    { sub: userId, org: organizationId, typ: 'gmail_connector_oauth', ret: returnTo },
     getJwtSecret(),
     { expiresIn: '30m' }
   );
 }
 
-function verifyState(state: string): { sub: string; org: string } {
+function verifyState(state: string): { sub: string; org: string; ret?: string } {
   const payload = jwt.verify(state, getJwtSecret()) as {
     sub: string;
     org: string;
     typ?: string;
+    ret?: string;
   };
   if (payload.typ !== 'gmail_connector_oauth' || !payload.sub || !payload.org) {
     throw new Error('Invalid OAuth state');
   }
-  return { sub: payload.sub, org: payload.org };
+  return { sub: payload.sub, org: payload.org, ret: payload.ret };
 }
 
 function getClientId(): string | undefined {
@@ -94,7 +95,8 @@ oauthGmailRouter.get('/start', (req, res) => {
     return;
   }
 
-  const state = signState(payload.sub, payload.org);
+  const returnTo = readOAuthReturnTo(req.query);
+  const state = signState(payload.sub, payload.org, returnTo);
   const url = new URL('https://accounts.google.com/o/oauth2/v2/auth');
   url.searchParams.set('client_id', clientId);
   url.searchParams.set('redirect_uri', redirectUri);
@@ -108,6 +110,7 @@ oauthGmailRouter.get('/start', (req, res) => {
     redirectUri,
     userId: payload.sub,
     orgId: payload.org,
+    returnTo,
   });
   res.redirect(url.toString());
 });
@@ -128,9 +131,8 @@ oauthGmailRouter.get('/callback', async (req, res) => {
       error === 'access_denied'
         ? 'You denied Gmail access. To connect Gmail, click Connect Gmail and allow the requested permissions.'
         : `Gmail authorization failed: ${error}`;
-    res.redirect(
-      `${webAppUrl()}/app/integrations?error=${encodeURIComponent(friendly)}`
-    );
+    // No state yet — fall back to integrations
+    res.redirect(oauthAppErrorRedirect(friendly));
     return;
   }
 
@@ -139,7 +141,7 @@ oauthGmailRouter.get('/callback', async (req, res) => {
     return;
   }
 
-  let payload: { sub: string; org: string };
+  let payload: { sub: string; org: string; ret?: string };
   try {
     payload = verifyState(state);
   } catch {
@@ -254,7 +256,7 @@ oauthGmailRouter.get('/callback', async (req, res) => {
       hasRefreshToken: Boolean(tokenData.refresh_token),
     });
 
-    res.redirect(`${webAppUrl()}/app/integrations?connected=gmail`);
+    res.redirect(oauthAppRedirect('gmail', payload.ret));
   } catch (err) {
     console.error('[oauth/gmail] callback_exception', err);
     res.status(500).send('Something went wrong connecting Gmail. Try again from Integrations.');

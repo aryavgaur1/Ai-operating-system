@@ -69,7 +69,9 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
           if (cancelled) return;
           const done = Boolean(me.profile?.preferences?.onboardingCompleted);
           if (!done && me.user.role !== 'super_admin') {
-            router.replace(APP_ROUTES.onboarding);
+            // Preserve OAuth callback query (?connected=slack) when bouncing into onboarding.
+            const qs = params.toString();
+            router.replace(`${APP_ROUTES.onboarding}${qs ? `?${qs}` : ''}`);
             return;
           }
         } catch {
