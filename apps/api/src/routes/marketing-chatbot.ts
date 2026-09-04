@@ -10,9 +10,20 @@ import { requireAdmin } from '../middleware/auth';
 
 async function extractPdfText(buffer: Buffer): Promise<string> {
   try {
-    // pdf-parse v2 may export differently across installs
     const mod: any = await import('pdf-parse');
+    if (typeof mod.PDFParse === 'function') {
+      const parser = new mod.PDFParse({ data: buffer });
+      try {
+        const result = await parser.getText();
+        if (typeof parser.destroy === 'function') await parser.destroy();
+        return String(result?.text || '');
+      } catch (err) {
+        if (typeof parser.destroy === 'function') await parser.destroy().catch(() => undefined);
+        throw err;
+      }
+    }
     const parse = mod.default || mod;
+    if (typeof parse !== 'function') return '';
     const out = await parse(buffer);
     return String(out?.text || '');
   } catch {

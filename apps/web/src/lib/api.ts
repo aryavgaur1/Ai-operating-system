@@ -450,12 +450,13 @@ export const api = {
     return readChatStream(res, opts);
   },
 
-  uploadChatFile: async (file: File) => {
+  uploadChatFile: async (file: File, conversationId?: string) => {
     const headers: Record<string, string> = {};
     const token = getAccessToken();
     if (token) headers.Authorization = `Bearer ${token}`;
     const form = new FormData();
     form.append('file', file);
+    if (conversationId) form.append('conversationId', conversationId);
     const res = await fetch(`${API_URL}/chat/upload`, {
       method: 'POST',
       headers,
@@ -470,9 +471,40 @@ export const api = {
       filename: string;
       mimeType?: string;
       hasText: boolean;
+      status?: 'uploading' | 'processing' | 'ready' | 'failed';
+      kind?: string;
       error?: string;
     };
   },
+
+  getChatAttachment: (id: string) =>
+    request<{
+      attachment: {
+        id: string;
+        filename: string;
+        mimeType?: string;
+        text?: string;
+        error?: string;
+        status?: string;
+        kind?: string;
+      };
+    }>(`/chat/attachments/${encodeURIComponent(id)}`),
+
+  retryChatAttachment: (id: string) =>
+    request<{
+      attachment: {
+        id: string;
+        filename: string;
+        mimeType?: string;
+        hasText: boolean;
+        status?: string;
+        kind?: string;
+        error?: string;
+      };
+    }>(`/chat/attachments/${encodeURIComponent(id)}/retry`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
 
   listConversations: () => request<{ conversations: any[] }>('/conversations'),
   resumeConversation: () =>

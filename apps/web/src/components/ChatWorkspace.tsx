@@ -34,7 +34,7 @@ const SUGGESTIONS = [
 ];
 
 const MAX_CLIENT_UPLOAD_BYTES = 12 * 1024 * 1024;
-const ALLOWED_CLIENT_EXT = /\.(pdf|docx|txt|md|markdown|csv|tsv|json|xlsx|xls|png|jpe?g|webp|gif|ts|tsx|js|jsx|py|sql|html|css|ya?ml)$/i;
+const ALLOWED_CLIENT_EXT = /\.(pdf|docx|pptx|txt|md|markdown|csv|tsv|json|xlsx|xls|png|jpe?g|webp|gif|ts|tsx|js|jsx|py|sql|html|css|ya?ml)$/i;
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -116,7 +116,15 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
   const [history, setHistory] = useState<{ id: string; title: string; pinned?: boolean }[]>([]);
   const [approvingTurn, setApprovingTurn] = useState<number | null>(null);
   const [pendingAttachments, setPendingAttachments] = useState<
-    Array<{ id: string; filename: string; hasText: boolean; error?: string; uploading?: boolean }>
+    Array<{
+      id: string;
+      filename: string;
+      hasText: boolean;
+      error?: string;
+      uploading?: boolean;
+      status?: 'uploading' | 'processing' | 'ready' | 'failed';
+      kind?: string;
+    }>
   >([]);
   const [uploading, setUploading] = useState(false);
   const [executionByTurn, setExecutionByTurn] = useState<Record<number, ExecutionStepState[]>>({});
@@ -447,6 +455,52 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }, [turns.length, loading]);
 
+  // Poll document processing status for async image/large-file ingestion.
+  const processingAttachmentKey = pendingAttachments
+    .filter((a) => !a.uploading && a.status === 'processing' && a.id && !a.id.startsWith('temp-'))
+    .map((a) => a.id)
+    .sort()
+    .join(',');
+
+  useEffect(() => {
+    if (!processingAttachmentKey) return;
+    const ids = processingAttachmentKey.split(',');
+    let cancelled = false;
+    const tick = async () => {
+      for (const id of ids) {
+        try {
+          const { attachment } = await api.getChatAttachment(id);
+          if (cancelled) return;
+          const nextStatus =
+            (attachment.status as 'processing' | 'ready' | 'failed' | undefined) ||
+            (attachment.error ? 'failed' : attachment.text ? 'ready' : 'processing');
+          setPendingAttachments((list) =>
+            list.map((a) =>
+              a.id === id
+                ? {
+                    ...a,
+                    status: nextStatus,
+                    hasText: Boolean(attachment.text?.trim()),
+                    error: attachment.error,
+                    kind: attachment.kind || a.kind,
+                    uploading: false,
+                  }
+                : a
+            )
+          );
+        } catch {
+          // keep polling until ready/failed or user removes
+        }
+      }
+    };
+    void tick();
+    const timer = setInterval(() => void tick(), 1500);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [processingAttachmentKey]);
+
   async function loadConversation(id: string) {
     router.push(chatConversationPath(id));
   }
@@ -456,10 +510,21 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
     opts?: { regenerate?: boolean; skipStaleConversation?: boolean }
   ) {
     const trimmed = message.trim();
-    const readyAttachments = pendingAttachments.filter((a) => !a.uploading);
+    const readyAttachments = pendingAttachments.filter(
+      (a) =>
+        !a.uploading &&
+        a.status !== 'processing' &&
+        a.status !== 'uploading' &&
+        a.status !== 'failed' &&
+        !a.error
+    );
     if ((!trimmed && readyAttachments.length === 0) || loading) return;
-    if (pendingAttachments.some((a) => a.uploading)) {
-      setError('Wait for uploads to finish before sending.');
+    if (pendingAttachments.some((a) => a.uploading || a.status === 'uploading' || a.status === 'processing')) {
+      setError('Wait for document processing to finish before sending.');
+      return;
+    }
+    if (pendingAttachments.some((a) => a.status === 'failed' || a.error)) {
+      setError('Remove or retry failed documents before sending.');
       return;
     }
     const payload =
@@ -648,7 +713,7 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
       return;
     }
     if (!ALLOWED_CLIENT_EXT.test(file.name)) {
-      setError('File type not allowed. Use PDF, DOCX, TXT, CSV, JSON, XLSX, images, or common code files.');
+      setError('File type isn\'t supported yet. Use PDF, DOCX, PPTX, TXT, CSV, JSON, XLSX, images, or common code files.');
       return;
     }
     // Duplicate name in pending — allow but warn
@@ -662,10 +727,13 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
     setError(null);
     setPendingAttachments((a) => [
       ...a,
-      { id: tempId, filename: file.name, hasText: false, uploading: true },
+      { id: tempId, filename: file.name, hasText: false, uploading: true, status: 'uploading' },
     ]);
     try {
-      const attachment = await api.uploadChatFile(file);
+      const attachment = await api.uploadChatFile(file, conversationId);
+      const status =
+        attachment.status ||
+        (attachment.error ? 'failed' : attachment.hasText ? 'ready' : 'failed');
       setPendingAttachments((list) =>
         list.map((item) =>
           item.id === tempId
@@ -675,12 +743,14 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
                 hasText: attachment.hasText,
                 error: attachment.error,
                 uploading: false,
+                status,
+                kind: attachment.kind,
               }
             : item
         )
       );
-      if (attachment.error || !attachment.hasText) {
-        setError(attachment.error || 'File uploaded but no text could be extracted.');
+      if (status === 'failed') {
+        setError(attachment.error || 'Document processing failed.');
       }
     } catch (err) {
       setPendingAttachments((list) => list.filter((item) => item.id !== tempId));
@@ -996,11 +1066,54 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
                   className="inline-flex items-center gap-2 rounded-full border border-white/12 bg-white/5 px-3 py-1 text-xs text-neutral-300"
                 >
                   <FileUp size={12} className="text-neutral-500" />
-                  {a.uploading ? (
+                  {a.uploading || a.status === 'uploading' ? (
                     <span className="text-neutral-400">Uploading {a.filename}…</span>
+                  ) : a.status === 'processing' ? (
+                    <span className="text-amber-300">Processing {a.filename}…</span>
+                  ) : a.status === 'failed' || a.error ? (
+                    <span className="inline-flex items-center gap-2 text-rose-300">
+                      Failed: {a.filename}
+                      {!a.id.startsWith('temp-') ? (
+                        <button
+                          type="button"
+                          className="underline decoration-rose-300/50 hover:text-rose-200"
+                          onClick={async () => {
+                            try {
+                              setPendingAttachments((list) =>
+                                list.map((x) =>
+                                  x.id === a.id ? { ...x, status: 'processing', error: undefined } : x
+                                )
+                              );
+                              const { attachment } = await api.retryChatAttachment(a.id);
+                              setPendingAttachments((list) =>
+                                list.map((x) =>
+                                  x.id === a.id
+                                    ? {
+                                        ...x,
+                                        status: (attachment.status as any) || (attachment.error ? 'failed' : 'ready'),
+                                        hasText: attachment.hasText,
+                                        error: attachment.error,
+                                        kind: attachment.kind,
+                                      }
+                                    : x
+                                )
+                              );
+                              if (attachment.error) setError(attachment.error);
+                            } catch (err) {
+                              setError((err as Error).message);
+                              setPendingAttachments((list) =>
+                                list.map((x) => (x.id === a.id ? { ...x, status: 'failed' } : x))
+                              );
+                            }
+                          }}
+                        >
+                          Retry
+                        </button>
+                      ) : null}
+                    </span>
                   ) : (
                     <span className={a.hasText ? 'text-emerald-300' : 'text-amber-300'}>
-                      {a.hasText ? '✓' : '!'} {a.filename}
+                      {a.hasText ? '✓ Ready' : '!'} {a.filename}
                     </span>
                   )}
                   {!a.uploading ? (
@@ -1021,8 +1134,8 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
           <form
             onSubmit={(e) => {
               e.preventDefault();
-              if (pendingAttachments.some((a) => a.uploading)) {
-                setError('Wait for uploads to finish before sending.');
+              if (pendingAttachments.some((a) => a.uploading || a.status === 'uploading' || a.status === 'processing')) {
+                setError('Wait for document processing to finish before sending.');
                 return;
               }
               send(input);
@@ -1033,7 +1146,7 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
               ref={fileRef}
               type="file"
               className="hidden"
-              accept=".pdf,.docx,.txt,.md,.markdown,.csv,.tsv,.json,.xlsx,.xls,.png,.jpg,.jpeg,.webp,.gif,.ts,.tsx,.js,.jsx,.py,.sql,.html,.css,.yaml,.yml,text/*,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,image/*"
+              accept=".pdf,.docx,.pptx,.txt,.md,.markdown,.csv,.tsv,.json,.xlsx,.xls,.png,.jpg,.jpeg,.webp,.gif,.ts,.tsx,.js,.jsx,.py,.sql,.html,.css,.yaml,.yml,text/*,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation,image/*"
               onChange={(e) => onPickFile(e.target.files?.[0] ?? null)}
             />
             <button

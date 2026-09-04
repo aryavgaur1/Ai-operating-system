@@ -24,6 +24,8 @@ export interface AttachmentMeta {
   mimeType?: string;
   text?: string;
   error?: string;
+  status?: string;
+  kind?: string;
 }
 
 export interface NexoraTurnInput {
@@ -34,6 +36,8 @@ export interface NexoraTurnInput {
   mode: NexoraTurnMode;
   history?: ChatHistoryMessage[];
   attachments?: AttachmentMeta[];
+  /** Retrieved document chunks (already auth-filtered by caller). */
+  documentRetrieval?: string;
   productKnowledge?: string;
   vectorStore?: VectorStore;
   graphStore?: GraphStore;
@@ -60,6 +64,7 @@ You combine:
 Rules:
 - Be clear, accurate, and production-oriented.
 - For coding: prefer correct, complete snippets with language fences.
+- When attachments or retrieved document sections are in the context pack, ground answers in that content and cite source locations (page/sheet/slide/section) when available. Never invent document contents.
 - NEVER claim you checked email, Slack, Jira, Notion, or sent/posted/created anything unless a tool result is in the context pack.
 - If the user asks about live workspace data (email, tasks, Slack, docs) and no tool result is provided, say you need to run the connected tool — do not invent counts, names, or IDs.
 - Never invent current news or live prices; if web search context is missing, say so.
@@ -101,6 +106,31 @@ export function wantsProductKnowledge(message: string, mode: NexoraTurnMode = 'a
 
 export function wantsWebSearch(message: string): boolean {
   return /\b(latest|today|this week|current|news|price of|who won|release notes|what's happening)\b/i.test(message);
+}
+
+/** Prefer document analysis over workspace tools when the user is asking about uploaded files. */
+export function wantsDocumentAnalysis(message: string, attachments?: AttachmentMeta[]): boolean {
+  const hasAttachments = Boolean(attachments?.length);
+  if (!hasAttachments) return false;
+  const q = message.trim();
+  if (
+    /\b(summarize|summary|what(?:'s| is) wrong|explain (?:this|the)|analyze|analyse|ocr|extract|from (?:this|the) (?:file|doc|document|pdf|image|screenshot|sheet|slide)|in (?:this|the) (?:file|doc|document|pdf|image|screenshot)|this (?:file|doc|document|pdf|image|screenshot|upload|attachment))\b/i.test(
+      q
+    )
+  ) {
+    return true;
+  }
+  // Short follow-ups while files are attached ("which region?", "deadlines?") — not action verbs.
+  if (
+    hasAttachments &&
+    !impliesWorkspaceExecution(q) &&
+    !isExplicitSlackCommand(q) &&
+    !isExplicitNotionCommand(q) &&
+    !/\b(create|send|post|invite|open a ticket|war room)\b/i.test(q)
+  ) {
+    return true;
+  }
+  return false;
 }
 
 export async function webSearch(query: string): Promise<{ ok: boolean; summary: string; provider?: string }> {
@@ -226,15 +256,27 @@ export async function buildContextPack(input: NexoraTurnInput): Promise<{
 
   if (input.attachments?.length) {
     for (const a of input.attachments) {
-      if (a.error) {
-        parts.push(`Attachment ${a.filename}: UNAVAILABLE (${a.error}). Do not claim you read this file.`);
+      if (a.error && !a.text?.trim()) {
+        parts.push(
+          `Attachment ${a.filename}: PROCESSING FAILED (${a.error}). Tell the user the document could not be processed for this reason. Do not invent its contents.`
+        );
       } else if (a.text?.trim()) {
-        parts.push(`Attachment ${a.filename} (${a.mimeType ?? 'text'}):\n${a.text.slice(0, 8000)}`);
+        // Prefer a larger window for document Q&A; retrieval supplies additional sections.
+        parts.push(
+          `Attachment ${a.filename} (${a.mimeType ?? a.kind ?? 'document'}, status=${a.status ?? 'ready'}):\n${a.text.slice(0, 24_000)}`
+        );
         sources.push(`file:${a.filename}`);
+      } else if (a.status === 'processing') {
+        parts.push(`Attachment ${a.filename}: still processing. Ask the user to retry in a moment.`);
       } else {
-        parts.push(`Attachment ${a.filename}: no extractable text. Do not claim you analyzed it.`);
+        parts.push(`Attachment ${a.filename}: no extractable content yet. Do not claim you analyzed it.`);
       }
     }
+  }
+
+  if (input.documentRetrieval?.trim()) {
+    parts.push(`Retrieved document sections (authorized for this workspace/user only):\n${input.documentRetrieval.slice(0, 12_000)}`);
+    sources.push('document_retrieval');
   }
 
   if (input.mode === 'authenticated' && wantsWebSearch(input.message)) {
@@ -293,9 +335,11 @@ export async function runGeneralIntelligence(
  */
 export async function runNexoraTurn(input: NexoraTurnInput): Promise<AgentTurnResult & { sources?: string[] }> {
   const pack = await buildContextPack(input);
+  const preferDocuments = wantsDocumentAnalysis(input.message, input.attachments);
   const useTools =
     input.mode === 'authenticated' &&
     wantsWorkspaceTools(input.message) &&
+    !preferDocuments &&
     input.vectorStore &&
     input.graphStore;
 
@@ -346,9 +390,11 @@ export async function* streamNexoraTurn(input: NexoraTurnInput): AsyncGenerator<
   try {
     yield { type: 'status', message: 'Understanding request…' };
     const pack = await buildContextPack(input);
+    const preferDocuments = wantsDocumentAnalysis(input.message, input.attachments);
     const useTools =
       input.mode === 'authenticated' &&
       wantsWorkspaceTools(input.message) &&
+      !preferDocuments &&
       input.vectorStore &&
       input.graphStore;
 
