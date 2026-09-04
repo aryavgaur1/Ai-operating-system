@@ -26,33 +26,44 @@ export type StoredAttachment = {
 
 const vectorStore = createVectorStore();
 
+let attachmentSchemaReady: Promise<void> | null = null;
+
 export async function ensureAttachmentSchema(): Promise<void> {
-  await query(`
-    create table if not exists chat_attachments (
-      id text primary key,
-      organization_id text not null,
-      user_id text not null,
-      filename text not null,
-      mime_type text,
-      extracted_text text,
-      extract_error text,
-      created_at timestamptz not null default now()
-    )
-  `);
-  // Additive columns for document intelligence (idempotent)
-  await query(`alter table chat_attachments add column if not exists status text`);
-  await query(`alter table chat_attachments add column if not exists conversation_id text`);
-  await query(`alter table chat_attachments add column if not exists file_size integer`);
-  await query(`alter table chat_attachments add column if not exists content_kind text`);
-  await query(`alter table chat_attachments add column if not exists metadata jsonb`);
-  await query(`alter table chat_attachments add column if not exists storage_path text`);
-  await query(`alter table chat_attachments add column if not exists processed_at timestamptz`);
-  await query(
-    `create index if not exists chat_attachments_org_user_idx on chat_attachments (organization_id, user_id, created_at desc)`
-  );
-  await query(
-    `create index if not exists chat_attachments_conversation_idx on chat_attachments (conversation_id)`
-  );
+  if (!attachmentSchemaReady) {
+    attachmentSchemaReady = (async () => {
+      await query(`
+        create table if not exists chat_attachments (
+          id text primary key,
+          organization_id text not null,
+          user_id text not null,
+          filename text not null,
+          mime_type text,
+          extracted_text text,
+          extract_error text,
+          created_at timestamptz not null default now()
+        )
+      `);
+      // Additive columns for document intelligence (idempotent)
+      await query(`alter table chat_attachments add column if not exists status text`);
+      await query(`alter table chat_attachments add column if not exists conversation_id text`);
+      await query(`alter table chat_attachments add column if not exists file_size integer`);
+      await query(`alter table chat_attachments add column if not exists content_kind text`);
+      await query(`alter table chat_attachments add column if not exists metadata jsonb`);
+      await query(`alter table chat_attachments add column if not exists storage_path text`);
+      await query(`alter table chat_attachments add column if not exists processed_at timestamptz`);
+      await query(
+        `create index if not exists chat_attachments_org_user_idx on chat_attachments (organization_id, user_id, created_at desc)`
+      );
+      await query(
+        `create index if not exists chat_attachments_conversation_idx on chat_attachments (conversation_id)`
+      );
+    })().catch((err) => {
+      // Allow retry on next request if migration failed (e.g. transient DB blip).
+      attachmentSchemaReady = null;
+      throw err;
+    });
+  }
+  await attachmentSchemaReady;
 }
 
 export async function insertProcessingAttachment(input: {

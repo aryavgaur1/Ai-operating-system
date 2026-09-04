@@ -186,47 +186,58 @@ chatRouter.post(
 
     const history = await loadHistory(user.organizationId, user.id, activeConversationId);
 
+    // Document intelligence must never take down plain chat.
+    // Ensure schema first (new columns), then load attachments — soft-fail on any doc error.
     const explicitIds = Array.isArray(attachmentIds) ? attachmentIds.map(String) : [];
-    let attachments = await loadAuthorizedAttachments({
-      organizationId: user.organizationId,
-      userId: user.id,
-      ids: explicitIds.length ? explicitIds : undefined,
-      conversationId: explicitIds.length ? undefined : activeConversationId,
-      limit: 6,
-    });
-
-    // If ids were provided, bind them to this conversation for follow-ups.
-    if (explicitIds.length) {
-      await bindAttachmentsToConversation({
+    let attachments: Awaited<ReturnType<typeof loadAuthorizedAttachments>> = [];
+    let retrievedDocContext = '';
+    try {
+      await ensureAttachmentSchema();
+      attachments = await loadAuthorizedAttachments({
         organizationId: user.organizationId,
         userId: user.id,
-        conversationId: activeConversationId,
-        attachmentIds: explicitIds,
+        ids: explicitIds.length ? explicitIds : undefined,
+        conversationId: explicitIds.length ? undefined : activeConversationId,
+        limit: 6,
       });
-    }
 
-    // Retrieve relevant chunks only when this turn has authorized attachments (fast path otherwise).
-    let retrievedDocContext = '';
-    if (attachments.length) {
-      try {
-        const hits = await retrieveAttachmentContext({
+      if (explicitIds.length) {
+        await bindAttachmentsToConversation({
           organizationId: user.organizationId,
           userId: user.id,
-          query: message,
-          attachmentIds: attachments.map((a) => a.id),
-          topK: 6,
+          conversationId: activeConversationId,
+          attachmentIds: explicitIds,
         });
-        if (hits.length) {
-          retrievedDocContext = hits
-            .map(
-              (h, i) =>
-                `[Doc ${i + 1}] ${h.filename || 'attachment'}${h.section ? ` · ${h.section}` : ''} (score ${h.score.toFixed(3)}):\n${h.text}`
-            )
-            .join('\n\n');
-        }
-      } catch (err) {
-        console.warn('[chat] attachment retrieval skipped:', err instanceof Error ? err.message : err);
       }
+
+      if (attachments.length) {
+        try {
+          const hits = await retrieveAttachmentContext({
+            organizationId: user.organizationId,
+            userId: user.id,
+            query: message,
+            attachmentIds: attachments.map((a) => a.id),
+            topK: 6,
+          });
+          if (hits.length) {
+            retrievedDocContext = hits
+              .map(
+                (h, i) =>
+                  `[Doc ${i + 1}] ${h.filename || 'attachment'}${h.section ? ` · ${h.section}` : ''} (score ${h.score.toFixed(3)}):\n${h.text}`
+              )
+              .join('\n\n');
+          }
+        } catch (err) {
+          console.warn('[chat] attachment retrieval skipped:', err instanceof Error ? err.message : err);
+        }
+      }
+    } catch (err) {
+      console.warn(
+        '[chat] attachment context skipped — continuing without documents:',
+        err instanceof Error ? err.message : err
+      );
+      attachments = [];
+      retrievedDocContext = '';
     }
 
     const attachmentMetas: AttachmentMeta[] = attachments.map((a) => ({

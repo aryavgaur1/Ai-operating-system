@@ -230,6 +230,18 @@ async function start() {
     console.warn('[api] SAAS_MODE=false — demo connection seeding and mock ingestion are disabled. Connect real tools via OAuth.');
   }
 
+  // Migrate chat attachment columns on boot so document intelligence never 500s plain chat.
+  try {
+    const { ensureAttachmentSchema } = await import('./lib/attachmentStore');
+    await ensureAttachmentSchema();
+    console.log('[api] chat_attachments schema ready');
+  } catch (err) {
+    console.warn(
+      '[api] chat_attachments schema ensure deferred:',
+      err instanceof Error ? err.message : err
+    );
+  }
+
   app.listen(PORT, () => {
     console.log(`🚀 Nexora OS API listening on http://localhost:${PORT}`);
     console.log(`   SAAS_MODE=${SAAS_MODE}`);
