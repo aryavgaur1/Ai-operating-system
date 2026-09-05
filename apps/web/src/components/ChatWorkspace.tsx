@@ -38,6 +38,21 @@ const ALLOWED_CLIENT_EXT = /\.(pdf|docx|pptx|txt|md|markdown|csv|tsv|json|xlsx|x
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+/** Never show raw provider JSON / API-key dumps in the chat UI. */
+function sanitizeChatError(message: string): string {
+  const msg = String(message || '').trim();
+  if (!msg) return 'Something went wrong. Please try again.';
+  if (
+    /authentication_error|api key is invalid|invalid.?api.?key|incorrect api key/i.test(msg) ||
+    /^\s*\d{3}\s*\{/.test(msg) ||
+    /"type"\s*:\s*"error"/.test(msg)
+  ) {
+    return 'Nexora AI could not authenticate with the language model provider. Please update the LLM API key on the server, then retry.';
+  }
+  if (msg.length > 320) return 'Something went wrong. Please try again.';
+  return msg;
+}
+
 function mapMessagesToTurns(messages: any[]): Turn[] {
   return (messages || []).map((m: any) => {
     const stored = m.tool_calls;
@@ -617,7 +632,7 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
             setStatusLine('Action ready for your approval.');
           }
           if (event.type === 'error') {
-            setError(event.message);
+            setError(sanitizeChatError(event.message));
           }
           if (event.type === 'conversation') {
             loadedIdRef.current = event.conversationId;
@@ -676,7 +691,7 @@ export function ChatWorkspace({ routeConversationId }: { routeConversationId?: s
           await send(message, { ...opts, regenerate: true, skipStaleConversation: true });
           return;
         }
-        setError(msg);
+        setError(sanitizeChatError(msg));
         // Remove empty assistant placeholder on hard failure
         setTurns((prev) => {
           const last = prev[prev.length - 1];

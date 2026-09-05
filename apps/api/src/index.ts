@@ -117,6 +117,13 @@ app.get('/health', async (req, res) => {
     smtpProbe = await probeSmtpConnectivity();
   }
   const email = getEmailDiagnostics();
+  let llm: { provider: string; configured: boolean; productionSafe: boolean; reason?: string } | undefined;
+  try {
+    const { resolveLLMStatus } = await import('@enterprise-ai-os/agent-core');
+    llm = resolveLLMStatus();
+  } catch {
+    llm = { provider: 'unknown', configured: false, productionSafe: false, reason: 'status unavailable' };
+  }
   res.json({
     ok: true,
     service: 'enterprise-ai-os-api',
@@ -127,6 +134,7 @@ app.get('/health', async (req, res) => {
       process.env.COMMIT_REF ||
       null,
     deployedAt: process.env.RAILWAY_DEPLOYMENT_ID || null,
+    llm,
     emailConfigured: email.configured,
     emailProvider: 'gmail_api',
     googleClientIdConfigured: email.googleClientIdConfigured,

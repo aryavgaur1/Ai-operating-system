@@ -1,6 +1,6 @@
 import type { AgentPlan, AgentTurnResult, ToolCallResult } from '@enterprise-ai-os/shared';
 import type { VectorStore, GraphStore } from '@enterprise-ai-os/stores';
-import { createLLMClient, type LLMMessage } from '../llmClient';
+import { humanizeLlmError, llmComplete, llmStream, type LLMMessage } from '../llmClient';
 import { runAgentTurn } from '../orchestrator';
 import { recall, listRecentMemory } from '../os/threadMemory';
 import { detectOsIntent, isExplicitSlackCommand, isExplicitNotionCommand } from '../os/intentDetector';
@@ -303,10 +303,8 @@ export async function runGeneralIntelligence(
   contextText: string,
   onToken?: (t: string) => void
 ): Promise<string> {
-  const llm = createLLMClient();
-  const system = input.mode === 'public_marketing' ? MARKETING_SYSTEM : GENERAL_SYSTEM;
   const messages: LLMMessage[] = [
-    { role: 'system', content: system },
+    { role: 'system', content: input.mode === 'public_marketing' ? MARKETING_SYSTEM : GENERAL_SYSTEM },
     {
       role: 'user',
       content: [
@@ -320,13 +318,13 @@ export async function runGeneralIntelligence(
 
   if (onToken || input.stream) {
     let full = '';
-    for await (const delta of llm.stream(messages)) {
+    for await (const delta of llmStream(messages)) {
       full += delta;
       onToken?.(delta);
     }
     return full;
   }
-  return llm.complete(messages);
+  return llmComplete(messages);
 }
 
 /**
@@ -458,7 +456,7 @@ export async function* streamNexoraTurn(input: NexoraTurnInput): AsyncGenerator<
     yield { type: 'status', message: 'Answering…' };
     let reply = '';
     const system = input.mode === 'public_marketing' ? MARKETING_SYSTEM : GENERAL_SYSTEM;
-    for await (const delta of createLLMClient().stream([
+    for await (const delta of llmStream([
       { role: 'system', content: system },
       {
         role: 'user',
@@ -479,7 +477,7 @@ export async function* streamNexoraTurn(input: NexoraTurnInput): AsyncGenerator<
       },
     };
   } catch (err) {
-    yield { type: 'error', message: err instanceof Error ? err.message : String(err) };
+    yield { type: 'error', message: humanizeLlmError(err) };
   }
 }
 

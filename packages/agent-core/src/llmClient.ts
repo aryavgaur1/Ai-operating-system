@@ -1,8 +1,9 @@
 // ============================================================
 // LLM Client / AI Gateway — reasoning + streaming for Nexora.
- // Providers: mock | anthropic | openai | google (stub until key set).
- // Never expose API keys to the browser — all calls are server-side.
- // ============================================================
+// Providers: anthropic | openai | google | mock (dev only).
+// Never expose API keys to the browser — all calls are server-side.
+// Production: never silently use Mock LLM; never surface raw provider JSON.
+// ============================================================
 
 import fs from 'fs';
 import path from 'path';
@@ -45,8 +46,89 @@ export interface LLMClient {
   stream(messages: LLMMessage[]): AsyncIterable<string>;
 }
 
+export type LLMProviderName = 'anthropic' | 'openai' | 'google' | 'mock';
+
+export type LLMStatus = {
+  provider: LLMProviderName;
+  configured: boolean;
+  productionSafe: boolean;
+  reason?: string;
+};
+
+const USER_FACING_LLM_UNAVAILABLE =
+  'Nexora AI is temporarily unavailable. The team has been notified to check the LLM API configuration.';
+
+function isProductionLike(): boolean {
+  const saas = String(process.env.SAAS_MODE ?? '').toLowerCase();
+  if (saas === 'true' || saas === '1') return true;
+  return String(process.env.NODE_ENV ?? '').toLowerCase() === 'production';
+}
+
+/** Reject empty / placeholder keys so we never call providers with junk credentials. */
+export function isUsableApiKey(value?: string | null): boolean {
+  if (!value) return false;
+  const n = value.trim().toLowerCase();
+  if (!n) return false;
+  if (n.startsWith('<') || n.endsWith('>')) return false;
+  if (n.includes('paste_your') || n.includes('your_') || n.includes('replace_me')) return false;
+  if (n.includes('xxx') || n === 'changeme' || n === 'todo') return false;
+  if (n.includes('example') || n.includes('placeholder')) return false;
+  // Real keys are reasonably long
+  if (value.trim().length < 20) return false;
+  return true;
+}
+
+export function humanizeLlmError(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err ?? '');
+  const lower = raw.toLowerCase();
+
+  if (
+    /authentication_error|invalid.?api.?key|incorrect api key|401|unauthorized|invalid_api_key|api key is invalid/i.test(
+      raw
+    )
+  ) {
+    return 'Nexora AI could not authenticate with the language model provider. Please update the LLM API key on the server, then retry.';
+  }
+  if (/rate.?limit|429|too many requests/i.test(raw)) {
+    return 'Nexora AI is rate-limited right now. Please wait a moment and try again.';
+  }
+  if (/timeout|etimedout|econnreset|fetch failed|network/i.test(lower)) {
+    return 'Nexora AI hit a network issue talking to the language model. Please try again.';
+  }
+  if (/LLM is not configured|no usable|LLM_PROVIDER/i.test(raw)) {
+    return raw;
+  }
+  // Never dump provider JSON bodies into the chat UI
+  if (/^\s*\d{3}\s*\{/.test(raw) || /"type"\s*:\s*"error"/.test(raw)) {
+    return USER_FACING_LLM_UNAVAILABLE;
+  }
+  if (raw.length > 280) return USER_FACING_LLM_UNAVAILABLE;
+  return raw.trim() || USER_FACING_LLM_UNAVAILABLE;
+}
+
 async function* onceStream(text: string): AsyncIterable<string> {
   if (text) yield text;
+}
+
+function wrapClient(client: LLMClient): LLMClient {
+  return {
+    async complete(messages) {
+      try {
+        return await client.complete(messages);
+      } catch (err) {
+        throw new Error(humanizeLlmError(err));
+      }
+    },
+    async *stream(messages) {
+      try {
+        for await (const delta of client.stream(messages)) {
+          yield delta;
+        }
+      } catch (err) {
+        throw new Error(humanizeLlmError(err));
+      }
+    },
+  };
 }
 
 export class MockLLMClient implements LLMClient {
@@ -54,7 +136,6 @@ export class MockLLMClient implements LLMClient {
     await new Promise((r) => setTimeout(r, 120 + Math.random() * 180));
     const lastUser = [...messages].reverse().find((m) => m.role === 'user');
     const text = lastUser?.content ?? '';
-    // General-purpose mock: still useful offline
     if (/code|react|typescript|javascript|python|sql|debug|function/i.test(text)) {
       return [
         `Here's a concise coding answer for: "${text.slice(0, 100)}"`,
@@ -66,7 +147,7 @@ export class MockLLMClient implements LLMClient {
         '}',
         '```',
         '',
-        '_Mock LLM — set LLM_PROVIDER=openai|anthropic for live answers._',
+        '_Dev mock LLM — production must use a real provider key._',
       ].join('\n');
     }
     return [
@@ -74,7 +155,7 @@ export class MockLLMClient implements LLMClient {
       '',
       'I can help with general knowledge, coding, writing, planning, and — when connected — Slack/Notion/Jira actions.',
       '',
-      '_Mock LLM — set LLM_PROVIDER=openai|anthropic for live answers._',
+      '_Dev mock LLM — production must use a real provider key._',
     ].join('\n');
   }
 
@@ -92,8 +173,8 @@ export class AnthropicLLMClient implements LLMClient {
   private client: Anthropic;
 
   constructor(apiKey: string, private model = process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-4-6') {
-    if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not set.');
-    this.client = new Anthropic({ apiKey });
+    if (!isUsableApiKey(apiKey)) throw new Error('ANTHROPIC_API_KEY is not set or is a placeholder.');
+    this.client = new Anthropic({ apiKey: apiKey.trim() });
   }
 
   async complete(messages: LLMMessage[]): Promise<string> {
@@ -138,8 +219,8 @@ export class OpenAILLMClient implements LLMClient {
   private client: OpenAI;
 
   constructor(apiKey: string, private model = process.env.OPENAI_MODEL ?? 'gpt-4o') {
-    if (!apiKey) throw new Error('OPENAI_API_KEY is not set.');
-    this.client = new OpenAI({ apiKey });
+    if (!isUsableApiKey(apiKey)) throw new Error('OPENAI_API_KEY is not set or is a placeholder.');
+    this.client = new OpenAI({ apiKey: apiKey.trim() });
   }
 
   async complete(messages: LLMMessage[]): Promise<string> {
@@ -163,13 +244,13 @@ export class OpenAILLMClient implements LLMClient {
   }
 }
 
-/** Google Gemini stub — activates when GOOGLE_API_KEY is set; otherwise falls back to mock text. */
+/** Google Gemini — activates when GOOGLE_API_KEY is set. */
 export class GoogleLLMClient implements LLMClient {
   constructor(
     private apiKey: string,
     private model = process.env.GOOGLE_MODEL ?? 'gemini-2.0-flash'
   ) {
-    if (!apiKey) throw new Error('GOOGLE_API_KEY is not set.');
+    if (!isUsableApiKey(apiKey)) throw new Error('GOOGLE_API_KEY is not set or is a placeholder.');
   }
 
   private toContents(messages: LLMMessage[]) {
@@ -185,7 +266,7 @@ export class GoogleLLMClient implements LLMClient {
 
   async complete(messages: LLMMessage[]): Promise<string> {
     const { system, contents } = this.toContents(messages);
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${encodeURIComponent(this.apiKey)}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${encodeURIComponent(this.apiKey.trim())}`;
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -205,38 +286,178 @@ export class GoogleLLMClient implements LLMClient {
   }
 
   async *stream(messages: LLMMessage[]): AsyncIterable<string> {
-    // Streaming REST varies by version — complete then yield for reliability.
     yield* onceStream(await this.complete(messages));
   }
 }
 
+function buildClient(provider: LLMProviderName): LLMClient {
+  switch (provider) {
+    case 'anthropic':
+      return new AnthropicLLMClient(process.env.ANTHROPIC_API_KEY ?? '');
+    case 'openai':
+      return new OpenAILLMClient(process.env.OPENAI_API_KEY ?? '');
+    case 'google':
+      return new GoogleLLMClient(process.env.GOOGLE_API_KEY ?? '');
+    case 'mock':
+    default:
+      return new MockLLMClient();
+  }
+}
+
+function keyFor(provider: Exclude<LLMProviderName, 'mock'>): string | undefined {
+  if (provider === 'anthropic') return process.env.ANTHROPIC_API_KEY;
+  if (provider === 'openai') return process.env.OPENAI_API_KEY;
+  return process.env.GOOGLE_API_KEY;
+}
+
+const PROVIDER_ORDER: Array<Exclude<LLMProviderName, 'mock'>> = ['anthropic', 'openai', 'google'];
+
+/**
+ * Resolve which provider to use.
+ * - Honors LLM_PROVIDER when its key is usable
+ * - Otherwise auto-picks the first provider with a real key
+ * - Mock only when explicitly allowed (never the silent production default)
+ */
+export function resolveLLMStatus(): LLMStatus {
+  const requestedRaw = (process.env.LLM_PROVIDER ?? '').trim().toLowerCase();
+  const requested = !requestedRaw || requestedRaw === 'auto' ? 'auto' : requestedRaw;
+  const allowMockExplicit = String(process.env.LLM_ALLOW_MOCK ?? '').toLowerCase() === 'true';
+
+  if (requested === 'mock') {
+    if (isProductionLike() && !allowMockExplicit) {
+      return {
+        provider: 'mock',
+        configured: false,
+        productionSafe: false,
+        reason: 'LLM_PROVIDER=mock is not allowed in production without LLM_ALLOW_MOCK=true',
+      };
+    }
+    return { provider: 'mock', configured: true, productionSafe: !isProductionLike(), reason: 'explicit mock' };
+  }
+
+  const tryProvider = (p: Exclude<LLMProviderName, 'mock'>): LLMStatus | null => {
+    if (!isUsableApiKey(keyFor(p))) return null;
+    return { provider: p, configured: true, productionSafe: true };
+  };
+
+  if (requested === 'anthropic' || requested === 'openai' || requested === 'google') {
+    const hit = tryProvider(requested);
+    if (hit) return hit;
+  }
+  if (requested === 'gemini') {
+    const hit = tryProvider('google');
+    if (hit) return hit;
+  }
+
+  for (const p of PROVIDER_ORDER) {
+    const hit = tryProvider(p);
+    if (hit) {
+      return {
+        ...hit,
+        reason:
+          requested !== 'auto' && requested !== p
+            ? `requested ${requested} has no usable key; using ${p}`
+            : undefined,
+      };
+    }
+  }
+
+  if (allowMockExplicit || (!isProductionLike() && requested === 'auto')) {
+    return {
+      provider: 'mock',
+      configured: true,
+      productionSafe: false,
+      reason: 'no usable LLM API key — using mock in development',
+    };
+  }
+
+  return {
+    provider: 'anthropic',
+    configured: false,
+    productionSafe: false,
+    reason: 'No usable ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY is configured',
+  };
+}
+
 let instance: LLMClient | null = null;
+let instanceProvider: LLMProviderName | null = null;
 
 export function createLLMClient(): LLMClient {
   if (instance) return instance;
-  const provider = (process.env.LLM_PROVIDER ?? 'mock').toLowerCase();
-  switch (provider) {
-    case 'anthropic':
-      instance = new AnthropicLLMClient(process.env.ANTHROPIC_API_KEY ?? '');
-      return instance;
-    case 'openai':
-      instance = new OpenAILLMClient(process.env.OPENAI_API_KEY ?? '');
-      return instance;
-    case 'google':
-    case 'gemini':
-      instance = new GoogleLLMClient(process.env.GOOGLE_API_KEY ?? '');
-      return instance;
-    default:
-      instance = new MockLLMClient();
-      return instance;
+
+  const status = resolveLLMStatus();
+  if (!status.configured || (isProductionLike() && status.provider === 'mock' && !status.productionSafe)) {
+    throw new Error(
+      status.reason ||
+        'Nexora AI is not configured. Set a valid ANTHROPIC_API_KEY or OPENAI_API_KEY (and LLM_PROVIDER) on the API.'
+    );
   }
+
+  instance = wrapClient(buildClient(status.provider));
+  instanceProvider = status.provider;
+  return instance;
+}
+
+/**
+ * On auth failure, rebuild with the next usable provider (real→real only — never mock in prod).
+ * Returns null if no alternate exists.
+ */
+export function failoverLLMClient(failedProvider?: LLMProviderName): LLMClient | null {
+  const failed = failedProvider || instanceProvider;
+  const remaining = PROVIDER_ORDER.filter((p) => p !== failed && isUsableApiKey(keyFor(p)));
+  if (!remaining.length) {
+    instance = null;
+    instanceProvider = null;
+    return null;
+  }
+  const next = remaining[0];
+  instance = wrapClient(buildClient(next));
+  instanceProvider = next;
+  return instance;
 }
 
 /** Reset the cached client — useful in tests or after rotating a key. */
 export function resetLLMClient(): void {
   instance = null;
+  instanceProvider = null;
 }
 
 export function getLLMProviderName(): string {
-  return (process.env.LLM_PROVIDER ?? 'mock').toLowerCase();
+  return resolveLLMStatus().provider;
+}
+
+/** Run complete with one automatic real-provider failover on auth errors. */
+export async function llmComplete(messages: LLMMessage[]): Promise<string> {
+  const primary = createLLMClient();
+  try {
+    return await primary.complete(messages);
+  } catch (err) {
+    const msg = humanizeLlmError(err);
+    if (!/authenticate|API key/i.test(msg)) throw new Error(msg);
+    const next = failoverLLMClient();
+    if (!next) throw new Error(msg);
+    try {
+      return await next.complete(messages);
+    } catch (err2) {
+      throw new Error(humanizeLlmError(err2));
+    }
+  }
+}
+
+/** Stream with one automatic real-provider failover on auth errors. */
+export async function* llmStream(messages: LLMMessage[]): AsyncIterable<string> {
+  const primary = createLLMClient();
+  try {
+    for await (const delta of primary.stream(messages)) {
+      yield delta;
+    }
+  } catch (err) {
+    const msg = humanizeLlmError(err);
+    if (!/authenticate|API key/i.test(msg)) throw new Error(msg);
+    const next = failoverLLMClient();
+    if (!next) throw new Error(msg);
+    for await (const delta of next.stream(messages)) {
+      yield delta;
+    }
+  }
 }
