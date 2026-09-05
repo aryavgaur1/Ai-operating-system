@@ -244,13 +244,13 @@ export class OpenAILLMClient implements LLMClient {
   }
 }
 
-/** Google Gemini — activates when GOOGLE_API_KEY is set. */
+/** Google Gemini — uses GEMINI_API_KEY (preferred) or legacy GOOGLE_API_KEY. */
 export class GoogleLLMClient implements LLMClient {
   constructor(
     private apiKey: string,
     private model = process.env.GOOGLE_MODEL ?? 'gemini-2.0-flash'
   ) {
-    if (!isUsableApiKey(apiKey)) throw new Error('GOOGLE_API_KEY is not set or is a placeholder.');
+    if (!isUsableApiKey(apiKey)) throw new Error('GEMINI_API_KEY (or GOOGLE_API_KEY) is not set or is a placeholder.');
   }
 
   private toContents(messages: LLMMessage[]) {
@@ -297,7 +297,7 @@ function buildClient(provider: LLMProviderName): LLMClient {
     case 'openai':
       return new OpenAILLMClient(process.env.OPENAI_API_KEY ?? '');
     case 'google':
-      return new GoogleLLMClient(process.env.GOOGLE_API_KEY ?? '');
+      return new GoogleLLMClient(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '');
     case 'mock':
     default:
       return new MockLLMClient();
@@ -307,7 +307,8 @@ function buildClient(provider: LLMProviderName): LLMClient {
 function keyFor(provider: Exclude<LLMProviderName, 'mock'>): string | undefined {
   if (provider === 'anthropic') return process.env.ANTHROPIC_API_KEY;
   if (provider === 'openai') return process.env.OPENAI_API_KEY;
-  return process.env.GOOGLE_API_KEY;
+  // Prefer GEMINI_API_KEY; keep GOOGLE_API_KEY as alias for older configs.
+  return process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
 }
 
 const PROVIDER_ORDER: Array<Exclude<LLMProviderName, 'mock'>> = ['anthropic', 'openai', 'google'];
@@ -375,7 +376,7 @@ export function resolveLLMStatus(): LLMStatus {
     provider: 'anthropic',
     configured: false,
     productionSafe: false,
-    reason: 'No usable ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY is configured',
+    reason: 'No usable ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, or GOOGLE_API_KEY is configured',
   };
 }
 
