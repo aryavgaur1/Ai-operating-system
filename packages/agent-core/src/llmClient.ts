@@ -311,11 +311,12 @@ function keyFor(provider: Exclude<LLMProviderName, 'mock'>): string | undefined 
   return process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
 }
 
-const PROVIDER_ORDER: Array<Exclude<LLMProviderName, 'mock'>> = ['anthropic', 'openai', 'google'];
+const PROVIDER_ORDER: Array<Exclude<LLMProviderName, 'mock'>> = ['google', 'anthropic', 'openai'];
 
 /**
  * Resolve which provider to use.
- * - Honors LLM_PROVIDER when its key is usable
+ * - Prefers Gemini whenever GEMINI_API_KEY (or GOOGLE_API_KEY) is set
+ * - Honors LLM_PROVIDER when LLM_STRICT_PROVIDER=true
  * - Otherwise auto-picks the first provider with a real key
  * - Mock only when explicitly allowed (never the silent production default)
  */
@@ -323,6 +324,7 @@ export function resolveLLMStatus(): LLMStatus {
   const requestedRaw = (process.env.LLM_PROVIDER ?? '').trim().toLowerCase();
   const requested = !requestedRaw || requestedRaw === 'auto' ? 'auto' : requestedRaw;
   const allowMockExplicit = String(process.env.LLM_ALLOW_MOCK ?? '').toLowerCase() === 'true';
+  const strict = String(process.env.LLM_STRICT_PROVIDER ?? '').toLowerCase() === 'true';
 
   if (requested === 'mock') {
     if (isProductionLike() && !allowMockExplicit) {
@@ -341,13 +343,28 @@ export function resolveLLMStatus(): LLMStatus {
     return { provider: p, configured: true, productionSafe: true };
   };
 
+  const gemini = tryProvider('google');
+
+  // Prefer Gemini whenever its key is present (fixes live pitches when Anthropic key is stale).
+  // Opt out with LLM_STRICT_PROVIDER=true + LLM_PROVIDER=anthropic|openai.
+  if (gemini && !(strict && (requested === 'anthropic' || requested === 'openai'))) {
+    return {
+      ...gemini,
+      reason:
+        requested === 'anthropic' || requested === 'openai'
+          ? `preferring GEMINI_API_KEY over ${requested}`
+          : requested === 'gemini' || requested === 'google'
+            ? undefined
+            : undefined,
+    };
+  }
+
   if (requested === 'anthropic' || requested === 'openai' || requested === 'google') {
     const hit = tryProvider(requested);
     if (hit) return hit;
   }
   if (requested === 'gemini') {
-    const hit = tryProvider('google');
-    if (hit) return hit;
+    if (gemini) return gemini;
   }
 
   for (const p of PROVIDER_ORDER) {
@@ -356,7 +373,7 @@ export function resolveLLMStatus(): LLMStatus {
       return {
         ...hit,
         reason:
-          requested !== 'auto' && requested !== p
+          requested !== 'auto' && requested !== p && !(p === 'google' && requested === 'gemini')
             ? `requested ${requested} has no usable key; using ${p}`
             : undefined,
       };
@@ -373,10 +390,10 @@ export function resolveLLMStatus(): LLMStatus {
   }
 
   return {
-    provider: 'anthropic',
+    provider: 'google',
     configured: false,
     productionSafe: false,
-    reason: 'No usable ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, or GOOGLE_API_KEY is configured',
+    reason: 'No usable GEMINI_API_KEY, ANTHROPIC_API_KEY, or OPENAI_API_KEY is configured',
   };
 }
 

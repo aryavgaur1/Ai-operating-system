@@ -117,10 +117,26 @@ app.get('/health', async (req, res) => {
     smtpProbe = await probeSmtpConnectivity();
   }
   const email = getEmailDiagnostics();
-  let llm: { provider: string; configured: boolean; productionSafe: boolean; reason?: string } | undefined;
+  let llm:
+    | {
+        provider: string;
+        configured: boolean;
+        productionSafe: boolean;
+        reason?: string;
+        keys?: { gemini: boolean; anthropic: boolean; openai: boolean };
+      }
+    | undefined;
   try {
-    const { resolveLLMStatus } = await import('@enterprise-ai-os/agent-core');
-    llm = resolveLLMStatus();
+    const { resolveLLMStatus, isUsableApiKey } = await import('@enterprise-ai-os/agent-core');
+    const status = resolveLLMStatus();
+    llm = {
+      ...status,
+      keys: {
+        gemini: isUsableApiKey(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY),
+        anthropic: isUsableApiKey(process.env.ANTHROPIC_API_KEY),
+        openai: isUsableApiKey(process.env.OPENAI_API_KEY),
+      },
+    };
   } catch {
     llm = { provider: 'unknown', configured: false, productionSafe: false, reason: 'status unavailable' };
   }
