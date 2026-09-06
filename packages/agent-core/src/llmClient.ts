@@ -92,6 +92,9 @@ export function humanizeLlmError(err: unknown): string {
   if (/rate.?limit|429|too many requests/i.test(raw)) {
     return 'Nexora AI is rate-limited right now. Please wait a moment and try again.';
   }
+  if (/no longer available|is not found for API version|Google LLM error 404/i.test(raw)) {
+    return 'Nexora AI model configuration needs an update. Please retry in a moment.';
+  }
   if (/timeout|etimedout|econnreset|fetch failed|network/i.test(lower)) {
     return 'Nexora AI hit a network issue talking to the language model. Please try again.';
   }
@@ -246,11 +249,22 @@ export class OpenAILLMClient implements LLMClient {
 
 /** Google Gemini — uses GEMINI_API_KEY (preferred) or legacy GOOGLE_API_KEY. */
 export class GoogleLLMClient implements LLMClient {
+  private models: string[];
+
   constructor(
     private apiKey: string,
-    private model = process.env.GOOGLE_MODEL ?? 'gemini-2.0-flash'
+    model = process.env.GOOGLE_MODEL || process.env.GEMINI_MODEL || 'gemini-2.5-flash'
   ) {
     if (!isUsableApiKey(apiKey)) throw new Error('GEMINI_API_KEY (or GOOGLE_API_KEY) is not set or is a placeholder.');
+    const fallbacks = [
+      model,
+      'gemini-flash-latest',
+      'gemini-2.5-flash',
+      'gemini-3.5-flash',
+      'gemini-flash-lite-latest',
+      'gemini-2.0-flash',
+    ];
+    this.models = [...new Set(fallbacks.filter(Boolean))];
   }
 
   private toContents(messages: LLMMessage[]) {
@@ -264,9 +278,9 @@ export class GoogleLLMClient implements LLMClient {
     return { system, contents };
   }
 
-  async complete(messages: LLMMessage[]): Promise<string> {
+  private async generateWithModel(model: string, messages: LLMMessage[]): Promise<string> {
     const { system, contents } = this.toContents(messages);
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${encodeURIComponent(this.apiKey.trim())}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(this.apiKey.trim())}`;
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -283,6 +297,24 @@ export class GoogleLLMClient implements LLMClient {
       candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
     };
     return body.candidates?.[0]?.content?.parts?.map((p) => p.text ?? '').join('') ?? '';
+  }
+
+  async complete(messages: LLMMessage[]): Promise<string> {
+    let lastErr: unknown;
+    for (const model of this.models) {
+      try {
+        return await this.generateWithModel(model, messages);
+      } catch (err) {
+        lastErr = err;
+        const msg = err instanceof Error ? err.message : String(err);
+        // Retired / missing / overloaded model → try next fallback.
+        if (/Google LLM error 404|Google LLM error 503|no longer available|is not found|high demand|UNAVAILABLE/i.test(msg)) {
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
   }
 
   async *stream(messages: LLMMessage[]): AsyncIterable<string> {
