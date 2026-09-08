@@ -7,7 +7,8 @@ import { Send, ThumbsDown, ThumbsUp, X } from 'lucide-react';
 import { MarkdownLite } from '@/components/MarkdownLite';
 import { cn } from '@/lib/utils';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+// Same-origin Next.js routes — works even when Railway API is down.
+const CHATBOT_BASE = '/api/marketing-chatbot';
 
 type Msg = {
   role: 'user' | 'assistant';
@@ -51,7 +52,7 @@ export function ChatAssistant() {
   const springY = useSpring(y, { stiffness: 180, damping: 16, mass: 0.4 });
 
   useEffect(() => {
-    fetch(`${API_URL}/marketing-chatbot/suggestions`)
+    fetch(`${CHATBOT_BASE}/suggestions`)
       .then((r) => r.json())
       .then((body) => {
         const list = body?.data?.prompts;
@@ -107,7 +108,7 @@ export function ChatAssistant() {
 
     try {
       // Non-stream JSON is much faster than fake token delays
-      const res = await fetch(`${API_URL}/marketing-chatbot/chat`, {
+      const res = await fetch(`${CHATBOT_BASE}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: q, stream: false }),
@@ -143,7 +144,8 @@ export function ChatAssistant() {
         const next = [...m];
         next[next.length - 1] = {
           role: 'assistant',
-          content: 'I could not reach the Nexora assistant API. Make sure the API is running on port 4000.',
+          content:
+            'I could not reach the Nexora assistant. Please refresh and try again — if it keeps failing, the site API route may be offline.',
           suggestions: prompts.slice(0, 4),
         };
         return next;
@@ -160,7 +162,7 @@ export function ChatAssistant() {
   }
 
   function feedback(up: boolean) {
-    void fetch(`${API_URL}/marketing-chatbot/feedback`, {
+    void fetch(`${CHATBOT_BASE}/feedback`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ up }),
