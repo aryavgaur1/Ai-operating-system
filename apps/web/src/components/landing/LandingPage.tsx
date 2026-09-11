@@ -26,6 +26,7 @@ import { TestimonialsSlider } from '@/components/landing/TestimonialsSlider';
 import { AnalysisDashboard } from '@/components/landing/AnalysisDashboard';
 import { ChatAssistant } from '@/components/landing/ChatAssistant';
 import { FounderDesk } from '@/components/landing/FounderDesk';
+import { MarketingFooter } from '@/components/landing/MarketingFooter';
 import { SectionExploreCta } from '@/components/landing/SectionExploreCta';
 import { cn } from '@/lib/utils';
 
@@ -575,32 +576,7 @@ export function LandingPage() {
 
       <FounderDesk />
 
-      {/* Footer */}
-      <footer className="border-t border-white/5 py-14">
-        <div className="mx-auto grid max-w-7xl gap-10 px-4 sm:px-6 md:grid-cols-4">
-          <div>
-            <div className="font-display tracking-[0.2em]">NEXORA</div>
-            <p className="mt-3 text-sm text-neutral-500">Work Action OS — Propose → Approve → Act.</p>
-          </div>
-          {[
-            ['Product', ['Features', 'Integrations', 'Pricing']],
-            ['Developers', ['API', 'Documentation', 'Roadmap']],
-            ['Company', ['Blog', 'Privacy', 'Terms', 'Contact']],
-          ].map(([title, links]) => (
-            <div key={title as string}>
-              <div className="text-xs uppercase tracking-[0.2em] text-neutral-500">{title as string}</div>
-              <ul className="mt-4 space-y-2 text-sm text-neutral-400">
-                {(links as string[]).map((l) => (
-                  <li key={l}><a href={`#${l.toLowerCase()}`} className="hover:text-white">{l}</a></li>
-                ))}
-              </ul>
-            </div>
-          ))}
-        </div>
-        <div className="mx-auto mt-10 max-w-7xl px-4 text-xs text-neutral-600 sm:px-6" suppressHydrationWarning>
-          © {new Date().getFullYear()} Nexora OS
-        </div>
-      </footer>
+      <MarketingFooter />
 
       <ChatAssistant />
     </div>

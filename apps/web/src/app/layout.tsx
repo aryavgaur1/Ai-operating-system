@@ -8,11 +8,11 @@ export const metadata: Metadata = {
     'Nexora is an AI Operating System that connects your tools, reasons over context, and executes real work across Slack, Notion, and more.',
   icons: {
     icon: [
-      { url: '/favicon.svg?v=3', type: 'image/svg+xml' },
-      { url: '/favicon.png?v=3', type: 'image/png' },
+      { url: '/brand/nexora-mark-corner.svg', type: 'image/svg+xml' },
+      { url: '/favicon.png?v=4', type: 'image/png' },
     ],
-    apple: [{ url: '/favicon.png?v=3' }],
-    shortcut: ['/favicon.png?v=3'],
+    apple: [{ url: '/favicon.png?v=4' }],
+    shortcut: ['/favicon.png?v=4'],
   },
 };
 
@@ -20,9 +20,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en">
       <head>
-        <link rel="icon" href="/favicon.svg?v=3" type="image/svg+xml" />
-        <link rel="icon" href="/favicon.png?v=3" type="image/png" />
-        <link rel="apple-touch-icon" href="/favicon.png?v=3" />
+        <link rel="icon" href="/brand/nexora-mark-corner.svg" type="image/svg+xml" />
+        <link rel="icon" href="/favicon.png?v=4" type="image/png" />
+        <link rel="apple-touch-icon" href="/favicon.png?v=4" />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         <link
