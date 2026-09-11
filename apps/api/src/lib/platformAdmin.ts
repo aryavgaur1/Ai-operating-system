@@ -9,7 +9,7 @@ function parseEmailList(raw?: string | null): string[] {
 
 /** Canonical founder email (matches DEPLOY / seed defaults). */
 export const PLATFORM_ADMIN_EMAIL = (
-  process.env.PLATFORM_ADMIN_EMAIL ?? 'aryavgaur01@gmail.com'
+  process.env.PLATFORM_ADMIN_EMAIL ?? 'aryavgaur1@gmail.com'
 )
   .trim()
   .toLowerCase();

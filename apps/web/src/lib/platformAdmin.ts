@@ -10,7 +10,7 @@ function parseEmailList(raw?: string | null): string[] {
 export const PLATFORM_ADMIN_EMAIL = (
   process.env.NEXT_PUBLIC_PLATFORM_ADMIN_EMAIL ||
   process.env.PLATFORM_ADMIN_EMAIL ||
-  'aryavgaur01@gmail.com'
+  'aryavgaur1@gmail.com'
 )
   .trim()
   .toLowerCase();

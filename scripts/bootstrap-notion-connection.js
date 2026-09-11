@@ -1,16 +1,29 @@
 ﻿/**
  * One-shot: attach platform NOTION_API_KEY as the founder user's Notion connection.
- * Run inside Railway: railway ssh -s awake-freedom -- node scripts/bootstrap-notion-connection.js
+ * Run with env loaded, e.g.:
+ *   node scripts/bootstrap-notion-connection.js
+ *   railway run -s awake-freedom -- node scripts/bootstrap-notion-connection.js
+ *
+ * Token encryption MUST match packages/stores/src/oauthStore.ts getKey():
+ * sha256(TOKEN_ENCRYPTION_KEY) when the env value is at least 32 chars;
+ * otherwise sha256('dev-only-insecure-key'). Do not use Buffer.from(hex, 'hex')
+ * here — that would make Railway-written rows undecryptable by the API.
  */
+const path = require('path');
 const { Client } = require('pg');
 const crypto = require('crypto');
 
+try {
+  require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+} catch {
+  /* dotenv is optional when vars are already in the process env (Railway). */
+}
+
 function getKey() {
-  const hex = process.env.TOKEN_ENCRYPTION_KEY;
+  const hex = (process.env.TOKEN_ENCRYPTION_KEY || '').trim();
   if (!hex || hex.length < 32) {
     return crypto.createHash('sha256').update('dev-only-insecure-key').digest();
   }
-  // Must match packages/stores/src/oauthStore.ts
   return crypto.createHash('sha256').update(hex).digest();
 }
 
@@ -23,10 +36,19 @@ function encryptToken(plaintext) {
 }
 
 (async () => {
-  const databaseUrl = process.env.DATABASE_URL;
+  const databaseUrl = (
+    process.env.DATABASE_URL ||
+    process.env.DATABASE_PRIVATE_URL ||
+    process.env.POSTGRES_URL ||
+    ''
+  ).trim();
   const notionToken = process.env.NOTION_API_KEY?.trim();
   if (!databaseUrl || !notionToken) {
-    console.error('MISSING_ENV', { db: !!databaseUrl, notion: !!notionToken });
+    console.error('MISSING_ENV', {
+      db: !!databaseUrl,
+      notion: !!notionToken,
+      hint: 'Set DATABASE_URL and NOTION_API_KEY (load .env, or use railway run so service vars are injected). railway ssh does not always expose them.',
+    });
     process.exit(1);
   }
 
@@ -52,23 +74,28 @@ function encryptToken(plaintext) {
   const client = new Client({ connectionString: databaseUrl });
   await client.connect();
 
-  const founderEmail = (
-    process.env.PLATFORM_ADMIN_EMAIL ||
-    process.env.ADMIN_SEED_EMAIL ||
-    'aryavgaur01@gmail.com'
-  )
-    .trim()
-    .toLowerCase();
+  const founderEmails = [
+    ...new Set(
+      [
+        process.env.PLATFORM_ADMIN_EMAIL,
+        process.env.ADMIN_SEED_EMAIL,
+        'aryavgaur1@gmail.com',
+        'aryavgaur01@gmail.com',
+      ]
+        .filter(Boolean)
+        .map((e) => String(e).trim().toLowerCase())
+    ),
+  ];
 
   const users = await client.query(
     `select id, email, organization_id
      from users
-     where lower(email) = $1
+     where lower(email) = any($1::text[])
      order by created_at asc`,
-    [founderEmail]
+    [founderEmails]
   );
   if (!users.rows.length) {
-    console.error('NO_MATCHING_USER');
+    console.error('NO_MATCHING_USER', { lookedFor: founderEmails });
     process.exit(3);
   }
 
