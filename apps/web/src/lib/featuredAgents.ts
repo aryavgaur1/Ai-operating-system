@@ -1,49 +1,30 @@
-/** Four featured agents for /ai-agents — live Nexora connectors only. */
+/** Four agents shown on the homepage and /ai-agents. */
 
 export type FeaturedAgent = {
   name: string;
   purpose: string;
-  tools: string[];
   capabilities: string[];
-  exampleWorkflow: string;
-  status: 'Active' | 'Running' | 'Idle';
 };
 
 export const FEATURED_AGENTS: FeaturedAgent[] = [
   {
-    name: 'Workspace Operations',
-    purpose: 'Coordinates launches, incidents, and cross-tool execution across your connected stack.',
-    tools: ['Slack', 'Jira', 'Notion'],
-    capabilities: ['Create war rooms', 'Open Jira issues', 'Publish Notion runbooks'],
-    exampleWorkflow:
-      '“Create a launch war room for Project Atlas” → Slack channel planned → approval → live channel with verified link.',
-    status: 'Running',
+    name: 'Research',
+    purpose: 'Finds answers in your docs and the web, then cites what it used.',
+    capabilities: ['Search connected docs', 'Summarize sources', 'Share a brief in Slack'],
   },
   {
-    name: 'Gmail Intelligence',
-    purpose: 'Reads and acts on real inbox data — search, open threads, and send with approval.',
-    tools: ['Gmail'],
-    capabilities: ['Search important mail', 'Open a thread', 'Send email (approved)'],
-    exampleWorkflow:
-      '“Find my important emails” → Gmail API search → summarized results from your actual inbox.',
-    status: 'Active',
+    name: 'Support',
+    purpose: 'Helps you triage inbound questions and draft replies from real context.',
+    capabilities: ['Sort new tickets', 'Draft a reply', 'Pull recent customer history'],
   },
   {
-    name: 'Engineering Tracker',
-    purpose: 'Keeps Jira work visible and actionable without leaving chat.',
-    tools: ['Jira', 'Slack'],
-    capabilities: ['Search open issues', 'Create tickets', 'Post updates to channels'],
-    exampleWorkflow:
-      '“Create a Jira ticket for the login bug” → issue draft with impact → Approve & run → NEX-123 with Jira URL.',
-    status: 'Active',
+    name: 'Operations',
+    purpose: 'Keeps incidents, tickets, and runbooks moving across the tools you already use.',
+    capabilities: ['Open or update a ticket', 'Post a status update', 'Find the right runbook'],
   },
   {
-    name: 'Documentation Curator',
-    purpose: 'Finds and creates Notion knowledge from natural language.',
-    tools: ['Notion', 'Slack'],
-    capabilities: ['Search workspace docs', 'Create pages', 'Share links in Slack'],
-    exampleWorkflow:
-      '“Create a Notion page titled Weekly Launch Plan” → page preview → approval → live page URL returned.',
-    status: 'Idle',
+    name: 'Developer',
+    purpose: 'Catches you up on code review, issues, and repo changes without extra dashboards.',
+    capabilities: ['Summarize a pull request', 'List open issues', 'Draft a changelog note'],
   },
 ];

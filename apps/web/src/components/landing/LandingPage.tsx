@@ -275,7 +275,11 @@ export function LandingPage() {
 
       {/* Agents — directly after integrations */}
       <section id="agents" className="mx-auto max-w-7xl px-4 py-20 sm:px-6">
-        <SectionHeading eyebrow="AI Agents" title="Specialists that share one OS." />
+        <SectionHeading
+          eyebrow="AI Agents"
+          title="Four specialists on one operating system."
+          body="Each agent has a job. They share the same memory and pause for approval before they change anything in your tools."
+        />
         <AgentLivingCards />
         <SectionExploreCta href="/ai-agents" label="Explore AI agents" />
       </section>
