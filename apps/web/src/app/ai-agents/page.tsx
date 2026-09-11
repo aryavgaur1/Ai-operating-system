@@ -4,14 +4,15 @@ import { FeaturedAgentsDetail } from '@/components/landing/FeaturedAgentsDetail'
 
 export const metadata: Metadata = {
   title: 'Nexora OS — AI Agents',
-  description: 'Four Nexora agents — Research, Support, Operations, and Developer — on one operating system with shared memory and approvals.',
+  description:
+    'Four Nexora agents — Research, Support, Operations, and Developer — on one operating system with shared memory and approvals.',
 };
 
 export default function AiAgentsPage() {
   return (
     <MarketingShell
       title="AI Agents"
-      subtitle="Research, Support, Operations, and Developer. Same plan → approve → execute path as chat."
+      subtitle="Research, Support, Operations, and Developer. Same intent → plan → approve → execute pipeline as chat."
     >
       <FeaturedAgentsDetail />
     </MarketingShell>
