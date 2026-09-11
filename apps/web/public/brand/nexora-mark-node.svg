@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="nxNode" x1="16" y1="48" x2="48" y2="16" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#5B9DFF"/>
+      <stop offset="1" stop-color="#A78BFA"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="16" fill="#0B0D12"/>
+  <path d="M22 46V18M42 46V18M22 18l20 28" fill="none" stroke="url(#nxNode)" stroke-width="4" stroke-linecap="square"/>
+  <circle cx="22" cy="18" r="3.2" fill="#5B9DFF"/>
+  <circle cx="42" cy="18" r="3.2" fill="#A78BFA"/>
+  <circle cx="22" cy="46" r="3.2" fill="#5B9DFF"/>
+  <circle cx="42" cy="46" r="3.2" fill="#A78BFA"/>
+</svg>

@@ -1,8 +1,8 @@
 'use client';
 
-import Image from 'next/image';
 import { motion } from 'framer-motion';
 import { BrandLogo } from '@/components/landing/BrandLogos';
+import { NexoraMark } from '@/components/NexoraMark';
 
 const LEFT = [
   { name: 'Slack', sub: 'Team messaging' },
@@ -87,16 +87,9 @@ export function IntegrationHub() {
             animate={{ rotate: 360 }}
             transition={{ duration: 40, repeat: Infinity, ease: 'linear' }}
           />
-          <div className="relative w-full overflow-hidden rounded-[24px] border border-white/12 bg-gradient-to-b from-[#121826] to-[#07080e] p-5 shadow-[0_0_60px_rgba(245,185,93,0.12)]">
+            <div className="relative w-full overflow-hidden rounded-[24px] border border-white/12 bg-gradient-to-b from-[#121826] to-[#07080e] p-5">
             <div className="relative mx-auto aspect-square w-28 sm:w-32">
-              <Image
-                src="/nexora-logo.png"
-                alt="Nexora"
-                fill
-                className="object-contain drop-shadow-[0_0_24px_rgba(91,157,255,0.35)]"
-                sizes="128px"
-                priority
-              />
+              <NexoraMark className="h-full w-full" />
             </div>
             <div className="mt-4 rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-center">
               <div className="flex items-center justify-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-amber-300">

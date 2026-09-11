@@ -11,7 +11,6 @@ import {
   ShieldCheck,
   Plug,
   Search,
-  Sparkles,
   User,
   Users,
 } from 'lucide-react';
@@ -23,6 +22,7 @@ import { APP_HOME, APP_ROUTES, LOGIN, chatResumeHref } from '@/lib/routes';
 import { resolveChatHref } from '@/lib/activeConversation';
 import { isPlatformAdminEmail } from '@/lib/platformAdmin';
 import { WorkspaceSwitcher } from '@/components/WorkspaceSwitcher';
+import { NexoraLockup, NexoraMark } from '@/components/NexoraMark';
 
 const STATIC_LINKS = [
   { href: APP_ROUTES.dashboard, label: 'Dashboard', icon: LayoutGrid },
@@ -359,13 +359,9 @@ export function Nav() {
         transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
         className="glass-strong relative z-[200] mx-auto flex max-w-7xl items-center gap-2 overflow-visible rounded-[26px] px-3 py-2.5 sm:gap-3 sm:px-5 sm:py-3"
       >
-        <Link href={APP_HOME} className="flex shrink-0 items-center gap-2.5 pr-1">
-          <span className="relative inline-flex h-9 w-9 items-center justify-center rounded-2xl bg-gradient-to-br from-accent/30 to-accent2/20 text-accent shadow-glow">
-            <Sparkles size={16} strokeWidth={2.4} />
-          </span>
-          <span className="hidden font-display text-sm font-semibold tracking-[0.18em] text-white xl:inline">
-            NEXORA&nbsp;OS
-          </span>
+        <Link href={APP_HOME} className="flex shrink-0 items-center pr-1">
+          <NexoraLockup className="hidden xl:inline-flex" wordmark="Nexora" markClassName="h-9 w-9" />
+          <NexoraMark className="h-9 w-9 xl:hidden" />
         </Link>
 
         <div className="min-w-[9.5rem] shrink-0 grow-0 basis-auto sm:min-w-[10.5rem]">

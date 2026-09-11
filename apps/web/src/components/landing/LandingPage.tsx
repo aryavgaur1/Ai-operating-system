@@ -93,7 +93,7 @@ const fadeUp = {
 function SectionHeading({ eyebrow, title, body }: { eyebrow: string; title: string; body?: string }) {
   return (
     <motion.div {...fadeUp} className="mx-auto max-w-3xl text-center">
-      <div className="text-[11px] uppercase tracking-[0.28em] text-accent2">{eyebrow}</div>
+      <div className="text-sm font-medium text-accent2">{eyebrow}</div>
       <h2 className="font-display mt-3 text-3xl font-semibold tracking-tight text-white sm:text-4xl md:text-5xl">
         {title}
       </h2>
@@ -126,10 +126,7 @@ export function LandingPage() {
       <SmoothScroll />
       {/* marketing ambient */}
       <div className="pointer-events-none fixed inset-0 -z-10">
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(91,157,255,0.14),transparent_55%)]" />
-        <div className="absolute -left-24 top-40 h-80 w-80 animate-floatSlow rounded-full bg-accent/20 blur-[100px]" />
-        <div className="absolute -right-20 top-24 h-96 w-96 animate-floatSlower rounded-full bg-accent2/10 blur-[110px]" />
-        <div className="absolute inset-0 bg-noise opacity-40" />
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(94,234,212,0.06),transparent_42%)]" />
       </div>
 
       {/* Nav — glass + scroll hide/reveal */}
@@ -142,27 +139,19 @@ export function LandingPage() {
             <motion.div
               initial={{ opacity: 0, y: 16 }}
               animate={{ opacity: 1, y: 0 }}
-              className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] uppercase tracking-[0.22em] text-neutral-300"
+              className="inline-flex items-center gap-2 rounded-full border border-white/10 px-3 py-1 text-xs text-neutral-400"
             >
-              <span className="h-1.5 w-1.5 rounded-full bg-accent2" /> Nexora OS · AI Operating System
+              <span className="h-1.5 w-1.5 rounded-full bg-accent2" />
+              Work Action OS
             </motion.div>
-            <motion.p
-              initial={{ opacity: 0, y: 16 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.05 }}
-              className="font-display mt-5 text-3xl font-semibold tracking-tight sm:text-4xl md:text-5xl"
-              aria-label="Nexora OS"
-            >
-              <span className="gradient-text">Nexora OS</span>
-            </motion.p>
             <motion.h1
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.1 }}
-              className="font-display mt-4 text-4xl font-semibold leading-[1.05] tracking-tight text-white sm:text-5xl md:text-6xl lg:text-[4.1rem]"
+              transition={{ delay: 0.08 }}
+              className="font-display mt-6 text-4xl font-semibold leading-[1.08] tracking-tight text-white sm:text-5xl md:text-6xl lg:text-[4rem]"
             >
-              <span className="gradient-text">Propose → Approve → Act</span>
-              <span className="block text-[0.72em] font-medium text-neutral-200 sm:text-[0.68em] md:mt-2">
+              Propose, approve, then act
+              <span className="mt-2 block text-[0.55em] font-normal text-neutral-400">
                 across Slack, Jira, and Notion.
               </span>
             </motion.h1>
@@ -194,13 +183,13 @@ export function LandingPage() {
               transition={{ delay: 0.28 }}
               className="mt-8 flex flex-wrap gap-3"
             >
-              <Link href="/register" className="inline-flex items-center gap-2 rounded-full bg-accent px-6 py-3 text-sm font-semibold text-[#04101f]">
+              <Link href="/register" className="inline-flex items-center gap-2 rounded-lg bg-white px-5 py-2.5 text-sm font-semibold text-[#0b0d12]">
                 Start Free <ArrowRight size={16} />
               </Link>
-              <Link href="/login" className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/5 px-6 py-3 text-sm text-white">
+              <Link href="/login" className="inline-flex items-center gap-2 rounded-lg border border-white/15 px-5 py-2.5 text-sm text-white hover:bg-white/5">
                 Book Demo
               </Link>
-              <a href="#commands" className="inline-flex items-center gap-2 rounded-full border border-white/10 px-6 py-3 text-sm text-neutral-300">
+              <a href="#commands" className="inline-flex items-center gap-2 px-3 py-2.5 text-sm text-neutral-400 hover:text-white">
                 <Play size={14} /> Watch Demo
               </a>
             </motion.div>
@@ -211,7 +200,7 @@ export function LandingPage() {
                 ['Loop', 'Propose → Act'],
               ].map(([k, v]) => (
                 <div key={k} className="rounded-2xl border border-white/8 bg-white/[0.03] px-3 py-3">
-                  <div className="text-[10px] uppercase tracking-[0.18em] text-neutral-500">{k}</div>
+                  <div className="text-[11px] text-neutral-500">{k}</div>
                   <div className="mt-1 text-xs text-neutral-200">{v}</div>
                 </div>
               ))}
@@ -228,7 +217,7 @@ export function LandingPage() {
 
       {/* Trusted integrations marquee */}
       <section className="border-y border-white/5 py-10">
-        <div className="mx-auto max-w-7xl px-4 text-center text-[11px] uppercase tracking-[0.28em] text-neutral-500 sm:px-6">
+        <div className="mx-auto max-w-7xl px-4 text-center text-xs text-neutral-500 sm:px-6">
           Trusted integrations
         </div>
         <div className="mt-6 overflow-hidden">
@@ -236,7 +225,7 @@ export function LandingPage() {
             {[...INTEGRATIONS, ...INTEGRATIONS].map((name, i) => (
               <span
                 key={`${name}-${i}`}
-                className="inline-flex shrink-0 cursor-default items-center rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-sm text-neutral-300 transition hover:-translate-y-0.5 hover:border-accent/40 hover:bg-accent/10 hover:text-white hover:shadow-glow"
+            className="inline-flex items-center rounded-lg border border-white/10 bg-white/[0.03] px-4 py-2 text-sm text-neutral-300"
               >
                 {name}
               </span>

@@ -1,7 +1,7 @@
 'use client';
 
-import Image from 'next/image';
 import { FormEvent, useEffect, useRef, useState } from 'react';
+import { NexoraMark } from '@/components/NexoraMark';
 import { AnimatePresence, motion, useMotionValue, useSpring } from 'framer-motion';
 import { Send, ThumbsDown, ThumbsUp, X } from 'lucide-react';
 import { MarkdownLite } from '@/components/MarkdownLite';
@@ -173,8 +173,6 @@ export function ChatAssistant() {
     <>
       <motion.div
         className={cn('fixed bottom-5 right-5 z-[60]', open && 'pointer-events-none opacity-0')}
-        animate={open ? undefined : { y: [0, -12, 0] }}
-        transition={{ duration: 3.4, repeat: Infinity, ease: 'easeInOut' }}
       >
         <motion.button
           ref={btnRef}
@@ -182,13 +180,11 @@ export function ChatAssistant() {
           aria-label="Open Nexora Assistant"
           onClick={() => setOpen(true)}
           style={{ x: springX, y: springY }}
-          className="relative h-[72px] w-[72px] overflow-hidden rounded-full border border-white/25 bg-black shadow-[0_0_0_1px_rgba(91,157,255,0.4),0_12px_40px_rgba(91,157,255,0.45),0_0_60px_rgba(168,85,247,0.3)]"
-          whileHover={{ scale: 1.1 }}
-          whileTap={{ scale: 0.94 }}
+          className="relative h-14 w-14 overflow-hidden rounded-2xl border border-white/10 bg-[#111318] shadow-lg"
+          whileHover={{ scale: 1.04 }}
+          whileTap={{ scale: 0.96 }}
         >
-          <Image src="/nexora-chat-icon.png" alt="Nexora" fill className="object-cover" sizes="72px" priority />
-          <span className="pointer-events-none absolute inset-0 rounded-full bg-gradient-to-tr from-sky-400/10 via-transparent to-fuchsia-500/15" />
-          <span className="pointer-events-none absolute -inset-1 animate-pulse rounded-full bg-accent/20 blur-md" />
+          <NexoraMark className="h-full w-full" />
         </motion.button>
       </motion.div>
 
@@ -204,11 +200,11 @@ export function ChatAssistant() {
             <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
               <div className="flex items-center gap-2">
                 <span className="relative h-9 w-9 overflow-hidden rounded-2xl border border-white/15">
-                  <Image src="/nexora-chat-icon.png" alt="" fill className="object-cover" sizes="36px" />
+                  <NexoraMark className="h-full w-full" />
                 </span>
                 <div>
                   <div className="font-display text-sm font-semibold text-white">Nexora Assistant</div>
-                  <div className="text-[10px] uppercase tracking-[0.16em] text-emerald-400">Live · RAG grounded</div>
+                  <div className="text-xs text-accent2">Live</div>
                 </div>
               </div>
               <button

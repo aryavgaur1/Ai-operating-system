@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect width="64" height="64" rx="16" fill="#0B0D12"/>
+  <defs>
+    <linearGradient id="nxFold" x1="10" y1="54" x2="54" y2="10" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#5B9DFF"/>
+      <stop offset="1" stop-color="#A78BFA"/>
+    </linearGradient>
+  </defs>
+  <path fill="url(#nxFold)" d="M18 48V16h8.4l11.2 18.4V16H46v32h-8.4L26.4 29.6V48H18Z"/>
+</svg>

@@ -25,7 +25,7 @@ export function SectionHeading({
       {...fadeUp}
       className={align === 'center' ? 'mx-auto max-w-3xl text-center' : 'max-w-3xl'}
     >
-      <div className="text-[11px] uppercase tracking-[0.28em] text-accent2">{eyebrow}</div>
+      <div className="text-sm font-medium text-accent2">{eyebrow}</div>
       <h2 className="font-display mt-3 text-3xl font-semibold tracking-tight text-white sm:text-4xl md:text-5xl">
         {title}
       </h2>

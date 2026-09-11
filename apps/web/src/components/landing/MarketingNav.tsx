@@ -1,17 +1,17 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { Menu, X } from 'lucide-react';
+import { NexoraLockup } from '@/components/NexoraMark';
 import { MARKETING_PRIMARY_NAV } from '@/lib/marketingNav';
 import { cn } from '@/lib/utils';
 
 type NavLink = { href: string; label: string };
 
 /**
- * Fixed header — logo left, floating glass pill nav center, actions right.
+ * Fixed header — lockup left, links center, actions right.
  */
 export function MarketingNav({ links = MARKETING_PRIMARY_NAV }: { links?: NavLink[] }) {
   const pathname = usePathname();
@@ -39,31 +39,19 @@ export function MarketingNav({ links = MARKETING_PRIMARY_NAV }: { links?: NavLin
           scrolled && 'py-2.5 sm:py-3'
         )}
       >
-        <Link href="/" className="relative z-10 flex shrink-0 items-center gap-2.5">
-          <span className="relative h-9 w-9 overflow-hidden rounded-2xl">
-            <Image src="/nexora-logo.png" alt="Nexora" fill className="object-contain" sizes="36px" />
-          </span>
-          <span className="font-display text-sm font-semibold tracking-[0.2em] text-white">NEXORA</span>
+        <Link href="/" className="relative z-10 shrink-0">
+          <NexoraLockup markClassName="h-9 w-9" />
         </Link>
 
         <nav
-          className={cn(
-            'absolute left-1/2 top-1/2 hidden -translate-x-1/2 -translate-y-1/2 items-center gap-1 rounded-full border px-1.5 py-1.5 lg:flex',
-            'border-white/15 bg-[rgba(10,10,15,0.55)] shadow-[0_8px_32px_rgba(0,0,0,0.4)]'
-          )}
-          style={{
-            WebkitBackdropFilter: 'blur(22px)',
-            backdropFilter: 'blur(22px)',
-          }}
+          className="absolute left-1/2 top-1/2 hidden -translate-x-1/2 -translate-y-1/2 items-center gap-0.5 lg:flex"
           aria-label="Primary"
         >
           <Link
             href="/"
             className={cn(
-              'rounded-full px-3.5 py-1.5 text-[11px] font-medium uppercase tracking-[0.14em] transition-colors duration-300',
-              pathname === '/'
-                ? 'bg-white/12 text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]'
-                : 'text-neutral-400 hover:text-white'
+              'rounded-md px-3 py-1.5 text-sm transition-colors',
+              pathname === '/' ? 'text-white' : 'text-neutral-400 hover:text-white'
             )}
           >
             Home
@@ -75,10 +63,8 @@ export function MarketingNav({ links = MARKETING_PRIMARY_NAV }: { links?: NavLin
                 key={item.href}
                 href={item.href}
                 className={cn(
-                  'rounded-full px-3.5 py-1.5 text-[11px] font-medium uppercase tracking-[0.14em] transition-colors duration-300',
-                  active
-                    ? 'bg-white/12 text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]'
-                    : 'text-neutral-400 hover:text-white'
+                  'rounded-md px-3 py-1.5 text-sm transition-colors',
+                  active ? 'text-white' : 'text-neutral-400 hover:text-white'
                 )}
               >
                 {item.label}
@@ -101,7 +87,7 @@ export function MarketingNav({ links = MARKETING_PRIMARY_NAV }: { links?: NavLin
           </Link>
           <Link
             href="/register"
-            className="rounded-full bg-accent px-4 py-2 text-sm font-semibold text-[#04101f] hover:bg-[#7db6ff]"
+            className="rounded-lg bg-white px-4 py-2 text-sm font-semibold text-[#0b0d12] hover:bg-neutral-200"
           >
             Get Started
           </Link>
