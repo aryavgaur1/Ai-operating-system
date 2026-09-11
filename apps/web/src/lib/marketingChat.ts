@@ -61,10 +61,8 @@ function groundedFallback(question: string, chunks: string[]): string {
     return [
       '**Pricing guidance**',
       '',
-      '- **Starter ($0)** — explore chat + demo connectors',
-      '- **Pro ($49)** — startups running live Slack + Notion',
-      '- **Business ($149)** — teams needing seats, roles, audit',
-      '- **Enterprise (Custom)** — SSO/SAML, SLAs, private deploy',
+      '- **Free (365 days)** — core chat, Slack/Jira/Notion, propose → approve → act',
+      '- **Advanced (paid)** — seats/roles, audit export, SSO/SAML, SLAs, private deploy',
       '',
       truncate(joined, 500),
     ].join('\n');
@@ -90,7 +88,7 @@ function relatedSuggestions(question: string): string[] {
   const q = question.toLowerCase();
   const pool = [...STARTER_PROMPTS];
   if (/slack/i.test(q)) pool.unshift('Can I automate Slack?', 'How does Notion integration work?');
-  if (/pric/i.test(q)) pool.unshift('Pro vs Business pricing', 'Book a Demo');
+  if (/pric/i.test(q)) pool.unshift('Is Nexora free for a year?', 'What is Advanced?');
   if (/chatgpt|vs/i.test(q)) pool.unshift('How does Memory work?', 'Explain Slack Integration');
   const unique: string[] = [];
   for (const tip of pool) {

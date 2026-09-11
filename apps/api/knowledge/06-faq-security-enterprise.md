@@ -20,7 +20,7 @@
 
 ## Enterprise
 
-Enterprise page / posture: operate like a platform team — workspace management, organizations, teams, permissions, analytics, API keys, automation, developer APIs, admin console, audit logs. Enterprise plan adds SSO/SAML, custom SLAs, private deployment options.
+Enterprise page / posture: operate like a platform team — workspace management, organizations, teams, permissions, analytics, API keys, automation, developer APIs, admin console, audit logs. Advanced adds SSO/SAML, custom SLAs, and private deployment options.
 
 ## Privacy & Terms
 

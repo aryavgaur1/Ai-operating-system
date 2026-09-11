@@ -27,6 +27,7 @@ import { AnalysisDashboard } from '@/components/landing/AnalysisDashboard';
 import { ChatAssistant } from '@/components/landing/ChatAssistant';
 import { FounderDesk } from '@/components/landing/FounderDesk';
 import { MarketingFooter } from '@/components/landing/MarketingFooter';
+import { PricingSection } from '@/components/landing/PricingSection';
 import { SectionExploreCta } from '@/components/landing/SectionExploreCta';
 import { cn } from '@/lib/utils';
 
@@ -45,36 +46,9 @@ const COMMANDS = [
   'Generate product documentation in Notion',
 ];
 
-const PRICING = [
-  {
-    name: 'Starter',
-    price: '$0',
-    blurb: 'Explore the OS with core chat and live connectors you connect yourself.',
-    items: ['Connect Slack, Jira & Notion', 'Chat + approvals', 'Live actions only — no fake success'],
-  },
-  {
-    name: 'Pro',
-    price: '$49',
-    blurb: 'For founders running live Slack + Notion execution.',
-    items: ['Live tool execution', 'Memory + history', 'Priority latency'],
-    featured: true,
-  },
-  {
-    name: 'Business',
-    price: '$149',
-    blurb: 'Teams that need approvals, audit, and admin controls.',
-    items: ['Seats & roles', 'Audit log export', 'Shared workspaces'],
-  },
-  {
-    name: 'Enterprise',
-    price: 'Custom',
-    blurb: 'Security reviews, SSO, and dedicated success.',
-    items: ['SSO / SAML', 'Custom SLAs', 'Private deployment options'],
-  },
-];
-
 const FAQS = [
   ['What is Nexora?', 'Nexora is a Work Action OS: it proposes real actions in Slack, Jira, and Notion, then pauses for a human gate before it acts.'],
+  ['Is Nexora free?', 'The first 365 days are free for core chat, Slack/Jira/Notion, and propose → approve → act. Advanced is a paid upgrade for seats and roles, audit export, SSO/SAML, SLAs, and private deploy.'],
   ['How does Propose → Approve → Act work?', 'Nexora classifies intent, plans tool calls, and queues high-consequence writes for Approve & run — so nothing posts or creates until you confirm.'],
   ['How are integrations connected?', 'Connect Slack, Jira, and Notion under Integrations (OAuth or workspace tokens). Demo mode can also use secure .env credentials.'],
   ['Can I use my own Slack?', 'Yes — your workspace bot powers live channel posts and related actions after you approve them.'],
@@ -104,7 +78,6 @@ function SectionHeading({ eyebrow, title, body }: { eyebrow: string; title: stri
 }
 
 export function LandingPage() {
-  const [yearly, setYearly] = useState(true);
   const [openFaq, setOpenFaq] = useState<number | null>(0);
   const [cmdIndex, setCmdIndex] = useState(0);
   const { scrollYProgress } = useScroll();
@@ -492,46 +465,7 @@ export function LandingPage() {
 
       {/* Pricing */}
       <section id="pricing" className="mx-auto max-w-7xl px-4 py-20 sm:px-6">
-        <SectionHeading eyebrow="Pricing" title="Simple plans. Serious product." />
-        <div className="mt-8 flex justify-center">
-          <div className="inline-flex rounded-full border border-white/10 bg-white/5 p-1 text-sm">
-            <button type="button" onClick={() => setYearly(false)} className={cn('rounded-full px-4 py-1.5', !yearly && 'bg-accent text-[#04101f]')}>
-              Monthly
-            </button>
-            <button type="button" onClick={() => setYearly(true)} className={cn('rounded-full px-4 py-1.5', yearly && 'bg-accent text-[#04101f]')}>
-              Yearly
-            </button>
-          </div>
-        </div>
-        <div className="mt-10 grid gap-4 lg:grid-cols-4">
-          {PRICING.map((p) => (
-            <motion.div
-              key={p.name}
-              {...fadeUp}
-              className={cn(
-                'rounded-[28px] border p-6',
-                p.featured ? 'border-accent/40 bg-accent/10 shadow-glow' : 'border-white/8 bg-white/[0.03]'
-              )}
-            >
-              <div className="text-sm text-neutral-400">{p.name}</div>
-              <div className="font-display mt-2 text-4xl text-white">
-                {p.price === 'Custom' ? p.price : yearly && p.price !== '$0' ? p.price.replace(/\d+/, (n) => String(Math.round(Number(n) * 10))) : p.price}
-                {p.price !== 'Custom' && <span className="text-base text-neutral-500">/{yearly ? 'yr' : 'mo'}</span>}
-              </div>
-              <p className="mt-3 text-sm text-neutral-400">{p.blurb}</p>
-              <ul className="mt-5 space-y-2 text-sm text-neutral-300">
-                {p.items.map((item) => (
-                  <li key={item} className="flex items-center gap-2">
-                    <Check size={14} className="text-accent2" /> {item}
-                  </li>
-                ))}
-              </ul>
-              <Link href="/register" className="mt-6 inline-flex w-full items-center justify-center rounded-full border border-white/15 py-2.5 text-sm text-white hover:bg-white/5">
-                Get started
-              </Link>
-            </motion.div>
-          ))}
-        </div>
+        <PricingSection />
       </section>
 
       {/* FAQ */}

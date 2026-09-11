@@ -1,41 +1,29 @@
 # Pricing
 
-Nexora marketing plans (landing):
+The first 365 days are free. There is no Starter / Pro / Business / Enterprise grid and no monthly or yearly toggle.
 
-## Starter — $0
+## Free — 365 days
 
-- Explore the OS with core chat and demo connectors.
-- 1 workspace
-- Chat + approvals
-- Slack & Notion demo path
+- Core chat
+- Connect Slack, Jira, and Notion
+- Propose → approve → act for normal work
+- Chat history that persists in your workspace
 
-## Pro — $49
+Start at /register.
 
-- For founders running live Slack + Notion execution.
-- Live tool execution
-- Memory + history
-- Priority latency
-- Featured plan for growing teams
+## Advanced — paid upgrade
 
-## Business — $149
+For teams that need more than one operator running normal work:
 
-- Teams that need approvals, audit, and admin controls.
-- Seats & roles
+- Seats and roles, shared workspaces
 - Audit log export
-- Shared workspaces
-
-## Enterprise — Custom
-
-- Security reviews, SSO, and dedicated success.
 - SSO / SAML
 - Custom SLAs
 - Private deployment options
 
+Talk to us via /contact. Do not invent other paid features.
+
 ## Recommendations
 
-- **Solo / exploring** → Starter
-- **Startup shipping with Slack + Notion** → Pro
-- **Team with governance** → Business
-- **Regulated / SSO / private deploy** → Enterprise (contact sales / Book Demo)
-
-Yearly billing toggle exists on the marketing pricing section.
+- **Anyone starting out** → Free for 365 days
+- **Team governance, SSO, or private deploy** → Advanced

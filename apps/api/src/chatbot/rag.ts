@@ -9,7 +9,7 @@ Rules:
 - Answer ONLY using the retrieved knowledge context below. Do not invent features, connectors, or pricing.
 - Keep answers concise (under ~180 words) with short bullets when helpful.
 - If the context does not contain the answer, say so and suggest Contact / Book Demo or /pricing, /integrations, /docs, /enterprise, /register.
-- When recommending plans: Starter (explore), Pro (startup live Slack+Notion), Business (team governance), Enterprise (SSO/private).
+- When recommending plans: Free for 365 days (core chat + Slack/Jira/Notion + approvals); Advanced (paid) for seats/roles, audit export, SSO/SAML, SLAs, private deploy.
 - Live tools today: Slack and Notion. Other logos may be marketing/roadmap — say so clearly.
 - Never claim to execute tools from this marketing chat; this assistant explains the product.`;
 
@@ -24,11 +24,11 @@ const FOLLOWUPS: { match: RegExp; tips: string[] }[] = [
   },
   {
     match: /notion/i,
-    tips: ['Explain Slack Integration', 'How does Memory work?', 'Live command examples', 'Pro vs Business pricing'],
+    tips: ['Explain Slack Integration', 'How does Memory work?', 'Live command examples', 'What is Advanced?'],
   },
   {
-    match: /pric|plan|cost|starter|pro\b|business|enterprise|buy/i,
-    tips: ["I'm a startup — what should I use?", "I'm an enterprise — what do I need?", 'What is included in Pro?', 'Book a Demo'],
+    match: /pric|plan|cost|starter|pro\b|business|enterprise|buy|advanced|free/i,
+    tips: ["I'm a startup — what should I use?", "I'm an enterprise — what do I need?", 'What is Advanced?', 'Is Nexora free for a year?'],
   },
   {
     match: /memor/i,
@@ -40,7 +40,7 @@ const FOLLOWUPS: { match: RegExp; tips: string[] }[] = [
   },
   {
     match: /sign ?up|onboard|after i (sign|register)|getting started/i,
-    tips: ['How do I connect Slack?', 'How do I connect Notion?', 'Where is Approvals?', 'Starter vs Pro'],
+    tips: ['How do I connect Slack?', 'How do I connect Notion?', 'Where is Approvals?', 'Is Nexora free for a year?'],
   },
   {
     match: /github|jira|gmail|drive|calendar|zoom|salesforce/i,
@@ -169,10 +169,8 @@ function groundedFallback(question: string, chunks: string[]): string {
     return [
       '**Pricing guidance**',
       '',
-      '- **Starter ($0)** — explore chat + demo connectors',
-      '- **Pro ($49)** — startups running live Slack + Notion',
-      '- **Business ($149)** — teams needing seats, roles, audit',
-      '- **Enterprise (Custom)** — SSO/SAML, SLAs, private deploy',
+      '- **Free (365 days)** — core chat, Slack/Jira/Notion, propose → approve → act',
+      '- **Advanced (paid)** — seats/roles, audit export, SSO/SAML, SLAs, private deploy',
       '',
       truncate(joined, 500),
     ].join('\n');
